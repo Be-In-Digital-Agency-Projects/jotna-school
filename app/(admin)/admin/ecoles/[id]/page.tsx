@@ -8,6 +8,7 @@ import type { Doc } from "@/convex/_generated/dataModel";
 import Link from "next/link";
 import {
   ArrowLeft,
+  ArrowLeftRight,
   Loader2,
   Plus,
   School,
@@ -713,6 +714,15 @@ function ClassesSection({
             <ClassCard
               key={schoolClass._id}
               schoolClass={schoolClass}
+              // Les destinations possibles d'un changement de classe, et
+              // rien d'autre : `listClasses` ne rend que les classes de CETTE
+              // école, le cadrage par école est donc structurel — l'écran ne
+              // peut pas proposer un transfert que `transferStudent`
+              // refuserait comme changement d'école. La classe courante en
+              // est retirée : on ne transfère pas là où l'on est déjà.
+              otherClasses={classes.filter(
+                (other) => other._id !== schoolClass._id,
+              )}
               teachers={teachers}
               enrollable={enrollable}
               outlook={outlook}
@@ -726,11 +736,13 @@ function ClassesSection({
 
 function ClassCard({
   schoolClass,
+  otherClasses,
   teachers,
   enrollable,
   outlook,
 }: {
   schoolClass: ClassRow;
+  otherClasses: ClassRow[];
   teachers: StaffRow[];
   enrollable: EnrollableList | undefined;
   outlook: EnrollmentOutlook | undefined;
@@ -741,10 +753,14 @@ function ClassCard({
   const assignTeacher = useMutation(api.schools.assignTeacher);
   const enrollStudent = useMutation(api.schools.enrollStudent);
   const releaseStudent = useMutation(api.schools.releaseStudent);
+  const transferStudent = useMutation(api.schools.transferStudent);
 
   const [studentId, setStudentId] = useState("");
   const [isEnrolling, setIsEnrolling] = useState(false);
   const [releaseConfirm, setReleaseConfirm] = useState<string | null>(null);
+  const [transferFor, setTransferFor] = useState<string | null>(null);
+  const [transferTarget, setTransferTarget] = useState("");
+  const [isTransferring, setIsTransferring] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Le plafond porte sur l'ÉCOLE, pas sur la classe : une classe à deux élèves
@@ -822,6 +838,52 @@ function ClassCard({
     } catch (err) {
       setError(messageOf(err, "Erreur lors de la libération"));
       setReleaseConfirm(null);
+    }
+  };
+
+  // Les deux volets d'une ligne d'élève s'excluent : ouvrir l'un ferme
+  // l'autre. Ils disent le contraire l'un de l'autre — « il perdra son
+  // accès » et « il ne perd pas son accès » — et les afficher ensemble sur
+  // le même enfant serait la pire des confusions possibles juste avant un
+  // clic de confirmation.
+  const openRelease = (row: ClassStudentRow) => {
+    setError(null);
+    setTransferFor(null);
+    setReleaseConfirm(row.membershipId);
+  };
+
+  const openTransfer = (row: ClassStudentRow) => {
+    setError(null);
+    setReleaseConfirm(null);
+    setTransferTarget("");
+    setTransferFor(row.membershipId);
+  };
+
+  // L'identifiant typé vient de la liste, jamais de la valeur du menu — même
+  // motif que `handleAssign` et `handleEnroll`. Une valeur qui ne se résout
+  // pas est un échec de résolution : on refuse plutôt que d'écrire un
+  // déplacement que personne n'a désigné.
+  const handleTransfer = async (row: ClassStudentRow) => {
+    const picked = otherClasses.find((item) => item._id === transferTarget);
+    if (!picked) {
+      setError("Choisissez une classe dans la liste");
+      return;
+    }
+    setIsTransferring(true);
+    setError(null);
+    try {
+      await transferStudent({
+        membershipId: row.membershipId,
+        targetSchoolClassId: picked._id,
+      });
+      // La ligne quitte cette carte d'elle-même : `listClassStudents` est
+      // réactive des deux côtés, la classe de départ comme celle d'arrivée.
+      setTransferFor(null);
+      setTransferTarget("");
+    } catch (err) {
+      setError(messageOf(err, "Erreur lors du changement de classe"));
+    } finally {
+      setIsTransferring(false);
     }
   };
 
@@ -941,14 +1003,61 @@ function ClassCard({
                         Annuler
                       </button>
                     </div>
+                  ) : transferFor === row.membershipId ? (
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                      <select
+                        value={transferTarget}
+                        onChange={(e) => setTransferTarget(e.target.value)}
+                        className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+                      >
+                        <option value="">Choisir une classe</option>
+                        {otherClasses.map((item) => (
+                          <option key={item._id} value={item._id}>
+                            {item.class} {item.label}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        onClick={() => handleTransfer(row)}
+                        disabled={isTransferring || transferTarget === ""}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                      >
+                        {isTransferring ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <ArrowLeftRight className="h-3.5 w-3.5" />
+                        )}
+                        Confirmer le changement
+                      </button>
+                      <button
+                        onClick={() => setTransferFor(null)}
+                        className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+                      >
+                        Annuler
+                      </button>
+                    </div>
                   ) : (
-                    <button
-                      onClick={() => setReleaseConfirm(row.membershipId)}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50 transition-colors"
-                    >
-                      <UserMinus className="h-3.5 w-3.5" />
-                      Libérer le siège
-                    </button>
+                    <div className="flex items-center gap-2">
+                      {/* Sans autre classe dans l'école, l'action n'a aucune
+                          destination : le bouton disparaît au lieu de se
+                          proposer pour ouvrir un menu vide. */}
+                      {otherClasses.length > 0 && (
+                        <button
+                          onClick={() => openTransfer(row)}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors"
+                        >
+                          <ArrowLeftRight className="h-3.5 w-3.5" />
+                          Changer de classe
+                        </button>
+                      )}
+                      <button
+                        onClick={() => openRelease(row)}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50 transition-colors"
+                      >
+                        <UserMinus className="h-3.5 w-3.5" />
+                        Libérer le siège
+                      </button>
+                    </div>
                   )}
                 </div>
                 {releaseConfirm === row.membershipId && (
@@ -960,6 +1069,22 @@ function ClassCard({
                       de progression. Son travail déjà fait est conservé, et
                       l&apos;accès revient si vous l&apos;inscrivez de nouveau
                       dans une classe.
+                    </span>
+                  </p>
+                )}
+                {transferFor === row.membershipId && (
+                  <p className="mt-3 flex gap-2 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800">
+                    <ArrowLeftRight className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>
+                      {row.name} NE PERD PAS son accès : son inscription est
+                      modifiée, jamais libérée — à aucun moment il ne verra le
+                      message de fermeture de son espace, et sa progression le
+                      suit. Son niveau passera à celui de la classe choisie.
+                      C&apos;est ce qui distingue ce changement du couple
+                      « libérer le siège puis réinscrire », qui coupe
+                      l&apos;accès entre les deux. Il reste dans cette école :
+                      pour une autre école, il faut bien libérer, puis
+                      réinscrire.
                     </span>
                   </p>
                 )}

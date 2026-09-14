@@ -1016,3 +1016,145 @@ export const releaseStudent = mutation({
     return null;
   },
 });
+
+/**
+ * Change un élève de classe SANS toucher à son accès.
+ *
+ * L'opération la plus ordinaire de la vie scolaire — passer un enfant de
+ * CM1 A à CM1 B — n'avait jusqu'ici d'autre chemin que `releaseStudent` puis
+ * `enrollStudent`. Entre les deux, son inscription n'est plus `active` :
+ * `access.loadAccessInput` ne trouve plus rien par `by_student_status`,
+ * `decideAccess` rend `seat_released`, et l'enfant voit le message de
+ * fermeture de son espace. Pour un changement décidé par son école, sans
+ * qu'il ait rien fait.
+ *
+ * UNE SEULE ÉCRITURE SUR L'INSCRIPTION, JAMAIS DEUX. `schoolClassId` est
+ * modifié sur la ligne existante : rien n'est libéré, rien n'est réinséré.
+ * C'est ce qui garantit l'absence de coupure — la ligne ne quitte jamais
+ * `active`, donc la lecture exacte du paywall (`by_student_status`,
+ * `convex/access.ts:42`) trouve toujours une inscription active.
+ *
+ * Le couple libérer/réinscrire est le trou d'accès d'AUJOURD'HUI parce que
+ * l'écran l'enchaîne : deux mutations, donc deux transactions, donc un
+ * intervalle bien réel où `decideAccess` rend `seat_released`. Réuni dans
+ * une seule mutation, cet intervalle disparaîtrait — une mutation Convex est
+ * atomique, aucun lecteur n'en voit l'état intermédiaire — mais trois dégâts
+ * resteraient, et ce sont eux qui tranchent : une ligne `released` de plus à
+ * chaque changement de classe, datée d'une libération qui n'a pas eu lieu ;
+ * un `enrolledAt` remis à zéro, qui efface la date d'entrée dans l'école ; et
+ * un passage par le plafond de sièges d'`enrollStudent`, que ce chemin-ci ne
+ * doit précisément pas subir. Modifier un champ ne pose aucune de ces
+ * questions.
+ *
+ * `enrolledAt` n'est PAS réécrit : l'élève est inscrit dans cette école
+ * depuis cette date-là, et un changement de classe n'est pas une
+ * réinscription. Le `patch` ne porte donc qu'un champ — `schoolId` est déjà
+ * le bon, la classe cible appartenant à la même école.
+ *
+ * AUCUN CONTRÔLE DE SIÈGE ICI, et cette absence est DÉLIBÉRÉE : ce n'est pas
+ * un oubli, ne le « réparez » pas. Un transfert n'ajoute personne — une
+ * inscription active avant, une inscription active après, dans la même
+ * école. Le décompte de `readSeatState` lit le couple (école, statut) par
+ * `by_school_status` ; ce transfert ne touche ni l'un ni l'autre, et le
+ * nombre de sièges occupés est donc rigoureusement identique avant et après.
+ * Réutiliser le plafond d'`enrollStudent` ne protégerait rien et bloquerait
+ * précisément l'école pleine — ou passée sous son contrat — qui a le plus
+ * besoin de redistribuer ses élèves entre ses classes.
+ *
+ * Cette exemption tient ENTIÈREMENT au contrôle (4) ci-dessous. Un transfert
+ * qui traverserait les écoles vaudrait un siège rendu ici, un siège consommé
+ * là — et celui-là échapperait au plafond de l'école d'arrivée, qui n'est
+ * vérifié que dans `enrollStudent`. Qui relâchera un jour le contrôle
+ * d'école devra donc rétablir ici le plafond de l'école CIBLE : rien en aval
+ * ne le rattraperait.
+ *
+ * ORDRE DES CONTRÔLES — l'inscription d'abord, la classe cible ensuite :
+ *
+ * 1. L'inscription EXISTE. Elle est le sujet de l'opération, et c'est elle
+ *    qui porte l'école contre laquelle la classe cible se juge (4) : le
+ *    contrôle d'école ne peut pas se formuler avant de l'avoir lue.
+ * 2. Elle est `active`. Une inscription libérée ne se transfère pas : elle
+ *    se RÉINSCRIT, et ce chemin-là passe bien par le plafond de sièges,
+ *    puisqu'il rend un siège occupé de plus. Ce refus vient avant ceux qui
+ *    portent sur la cible parce qu'il vaut QUELLE QUE SOIT la cible :
+ *    répondre « cette classe est dans une autre école » à un administrateur
+ *    dont le vrai problème est une inscription déjà libérée l'enverrait
+ *    corriger ce qui n'est pas cassé.
+ * 3. La classe cible existe.
+ * 4. Elle appartient à la MÊME école. Comparée à `membership.schoolId` — le
+ *    champ que lisent le paywall (`access.ts:74`) et le décompte de sièges —
+ *    et non au `schoolId` de la classe actuelle : c'est celui-là qui décide
+ *    sous quel abonnement l'élève tombe, donc le seul dont la cohérence
+ *    compte. Un changement d'école n'est pas un changement de classe, c'est
+ *    un changement de relation financière : un siège rendu d'un côté, un
+ *    siège consommé de l'autre, sous le plafond de l'école d'arrivée. Ce
+ *    couple-là s'écrit `releaseStudent` puis `enrollStudent`, et le refus le
+ *    dit.
+ * 5. Elle n'est pas la classe actuelle. (4) et (5) s'excluent — une classe
+ *    d'une autre école n'est jamais la classe actuelle — leur ordre est donc
+ *    libre ; l'invariant vient avant le confort.
+ *
+ * Même classe : REFUS explicite, et non non-opération silencieuse.
+ * `releaseStudent` est bien idempotente, mais pour une raison qui ne vaut
+ * pas ici : un second clic y réécrirait `releasedAt` et effacerait la date
+ * de libération d'origine — ne rien faire PRÉSERVE une information. Un
+ * transfert vers la classe actuelle n'a rien à préserver, et un succès muet
+ * ne serait pas sans effet : il tromperait. L'écran ne propose que les
+ * AUTRES classes de l'école, une demande qui nomme la classe actuelle vient
+ * donc d'une page périmée ou d'un appel direct ; l'administrateur lirait
+ * « c'est fait » et l'enfant serait resté en CM1 A. Il continuerait sa
+ * réorganisation sur une carte mentale fausse.
+ */
+export const transferStudent = mutation({
+  args: {
+    membershipId: v.id("schoolMemberships"),
+    targetSchoolClassId: v.id("schoolClasses"),
+  },
+  handler: async (ctx, args) => {
+    if (!(await callerIsAdmin(ctx))) throw new Error("Rôle non autorisé");
+
+    const membership = await ctx.db.get(args.membershipId);
+    if (!membership) throw new Error("Inscription introuvable");
+    if (membership.status !== "active") {
+      throw new Error(
+        "Cette inscription n'est plus active : réinscrivez cet élève dans " +
+          "sa nouvelle classe",
+      );
+    }
+
+    const target = await ctx.db.get(args.targetSchoolClassId);
+    if (!target) throw new Error("Classe introuvable");
+
+    if (target.schoolId !== membership.schoolId) {
+      throw new Error(
+        "Cette classe appartient à une autre école : libérez le siège de " +
+          "cet élève, puis réinscrivez-le dans sa nouvelle école",
+      );
+    }
+
+    if (target._id === membership.schoolClassId) {
+      throw new Error("Cet élève est déjà dans cette classe");
+    }
+
+    const student = await ctx.db.get(membership.studentId);
+
+    await ctx.db.patch(membership._id, { schoolClassId: target._id });
+
+    // Le niveau du profil suit la classe, exactement comme `enrollStudent`
+    // l'aligne à l'inscription : passer de CM1 A à CM2 B change le niveau de
+    // l'élève. L'écriture reste conditionnelle, pour ne pas toucher un
+    // document qui porte déjà la bonne valeur — le cas courant, un simple
+    // changement de section à niveau égal.
+    //
+    // Un profil introuvable n'ARRÊTE PAS le transfert, là où `enrollStudent`
+    // refuse : le sujet de celle-là est le profil qu'on lui nomme, le sujet
+    // d'ici est l'inscription, et elle existe. `listClassStudents` affiche
+    // déjà ces lignes orphelines (`UNKNOWN_NAME`) au lieu de les cacher ;
+    // les rendre intransférables figerait la classe qui en contient une.
+    if (student && student.class !== target.class) {
+      await ctx.db.patch(student._id, { class: target.class });
+    }
+
+    return null;
+  },
+});

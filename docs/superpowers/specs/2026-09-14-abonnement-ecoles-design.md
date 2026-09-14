@@ -193,9 +193,16 @@ profiles: {
 Sénégal un professeur enseigne couramment dans deux établissements, et un
 directeur peut gérer un groupe scolaire. `schoolStaff` couvre les deux.
 
-**`pricePerSeatFcfa` et `totalFcfa` sont gelés à la signature.** Le tarif
-catalogue évoluera ; les contrats en cours ne doivent pas être revalorisés
-rétroactivement.
+**Les sièges déjà signés ne sont jamais revalorisés.** Le tarif catalogue
+évoluera, et un contrat en cours ne doit pas être recalculé au nouveau tarif.
+
+Cette section disait « `pricePerSeatFcfa` et `totalFcfa` sont gelés à la
+signature » ; l'avenant de sièges (§7.6) réécrit précisément ces deux champs, la
+phrase est donc devenue fausse dans la lettre. Elle reste vraie dans le fond, et
+c'est l'implémentation qui le garantit : un avenant part du `totalFcfa` **du
+contrat** et y ajoute le prorata des seuls sièges ajoutés — il ne recalcule
+jamais un devis neuf pour l'ensemble. Les sièges d'origine gardent donc à jamais
+le prix auquel ils ont été vendus, quel que soit le barème du jour.
 
 **`installments` et `payments` sont distincts.** Une tranche est ce qui est *dû*,
 un paiement est une *tentative*. Une tranche peut accumuler plusieurs échecs

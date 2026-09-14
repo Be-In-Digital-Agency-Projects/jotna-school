@@ -100,8 +100,10 @@ const SUBSCRIPTION_STATUS_LABEL: Record<SubscriptionStatus, string> = {
  *
  * `past_due` viendra du suivi des tranches, `expired` se déduit de la date de
  * fin à chaque lecture, et « résilié » dit la FIN d'un contrat existant que
- * rien ne sait encore prononcer — `recordSubscription` n'insère que des lignes
- * neuves. Les trois sont refusés par la mutation, et le formulaire n'a pas à
+ * rien ne sait encore prononcer. La table a deux écrivains — l'insertion de
+ * `recordSubscription` et l'avenant de sièges d'`amendSeats` — et AUCUN des
+ * deux n'écrit le statut : l'un le reçoit à la création et le refuse s'il vaut
+ * « résilié », l'autre ne touche ni le statut ni les dates. Les trois sont refusés par la mutation, et le formulaire n'a pas à
  * proposer ce qui sera refusé : c'est pourquoi aucun encart n'annonce leur
  * refus, à la différence d'« actif » daté du futur ou du plafond de sièges,
  * que le menu peut encore produire.

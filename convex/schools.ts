@@ -118,10 +118,14 @@ const OVERDUE_INSTALLMENTS_LIMIT = 12;
  * saurait de toute façon montrer les élèves concernés.
  *
  * Conséquence assumée : une école dont le contrat dépasse cette borne ET qui
- * compte autant d'inscriptions actives cesserait d'être plafonnée. Aucune
- * écriture du dépôt ne crée aujourd'hui de `subscriptions`, et une école
- * primaire n'atteint pas cet effectif ; le jour où la facturation en créera,
- * c'est ici qu'il faudra revenir.
+ * compte autant d'inscriptions actives cesserait d'être plafonnée. Ce
+ * commentaire affirmait qu'aucune écriture du dépôt ne créait de
+ * `subscriptions` ; c'est FAUX depuis `recordSubscription`, et `amendSeats`
+ * fait désormais monter `seatsPurchased` sans borne supérieure. La conséquence
+ * n'est donc plus théorique — seul l'effectif la tient hors d'atteinte : 3 000
+ * sièges, qu'une école primaire n'approche pas. Le jour où une école les
+ * atteindra, c'est ici qu'il faudra revenir, et le plafond comme l'alerte
+ * s'éteindront ensemble.
  */
 const SEAT_SCAN_LIMIT = CLASSES_LIMIT * CLASS_STUDENTS_LIMIT;
 

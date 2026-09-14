@@ -6,8 +6,13 @@ import {
   type QueryCtx,
 } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
-import { callerAdminProfile, callerIsAdmin } from "./access";
+import {
+  callerAdminProfile,
+  callerIsAdmin,
+  currentSchoolSubscription,
+} from "./access";
 import { decideAccess, type AccessReason } from "./accessRules";
+import { PRICING_SCALE, quoteSubscription } from "./pricing";
 
 /**
  * Administration des écoles : écoles, personnel, classes, inscriptions.
@@ -117,6 +122,19 @@ const OVERDUE_INSTALLMENTS_LIMIT = 12;
 const SEAT_SCAN_LIMIT = CLASSES_LIMIT * CLASS_STUDENTS_LIMIT;
 
 /**
+ * Contrats lus pour détecter un CHEVAUCHEMENT de périodes.
+ *
+ * Sous l'invariant que ce contrôle établit — les contrats d'une école sont
+ * disjoints — le premier candidat suffirait : des intervalles disjoints se
+ * rangent par `startsAt` ET par `endsAt`, donc le plus récemment commencé
+ * parmi ceux qui débutent avant la fin du contrat proposé est aussi celui qui
+ * finit le plus tard. On en lit une poignée pour que la vérification ne
+ * dépende pas de ce qu'elle protège, et parce que des contrats `cancelled`,
+ * seuls autorisés à se croiser, peuvent s'intercaler devant un vrai conflit.
+ */
+const OVERLAP_SCAN_LIMIT = 8;
+
+/**
  * Événements lus pour UNE inscription.
  *
  * Une inscription porte au plus une entrée et une libération ; tout le reste
@@ -154,6 +172,26 @@ const classValidator = v.union(
   v.literal("CE2"),
   v.literal("CM1"),
   v.literal("CM2"),
+);
+
+/**
+ * Les SIX statuts du schéma, alors que `recordSubscription` n'en accepte que
+ * quatre — et c'est délibéré.
+ *
+ * Un validateur à quatre littéraux refuserait bien `past_due` et `expired`,
+ * mais par une erreur de validation générique. Ces deux-là ne sont pas des
+ * valeurs invalides : ce sont des statuts valides qu'une PERSONNE ne pose pas.
+ * L'administrateur qui les choisit a besoin de l'apprendre, pas d'un message de
+ * type. Le refus vit donc dans le handler, avec sa raison ; le validateur reste
+ * la forme du champ, et le handler reste le seul juge.
+ */
+const subscriptionStatusValidator = v.union(
+  v.literal("draft"),
+  v.literal("pending_payment"),
+  v.literal("active"),
+  v.literal("past_due"),
+  v.literal("expired"),
+  v.literal("cancelled"),
 );
 
 /** Affichage d'un profil supprimé ou introuvable — jamais une ligne muette. */
@@ -467,35 +505,6 @@ type SeatState = {
 };
 
 /**
- * L'abonnement que le paywall considère COURANT pour cette école.
- *
- * Exactement la lecture d'`access.loadAccessInput`
- * (`convex/access.ts:71-77`) : le plus récent par `by_owner_startsAt`, sans
- * filtrer sur la couverture temporelle — c'est `decideAccess` qui juge
- * l'expiration par `endsAt`. Filtrer ici rendrait « aucun abonnement » là où
- * la vérité est « abonnement échu ».
- *
- * Une seule fonction pour ses trois lecteurs — le verdict d'accès, le
- * décompte de sièges, le refus d'`enrollStudent` — et c'est tout l'intérêt :
- * si l'inscription plafonnait sur un autre contrat que celui que le paywall
- * tient pour courant, le plafond surveillerait le mauvais contrat. Une école
- * se verrait refuser des inscriptions au nom d'un contrat périmé, ou en
- * obtenir au nom d'un contrat que personne n'honore.
- */
-async function latestSchoolSubscription(
-  ctx: QueryCtx | MutationCtx,
-  schoolId: Id<"schools">,
-): Promise<Doc<"subscriptions"> | null> {
-  return await ctx.db
-    .query("subscriptions")
-    .withIndex("by_owner_startsAt", (q) =>
-      q.eq("ownerType", "school").eq("ownerId", schoolId),
-    )
-    .order("desc")
-    .first();
-}
-
-/**
  * Les sièges qu'ouvre un contrat, ramenés à un entier exploitable.
  *
  * `subscriptions.seatsPurchased` est un `v.number()` — un flottant, que rien
@@ -530,18 +539,24 @@ function contractSeats(seatsPurchased: number): number {
  * lit donc 41 documents, qu'elle compte 40 élèves ou 4000.
  *
  * Rend `null` quand l'école n'a AUCUN abonnement : aucun contrat, aucun
- * plafond. C'est le cas courant — rien dans le dépôt ne crée d'abonnement — et
- * une école peut légitimement inscrire avant de payer ; l'élève n'aura
- * simplement pas d'accès, ce que `getEnrollmentOutlook` annonce déjà.
+ * plafond. Une école peut légitimement inscrire avant de payer ; l'élève
+ * n'aura simplement pas d'accès, ce que `getEnrollmentOutlook` annonce déjà.
+ *
+ * Prend les sièges du contrat et NON le contrat lui-même, pour que
+ * `recordSubscription` puisse peser un contrat qui n'est pas encore écrit
+ * contre l'effectif déjà inscrit. C'est la condition pour qu'il n'existe qu'UN
+ * décompte : un second, écrit dans la mutation pour la seule raison qu'elle
+ * n'a pas de document à passer, divergerait de celui-ci au premier
+ * changement — et les deux répondent à la même question.
  */
 async function readSeatState(
   ctx: QueryCtx | MutationCtx,
   schoolId: Id<"schools">,
-  subscription: Doc<"subscriptions"> | null,
+  contractedSeats: number | null,
 ): Promise<SeatState | null> {
-  if (!subscription) return null;
+  if (contractedSeats === null) return null;
 
-  const purchased = contractSeats(subscription.seatsPurchased);
+  const purchased = contractSeats(contractedSeats);
   const bound = Math.min(purchased + 1, SEAT_SCAN_LIMIT);
 
   const active = await ctx.db
@@ -565,14 +580,43 @@ function pluralCount(n: number, singular: string, plural: string): string {
 }
 
 /**
+ * Une date en clair dans un message de refus, jamais un horodatage nu.
+ *
+ * Format ISO et non `toLocaleDateString` : le runtime Convex ne garantit pas
+ * `Intl`, et « 2026-09-01 » ne s'interprète de travers dans aucune langue.
+ */
+function formatDay(timestamp: number): string {
+  return new Date(timestamp).toISOString().slice(0, 10);
+}
+
+/**
+ * Le contrat courant tel que l'écran l'affiche.
+ *
+ * Ne porte PAS les sièges : ils sont déjà dans `SeatState.purchased`, normalisés
+ * par `contractSeats`, et deux nombres de sièges dans la même réponse finiraient
+ * par différer. Ne porte pas non plus l'identifiant de la ligne : aucun écran
+ * n'a à désigner un contrat, un renouvellement étant une ligne NEUVE.
+ */
+type ContractSummary = {
+  startsAt: number;
+  endsAt: number;
+  status: Doc<"subscriptions">["status"];
+  /** Fait foi pour la facturation (spec §7.2). */
+  totalFcfa: number;
+  /** Tarif effectif moyen, affichage seul — jamais remultiplié (spec §7.2). */
+  pricePerSeatFcfa: number;
+};
+
+/**
  * Ce que `getEnrollmentOutlook` rend — `reason` absente quand l'accès
- * s'ouvre, `seats` absente quand l'école n'a aucun abonnement, donc aucun
- * plafond.
+ * s'ouvre, `seats` et `contract` absentes quand l'école n'a aucun abonnement,
+ * donc aucun plafond.
  */
 type EnrollmentOutlook = {
   opensAccess: boolean;
   reason: AccessReason | null;
   seats: SeatState | null;
+  contract: ContractSummary | null;
 };
 
 /**
@@ -603,11 +647,17 @@ type EnrollmentOutlook = {
  * `seats` à `null` veut dire « aucun abonnement, donc aucun plafond », et non
  * « zéro siège » : un contrat qui n'existe pas ne plafonne rien.
  *
+ * Rend AUSSI le contrat lui-même (`contract`), plutôt que de le laisser à une
+ * requête séparée : cette fonction lit DÉJÀ ce document-là, et deux requêtes
+ * pourraient, entre deux enregistrements, montrer un contrat qui n'est pas
+ * celui sur lequel le verdict porte — l'incohérence même contre laquelle
+ * `currentSchoolSubscription` existe.
+ *
  * Lectures : le chemin de `access.loadAccessInput`, à l'identique —
- * l'abonnement le plus récent par `by_owner_startsAt`, les tranches seulement
- * en `past_due` — plus le décompte des sièges, borné par le contrat. Une
- * lecture de plus par école affichée, jamais par classe : l'écran hisse la
- * requête au niveau de l'école.
+ * l'abonnement que `currentSchoolSubscription` tient pour courant, les
+ * tranches seulement en `past_due` — plus le décompte des sièges, borné par le
+ * contrat. Une lecture de plus par école affichée, jamais par classe : l'écran
+ * hisse la requête au niveau de l'école.
  *
  * Ne lève pas : `null` pour tout appelant non-`admin` comme pour une école
  * introuvable, et l'écran n'affiche alors rien plutôt qu'une promesse.
@@ -620,13 +670,17 @@ export const getEnrollmentOutlook = query({
     const school = await ctx.db.get(args.schoolId);
     if (!school) return null;
 
-    const latest = await latestSchoolSubscription(ctx, args.schoolId);
+    // Un seul `now` pour la sélection du contrat et pour le verdict : deux
+    // appels à `Date.now()` pourraient choisir un contrat sur un instant et le
+    // juger sur un autre.
+    const now = Date.now();
+    const current = await currentSchoolSubscription(ctx, args.schoolId, now);
 
     let oldestOverdueDueAt: number | null = null;
-    if (latest && latest.status === "past_due") {
+    if (current && current.status === "past_due") {
       const rows = await ctx.db
         .query("installments")
-        .withIndex("by_subscription", (q) => q.eq("subscriptionId", latest._id))
+        .withIndex("by_subscription", (q) => q.eq("subscriptionId", current._id))
         .take(OVERDUE_INSTALLMENTS_LIMIT);
       const dues = rows
         .filter((row) => row.status === "overdue")
@@ -635,12 +689,12 @@ export const getEnrollmentOutlook = query({
     }
 
     const verdict = decideAccess({
-      now: Date.now(),
+      now,
       role: "student",
       activeMembership: { schoolId: args.schoolId },
       hasReleasedMembership: false,
-      subscription: latest
-        ? { status: latest.status, endsAt: latest.endsAt }
+      subscription: current
+        ? { status: current.status, endsAt: current.endsAt }
         : null,
       oldestOverdueDueAt,
     });
@@ -648,7 +702,20 @@ export const getEnrollmentOutlook = query({
     return {
       opensAccess: verdict.ok,
       reason: verdict.ok ? null : verdict.reason,
-      seats: await readSeatState(ctx, args.schoolId, latest),
+      seats: await readSeatState(
+        ctx,
+        args.schoolId,
+        current ? current.seatsPurchased : null,
+      ),
+      contract: current
+        ? {
+            startsAt: current.startsAt,
+            endsAt: current.endsAt,
+            status: current.status,
+            totalFcfa: current.totalFcfa,
+            pricePerSeatFcfa: current.pricePerSeatFcfa,
+          }
+        : null,
     };
   },
 });
@@ -750,6 +817,225 @@ export const createSchool = mutation({
       ninea: args.ninea,
       status: "prospect",
       createdAt: Date.now(),
+    });
+  },
+});
+
+/**
+ * Enregistre le contrat d'une école — la PREMIÈRE écriture de `subscriptions`.
+ *
+ * Ce n'est pas le flux de paiement : aucun appel PayDunya, aucune facture,
+ * aucune tranche. Un administrateur saisit un contrat convenu hors ligne. La
+ * table `installments` reste vide, et c'est le plan de facturation qui la
+ * remplira.
+ *
+ * Jusqu'ici `subscriptions` avait deux lecteurs et zéro écrivain : le plafond
+ * de sièges était correct mais DORMANT, faute de contrat possible, et l'écran
+ * d'inscription ne pouvait promettre aucun accès. Cette mutation lui donne sa
+ * matière.
+ *
+ * LE PRIX N'EST PAS UN ARGUMENT. Il se calcule par `pricing.quoteSubscription`
+ * à partir des seuls sièges. Un total reçu de l'appelant serait un montant de
+ * facturation accepté sans contrôle — la même faute que les identifiants
+ * d'autorisation reçus en argument que ce module refuse partout ailleurs.
+ *
+ * CE QUI EST ÉCRIT DANS `seatsPurchased`, ce sont les sièges FACTURÉS, pas le
+ * nombre brut reçu : un contrat de 30 sièges s'enregistre à 50, parce que
+ * l'école en paie 50 (plancher, spec §7.1) et qu'une école qui paie 50 sièges
+ * en reçoit 50. Le plafond d'`enrollStudent` lit ce champ : il doit lire le
+ * nombre payé, sans quoi l'école paierait des sièges qu'elle ne pourrait pas
+ * occuper.
+ *
+ * CINQ REFUS, et la raison de chacun :
+ *
+ *   - sièges : entier strictement positif. `readSeatState` passe ce nombre à
+ *     `.take()`, qui LÈVE sur un argument non entier — un contrat à 12,5
+ *     sièges casserait ensuite toute lecture de l'école, pas seulement la
+ *     sienne.
+ *   - période : `endsAt > startsAt`. `decideAccess` juge l'expiration par
+ *     `endsAt` seul ; un contrat qui finit avant de commencer serait échu à sa
+ *     naissance, sans que rien ne le dise.
+ *   - `past_due` et `expired` : une machine les pose, pas une personne. Le
+ *     premier viendra du suivi des tranches, le second se DÉDUIT de `endsAt`
+ *     dans `decideAccess` — l'écrire en base créerait une seconde vérité sur
+ *     la même question.
+ *   - `active` daté du futur : voir juste en dessous.
+ *   - CHEVAUCHEMENT d'une période déjà contractée : voir le refus lui-même,
+ *     c'est celui dont dépend la justesse de la lecture du paywall.
+ *
+ * CE QU'IL MANQUE, ET QUI SE VOIT ICI : rien dans cette tâche ne RÉSILIE ni ne
+ * modifie un contrat en cours. Une école qui veut plus de sièges en février ne
+ * peut donc pas en obtenir avant la fin du contrat courant — le refus de
+ * chevauchement le lui dira. C'est un manque assumé, pas un oubli : amender un
+ * contrat en cours, c'est décider ce qu'il advient de son montant déjà facturé,
+ * et cette question appartient au plan de facturation. Le refus au moins le dit
+ * en face, là où un empilement silencieux de contrats aurait rendu l'accès et
+ * le plafond de sièges indécidables.
+ *
+ * POURQUOI UN CONTRAT FUTUR NE PEUT PAS ÊTRE `active` : `decideAccess` ne lit
+ * jamais `startsAt` (`accessRules.ts` ne reçoit que `status` et `endsAt`). Un
+ * contrat de l'an prochain marqué `active` passerait donc le test
+ * `now < endsAt` et ouvrirait l'accès AUJOURD'HUI, pour une année que l'école
+ * n'a pas encore commencé à payer. `access.currentSchoolSubscription` ferme la
+ * moitié du trou en ne se repliant que sur les contrats déjà commencés ; ce
+ * refus ferme l'autre moitié, en garantissant qu'un contrat à venir ne porte
+ * jamais qu'un statut qui refuse.
+ *
+ * UN RENOUVELLEMENT EST UNE LIGNE NEUVE, jamais un `patch` : le schéma indexe
+ * par `startsAt`, l'historique des contrats a de la valeur, et modifier la
+ * ligne en cours ferait disparaître le contrat sous les élèves qu'il couvre.
+ */
+export const recordSubscription = mutation({
+  args: {
+    schoolId: v.id("schools"),
+    seatsPurchased: v.number(),
+    startsAt: v.number(),
+    endsAt: v.number(),
+    status: subscriptionStatusValidator,
+  },
+  handler: async (ctx, args) => {
+    if (!(await callerIsAdmin(ctx))) throw new Error("Rôle non autorisé");
+
+    const school = await ctx.db.get(args.schoolId);
+    if (!school) throw new Error("École introuvable");
+
+    if (!Number.isInteger(args.seatsPurchased) || args.seatsPurchased <= 0) {
+      throw new Error(
+        "Le nombre de sièges doit être un entier strictement positif",
+      );
+    }
+
+    if (args.endsAt <= args.startsAt) {
+      throw new Error(
+        "La fin du contrat doit tomber après son début : " +
+          `${formatDay(args.startsAt)} → ${formatDay(args.endsAt)}`,
+      );
+    }
+
+    if (args.status === "past_due" || args.status === "expired") {
+      throw new Error(
+        "Ce statut est posé par une machine, pas par une personne : " +
+          "« impayé » viendra du suivi des tranches, et « échu » se déduit de " +
+          "la date de fin du contrat à chaque lecture. Enregistrez ce contrat " +
+          "en brouillon, en attente de paiement, actif ou résilié.",
+      );
+    }
+
+    const now = Date.now();
+
+    if (args.status === "active" && args.startsAt > now) {
+      throw new Error(
+        "Un contrat ne se déclare pas en vigueur avant d'avoir commencé : " +
+          `celui-ci débute le ${formatDay(args.startsAt)}. Marqué actif dès ` +
+          "aujourd'hui, il ouvrirait l'accès pour une année qui n'a pas " +
+          "commencé — le paywall ne juge que la date de FIN. Enregistrez-le " +
+          "en brouillon ou en attente de paiement ; il faudra l'enregistrer " +
+          "actif le jour de son entrée en vigueur, rien ici ne change un " +
+          "statut tout seul.",
+      );
+    }
+
+    // AUCUN CHEVAUCHEMENT DE PÉRIODES — l'invariant « une école a au plus un
+    // contrat en vigueur à la fois ».
+    //
+    // Ce n'est pas une coquetterie de modélisation : la sélection du contrat
+    // courant (`access.currentSchoolSubscription`) ne lit QU'UN document, le
+    // plus récemment commencé, et cette lecture n'est juste que si les contrats
+    // sont disjoints. Deux contrats qui se croisent — un long de janvier à
+    // décembre, une rallonge de mars à avril — et l'école se retrouve coupée
+    // en juin : la rallonge, plus récemment commencée, gagne et se trouve
+    // échue, pendant que le contrat long la couvre encore. Le refus ici est ce
+    // qui rend la lecture là-bas démontrable au lieu d'être un pari sur les
+    // données.
+    //
+    // Le plafond de sièges le veut tout autant : deux contrats simultanés de
+    // 40 et 20 sièges ne font pas 60 sièges pour `readSeatState`, qui en lit un
+    // seul. Des contrats qui se croisent rendraient le plafond arbitraire
+    // quelle que soit la règle de sélection.
+    //
+    // Bornes STRICTES des deux côtés : un contrat qui commence exactement à la
+    // fin du précédent ne le chevauche pas — c'est la forme normale d'un
+    // renouvellement, et `decideAccess` traite déjà `endsAt` comme exclu
+    // (`now >= endsAt` ⇒ échu).
+    //
+    // Les contrats `cancelled` ne comptent pas : une période résiliée doit
+    // pouvoir être recontractée, sans quoi une erreur de saisie condamnerait
+    // l'école pour l'année. Le prix de cette exception est borné — un contrat
+    // résilié n'ouvre aucun accès.
+    const candidates = await ctx.db
+      .query("subscriptions")
+      .withIndex("by_owner_startsAt", (q) =>
+        q
+          .eq("ownerType", "school")
+          .eq("ownerId", args.schoolId)
+          .lt("startsAt", args.endsAt),
+      )
+      .order("desc")
+      .take(OVERLAP_SCAN_LIMIT);
+
+    const conflict = candidates.find(
+      (row) => row.status !== "cancelled" && row.endsAt > args.startsAt,
+    );
+    if (conflict) {
+      throw new Error(
+        "Cette école a déjà un contrat sur cette période : du " +
+          `${formatDay(conflict.startsAt)} au ${formatDay(conflict.endsAt)}, ` +
+          `${pluralCount(conflict.seatsPurchased, "siège", "sièges")}. Un ` +
+          "renouvellement commence à la fin du précédent, ou après. Deux " +
+          "contrats simultanés rendraient indécidables l'accès des élèves et " +
+          "le nombre de sièges de l'école.",
+      );
+    }
+
+    const quote = quoteSubscription(args.seatsPurchased);
+
+    // L'ALERTE — le contrat couvre-t-il l'effectif DÉJÀ inscrit ?
+    //
+    // Refus, et non simple avertissement : enregistrer en silence un contrat
+    // déjà dépassé produirait une école durablement au-delà de son droit, que
+    // rien ne signale ailleurs qu'en ouvrant sa fiche. Le plafond
+    // d'`enrollStudent` ne rattraperait pas le mal — il refuse les
+    // inscriptions NOUVELLES, jamais celles qui existent déjà — et personne ne
+    // couperait l'accès des enfants en trop, qui est justement ce qu'on ne
+    // veut pas faire.
+    //
+    // Le décompte est celui du plafond de sièges, à la ligne près : deux
+    // décomptes divergeraient, et l'écran finirait par annoncer un état que la
+    // mutation ne reconnaît pas. Il est borné par le contrat qu'on s'apprête à
+    // écrire, donc `used` peut valoir « au moins ».
+    const seats = await readSeatState(ctx, args.schoolId, quote.seatsBilled);
+    if (seats !== null && seats.used > seats.purchased) {
+      const counted = pluralCount(
+        seats.used,
+        "inscription active",
+        "inscriptions actives",
+      );
+      const enrolled = seats.atLeast ? `au moins ${counted}` : counted;
+      const asked =
+        quote.seatsBilled === args.seatsPurchased
+          ? pluralCount(args.seatsPurchased, "siège", "sièges")
+          : `${pluralCount(args.seatsPurchased, "siège", "sièges")} ` +
+            `(${quote.seatsBilled} facturés, plancher de ` +
+            `${PRICING_SCALE.seatFloor} sièges)`;
+
+      throw new Error(
+        `Cette école compte ${enrolled} : un contrat de ${asked} la ` +
+          "laisserait au-delà de son droit dès son enregistrement. Libérez " +
+          "d'abord le siège des élèves en trop, ou enregistrez le contrat au " +
+          "nombre de sièges réel.",
+      );
+    }
+
+    return await ctx.db.insert("subscriptions", {
+      ownerType: "school",
+      ownerId: args.schoolId,
+      seatsPurchased: quote.seatsBilled,
+      pricePerSeatFcfa: quote.pricePerSeatFcfa,
+      totalFcfa: quote.totalFcfa,
+      startsAt: args.startsAt,
+      endsAt: args.endsAt,
+      status: args.status,
+      createdAt: now,
     });
   },
 });
@@ -1035,16 +1321,21 @@ export const enrollStudent = mutation({
     // enfant perdrait son accès parce qu'un AUTRE a été inscrit, sans rien
     // avoir fait, et avec un message qu'on ne saurait pas lui expliquer.
     //
-    // L'abonnement lu est celui du paywall — `latestSchoolSubscription`, la
-    // lecture d'`access.ts` : un plafond assis sur un autre contrat
-    // surveillerait le mauvais. Aucun abonnement ⇒ aucun plafond : l'école
-    // peut légitimement inscrire avant de payer, l'élève tombera simplement
-    // sur le paywall, ce que l'écran annonce déjà.
-    const subscription = await latestSchoolSubscription(
+    // L'abonnement lu est celui du paywall — `access.currentSchoolSubscription`
+    // elle-même, et non une seconde lecture qui lui ressemblerait : un plafond
+    // assis sur un autre contrat surveillerait le mauvais. Aucun abonnement ⇒
+    // aucun plafond : l'école peut légitimement inscrire avant de payer,
+    // l'élève tombera simplement sur le paywall, ce que l'écran annonce déjà.
+    const subscription = await currentSchoolSubscription(
       ctx,
       schoolClass.schoolId,
+      Date.now(),
     );
-    const seats = await readSeatState(ctx, schoolClass.schoolId, subscription);
+    const seats = await readSeatState(
+      ctx,
+      schoolClass.schoolId,
+      subscription ? subscription.seatsPurchased : null,
+    );
     if (seats && seats.full) {
       // « au moins » quand le décompte a buté sur sa borne : l'école dépasse
       // alors son contrat et le total exact n'a pas été lu. Mieux vaut un

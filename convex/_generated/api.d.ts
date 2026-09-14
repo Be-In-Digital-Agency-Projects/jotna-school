@@ -36,6 +36,7 @@ import type * as paliers_prompts from "../paliers/prompts.js";
 import type * as paliers_scoring from "../paliers/scoring.js";
 import type * as pdfUploads from "../pdfUploads.js";
 import type * as pdfUploadsExtract from "../pdfUploadsExtract.js";
+import type * as pricing from "../pricing.js";
 import type * as profiles from "../profiles.js";
 import type * as progress from "../progress.js";
 import type * as regenNotificationEmail from "../regenNotificationEmail.js";
@@ -85,6 +86,7 @@ declare const fullApi: ApiFromModules<{
   "paliers/scoring": typeof paliers_scoring;
   pdfUploads: typeof pdfUploads;
   pdfUploadsExtract: typeof pdfUploadsExtract;
+  pricing: typeof pricing;
   profiles: typeof profiles;
   progress: typeof progress;
   regenNotificationEmail: typeof regenNotificationEmail;

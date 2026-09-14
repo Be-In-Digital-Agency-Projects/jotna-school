@@ -5,6 +5,11 @@ import { useQuery, useMutation } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import { api } from "@/convex/_generated/api";
 import type { Doc } from "@/convex/_generated/dataModel";
+// Le barème est un module PUR, sans import ni accès à la base : l'écran peut
+// donc montrer le montant AVANT validation sans un aller-retour par serveur.
+// Ce total n'engage rien — `recordSubscription` recalcule le sien, et c'est
+// pourquoi le prix n'est pas un argument de la mutation.
+import { PRICING_SCALE, quoteSubscription } from "@/convex/pricing";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -12,6 +17,7 @@ import {
   History,
   Loader2,
   Plus,
+  Receipt,
   School,
   Users,
   UserMinus,
@@ -56,8 +62,44 @@ type OutlookReason = NonNullable<NonNullable<EnrollmentOutlook>["reason"]>;
  */
 type SeatState = NonNullable<NonNullable<EnrollmentOutlook>["seats"]>;
 
+/** Le contrat courant, tel que le paywall le retient. */
+type ContractSummary = NonNullable<NonNullable<EnrollmentOutlook>["contract"]>;
+
 type ClassLevel = Doc<"schoolClasses">["class"];
 type StaffRole = Doc<"schoolStaff">["staffRole"];
+type SubscriptionStatus = Doc<"subscriptions">["status"];
+
+/**
+ * Les SIX statuts, dits en français — `Record` complet et non `Partial` : un
+ * septième statut au schéma ne compilera pas tant qu'il n'aura pas sa phrase,
+ * et mieux vaut un écran qui refuse de se construire qu'une fiche d'école qui
+ * affiche « past_due » à un administrateur.
+ */
+const SUBSCRIPTION_STATUS_LABEL: Record<SubscriptionStatus, string> = {
+  draft: "Brouillon",
+  pending_payment: "En attente de paiement",
+  active: "Actif",
+  past_due: "Impayé",
+  expired: "Échu",
+  cancelled: "Résilié",
+};
+
+/**
+ * Les quatre statuts qu'une PERSONNE pose.
+ *
+ * `past_due` viendra du suivi des tranches, `expired` se déduit de la date de
+ * fin à chaque lecture : `recordSubscription` les refuse tous les deux, et le
+ * formulaire n'a pas à proposer ce qui sera refusé. `Exclude` sur le type du
+ * schéma, et non une liste recopiée : les deux exclus sont nommés une fois.
+ */
+type AdminStatus = Exclude<SubscriptionStatus, "past_due" | "expired">;
+
+const ADMIN_STATUSES: AdminStatus[] = [
+  "draft",
+  "pending_payment",
+  "active",
+  "cancelled",
+];
 
 /** Niveaux et rôles en dur, mais TYPÉS par le schéma : une valeur inventée ne compile pas. */
 const CLASS_LEVELS: ClassLevel[] = ["CI", "CP", "CE1", "CE2", "CM1", "CM2"];
@@ -168,6 +210,55 @@ function seatsContractLabel(seats: SeatState): string {
   return plural(seats.purchased, "siège au contrat", "sièges au contrat");
 }
 
+// ---------------------------------------------------------------------------
+// Le contrat — montants, dates, et le devis montré AVANT validation.
+// ---------------------------------------------------------------------------
+
+/** « 1 140 000 FCFA » — un montant se lit par tranches de trois chiffres. */
+function formatFcfa(amount: number): string {
+  return `${new Intl.NumberFormat("fr-FR").format(amount)} FCFA`;
+}
+
+/**
+ * Une date de contrat — le jour suffit, une période n'a pas d'heure.
+ *
+ * Lue en UTC, comme elle a été écrite (`fromDayInput`) : une période saisie au
+ * jour est un jour, pas un instant. Sans ce fuseau, un contrat commencé le
+ * 1er septembre s'afficherait « 31 août » à l'ouest de Greenwich, et
+ * l'administrateur ne reconnaîtrait pas la date qu'il vient de taper. Les
+ * horodatages du journal, eux, restent en heure locale : ce sont des moments
+ * (`formatEventMoment`), pas des dates.
+ */
+function formatDay(timestamp: number): string {
+  return new Date(timestamp).toLocaleDateString("fr-FR", {
+    timeZone: "UTC",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+}
+
+/**
+ * Le jour d'un horodatage, au format que `<input type="date">` attend.
+ *
+ * UTC des deux côtés : `<input type="date">` rend « AAAA-MM-JJ », que
+ * `Date.parse` lit comme minuit UTC. Passer par le fuseau local ferait
+ * glisser la date d'un jour pour la moitié du globe, sur un champ où
+ * l'utilisateur a tapé une date et rien d'autre.
+ */
+function toDayInput(timestamp: number): string {
+  return new Date(timestamp).toISOString().slice(0, 10);
+}
+
+/** L'horodatage d'un « AAAA-MM-JJ », ou `null` si le champ est vide ou faux. */
+function fromDayInput(value: string): number | null {
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+const DAYS_IN_YEAR = 365;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 /**
  * L'occupation des sièges, AVANT que l'administrateur remplisse quoi que ce
  * soit.
@@ -255,6 +346,328 @@ function SeatUsageNotice({
         {free}.
       </p>
     </div>
+  );
+}
+
+/** Le statut d'un contrat se voit avant de se lire : couleur d'abord. */
+const STATUS_BADGE: Record<SubscriptionStatus, string> = {
+  draft: "bg-gray-100 text-gray-700",
+  pending_payment: "bg-amber-100 text-amber-800",
+  active: "bg-emerald-100 text-emerald-800",
+  past_due: "bg-red-100 text-red-800",
+  expired: "bg-gray-100 text-gray-600",
+  cancelled: "bg-red-100 text-red-800",
+};
+
+/**
+ * Le contrat de l'école : ce qu'il couvre aujourd'hui, et comment en poser un.
+ *
+ * Placé tout en haut, sous l'occupation des sièges et AVANT le personnel : le
+ * contrat est ce qui décide si les élèves de cette école ont l'application.
+ * Sans lui, tout le reste de l'écran organise des inscriptions qui ouvriront un
+ * paywall.
+ *
+ * Le total est visible AVANT validation — un administrateur qui enregistre un
+ * contrat doit voir le montant qu'il engage. Il est calculé par le même module
+ * pur que le serveur (`convex/pricing.ts`), ce qui est la seule façon que
+ * l'écran ne puisse pas annoncer un prix que la mutation contredira. C'est un
+ * aperçu, pas un engagement : le prix n'est pas un argument de
+ * `recordSubscription`, qui refait le calcul pour son propre compte.
+ */
+function SubscriptionSection({
+  schoolId,
+  outlook,
+}: {
+  schoolId: Doc<"schools">["_id"];
+  outlook: EnrollmentOutlook | undefined;
+}) {
+  const recordSubscription = useMutation(api.schools.recordSubscription);
+
+  const [seats, setSeats] = useState("");
+  // Initialiseurs PARESSEUX : `Date.now()` est impur, et l'appeler dans le
+  // corps du rendu ferait glisser la valeur à chaque re-rendu. Passé en
+  // fonction, il n'est évalué qu'au premier montage — ce que les dates par
+  // défaut demandent, justement : elles sont un point de départ, que
+  // l'administrateur corrige ensuite sans qu'un rendu les lui reprenne.
+  //
+  // `today` sert aussi de point de comparaison : au format « AAAA-MM-JJ »,
+  // l'ordre alphabétique EST l'ordre chronologique, et comparer deux chaînes
+  // évite de rappeler l'horloge au milieu d'un rendu.
+  const [today] = useState(() => toDayInput(Date.now()));
+  const [startsAt, setStartsAt] = useState(today);
+  const [endsAt, setEndsAt] = useState(() =>
+    toDayInput(Date.now() + DAYS_IN_YEAR * DAY_MS),
+  );
+  // « En attente de paiement » par défaut, et non « actif » : un contrat vient
+  // d'être convenu, il n'est pas encaissé. Le défaut le moins coûteux est
+  // celui qui n'ouvre pas un accès qu'on n'a pas vendu.
+  const [status, setStatus] = useState<AdminStatus>("pending_payment");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const resolved = outlook === undefined ? null : outlook;
+  const contract: ContractSummary | null = resolved?.contract ?? null;
+  const seatState = resolved?.seats ?? null;
+
+  // Un entier strictement positif, ou rien : les mêmes conditions que la
+  // mutation, pour que l'aperçu se taise exactement là où elle refuserait.
+  const asked = Number(seats);
+  const askedSeats = Number.isInteger(asked) && asked > 0 ? asked : null;
+  const quote = askedSeats === null ? null : quoteSubscription(askedSeats);
+
+  // Les refus que le serveur opposera, annoncés ici plutôt que subis après
+  // coup — même raison que `SeatsFullNotice` pour l'inscription. Le verrou
+  // reste côté mutation ; ceci n'est que la politesse de le dire avant.
+  const wouldOverflow =
+    seatState !== null && quote !== null && seatState.used > quote.seatsBilled;
+
+  // Un contrat ne se déclare pas en vigueur avant d'avoir commencé : le
+  // paywall ne juge que la date de FIN, et « actif » daté de demain ouvrirait
+  // l'accès aujourd'hui.
+  const activeBeforeStart = status === "active" && startsAt > today;
+
+  const handleRecord = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const start = fromDayInput(startsAt);
+    const end = fromDayInput(endsAt);
+    if (askedSeats === null) {
+      setError("Le nombre de sièges doit être un entier strictement positif");
+      return;
+    }
+    if (start === null || end === null) {
+      setError("Renseignez le début et la fin du contrat");
+      return;
+    }
+    setIsSubmitting(true);
+    setError(null);
+    try {
+      await recordSubscription({
+        schoolId,
+        seatsPurchased: askedSeats,
+        startsAt: start,
+        endsAt: end,
+        status,
+      });
+      setSeats("");
+    } catch (err) {
+      setError(messageOf(err, "Erreur lors de l'enregistrement du contrat"));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <section className="mb-10">
+      <div className="mb-4 flex items-center gap-2">
+        <Receipt className="h-5 w-5 text-gray-400" />
+        <h2 className="text-lg font-semibold text-gray-900">Contrat</h2>
+      </div>
+
+      {error && (
+        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          {error}
+        </div>
+      )}
+
+      {outlook === undefined ? (
+        <div className="mb-4 flex items-center gap-2 text-sm text-gray-500">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Chargement du contrat...
+        </div>
+      ) : contract === null ? (
+        <div className="mb-4 rounded-xl border-2 border-dashed border-gray-300 p-8 text-center text-sm text-gray-500">
+          Aucun contrat enregistré. Les élèves inscrits dans cette école voient
+          le paywall : leur accès n&apos;ouvrira qu&apos;avec un contrat actif
+          couvrant la date du jour.
+        </div>
+      ) : (
+        <div className="mb-4 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="font-medium text-gray-900">
+                Du {formatDay(contract.startsAt)} au{" "}
+                {formatDay(contract.endsAt)}
+              </p>
+              <p className="mt-1 text-sm text-gray-500">
+                {seatState !== null && `${seatsContractLabel(seatState)} · `}
+                {formatFcfa(contract.totalFcfa)} pour l&apos;année
+              </p>
+            </div>
+            <span
+              className={`rounded-full px-3 py-1 text-xs font-medium ${STATUS_BADGE[contract.status]}`}
+            >
+              {SUBSCRIPTION_STATUS_LABEL[contract.status]}
+            </span>
+          </div>
+
+          <p className="mt-2 text-xs text-gray-400">
+            Soit {formatFcfa(contract.pricePerSeatFcfa)} par siège en moyenne —
+            valeur d&apos;affichage : c&apos;est le total qui fait foi.
+          </p>
+
+          {resolved !== null && (
+            <p
+              className={`mt-3 text-xs ${
+                resolved.opensAccess ? "text-emerald-700" : "text-amber-800"
+              }`}
+            >
+              {resolved.opensAccess
+                ? "Aujourd'hui, ce contrat ouvre l'accès des élèves inscrits."
+                : `Aujourd'hui, ce contrat n'ouvre pas l'accès : ${
+                    resolved.reason
+                      ? (OUTLOOK_REASON[resolved.reason] ??
+                        OUTLOOK_REASON_FALLBACK)
+                      : OUTLOOK_REASON_FALLBACK
+                  }.`}
+            </p>
+          )}
+        </div>
+      )}
+
+      {activeBeforeStart && (
+        <div className="mb-3 flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            L&apos;enregistrement sera REFUSÉ : un contrat ne se déclare pas
+            actif avant d&apos;avoir commencé. Le paywall ne juge que la date de
+            fin — marqué actif dès aujourd&apos;hui, ce contrat ouvrirait
+            l&apos;accès pour une année qui n&apos;a pas commencé. Enregistrez-le
+            en brouillon ou en attente de paiement, puis à nouveau en actif le
+            jour de son entrée en vigueur.
+          </span>
+        </div>
+      )}
+
+      {wouldOverflow && seatState !== null && quote !== null && (
+        <div className="mb-3 flex gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-800">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            L&apos;enregistrement sera REFUSÉ : cette école compte{" "}
+            {seatsUsedLabel(seatState)}, soit plus que les{" "}
+            {plural(quote.seatsBilled, "siège", "sièges")} de ce contrat.
+            Libérez d&apos;abord le siège des élèves en trop, ou enregistrez le
+            contrat au nombre de sièges réel.
+          </span>
+        </div>
+      )}
+
+      <form
+        onSubmit={handleRecord}
+        className="flex flex-wrap items-end gap-3 rounded-xl border border-gray-200 bg-white p-4 shadow-sm"
+      >
+        <div className="w-32">
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Sièges
+          </label>
+          <input
+            type="number"
+            min={1}
+            step={1}
+            value={seats}
+            onChange={(e) => setSeats(e.target.value)}
+            required
+            placeholder="ex: 120"
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Début
+          </label>
+          <input
+            type="date"
+            value={startsAt}
+            onChange={(e) => setStartsAt(e.target.value)}
+            required
+            className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Fin
+          </label>
+          <input
+            type="date"
+            value={endsAt}
+            onChange={(e) => setEndsAt(e.target.value)}
+            required
+            className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Statut
+          </label>
+          <select
+            value={status}
+            onChange={(e) => {
+              const next = ADMIN_STATUSES.find((item) => item === e.target.value);
+              if (next) setStatus(next);
+            }}
+            className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+          >
+            {ADMIN_STATUSES.map((item) => (
+              <option key={item} value={item}>
+                {SUBSCRIPTION_STATUS_LABEL[item]}
+              </option>
+            ))}
+          </select>
+        </div>
+        <button
+          type="submit"
+          disabled={isSubmitting || quote === null}
+          className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+        >
+          {isSubmitting ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Plus className="h-4 w-4" />
+          )}
+          Enregistrer le contrat
+        </button>
+
+        <div className="w-full border-t border-gray-100 pt-3">
+          {quote === null ? (
+            <p className="text-xs text-gray-500">
+              Le montant s&apos;affichera ici : le tarif est dégressif par
+              tranches, et chaque tranche ne facture que ses propres sièges.
+            </p>
+          ) : (
+            <div className="text-sm text-gray-700">
+              <p>
+                <span className="font-semibold text-gray-900">
+                  {formatFcfa(quote.totalFcfa)}
+                </span>{" "}
+                pour l&apos;année, soit{" "}
+                {formatFcfa(quote.pricePerSeatFcfa)} par siège en moyenne.
+              </p>
+              {quote.seatsBilled !== askedSeats && (
+                <p className="mt-1 text-xs text-amber-800">
+                  Plancher de facturation :{" "}
+                  {plural(PRICING_SCALE.seatFloor, "siège", "sièges")} au
+                  minimum. Ce contrat sera enregistré à {quote.seatsBilled}{" "}
+                  sièges — et l&apos;école en recevra {quote.seatsBilled}.
+                </p>
+              )}
+              <p className="mt-1 text-xs text-gray-400">
+                Montant calculé, non facturé : cet écran n&apos;encaisse rien et
+                ne produit aucune tranche.
+              </p>
+            </div>
+          )}
+        </div>
+      </form>
+
+      <p className="mt-2 text-xs text-gray-400">
+        Un renouvellement s&apos;enregistre comme un contrat NEUF : le contrat
+        ci-dessus n&apos;est jamais modifié, et l&apos;historique reste lisible.
+        Sa période doit commencer à la fin du précédent, ou après — une école
+        n&apos;a qu&apos;un contrat en vigueur à la fois, faute de quoi ni son
+        accès ni son nombre de sièges ne seraient décidables. Tant que le
+        nouveau n&apos;a pas commencé, c&apos;est l&apos;ancien qui décide de
+        l&apos;accès des élèves.
+      </p>
+    </section>
   );
 }
 
@@ -409,6 +822,8 @@ function SchoolDetail({ school }: { school: Doc<"schools"> }) {
       </div>
 
       <SeatUsageNotice outlook={outlook} />
+
+      <SubscriptionSection schoolId={school._id} outlook={outlook} />
 
       <StaffSection
         schoolId={school._id}

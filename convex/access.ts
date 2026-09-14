@@ -7,12 +7,97 @@ import {
   type MutationCtx,
 } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
+// `SubscriptionStatus` n'est plus importé : `subscriptions.status` porte au
+// schéma exactement la même union, et le transtypage qui les rapprochait
+// masquait une divergence éventuelle au lieu de la faire échouer.
 import {
   decideAccess,
   type AccessInput,
   type AccessState,
-  type SubscriptionStatus,
 } from "./accessRules";
+
+/**
+ * L'abonnement d'une école que le paywall tient pour COURANT.
+ *
+ * Le contrat le plus récemment COMMENCÉ (`startsAt <= now`), et à défaut
+ * seulement — aucun n'a commencé — le plus récent tout court.
+ *
+ * Pourquoi pas « le plus récent », qui était la règle jusqu'ici :
+ * `decideAccess` ne lit JAMAIS `startsAt` (`accessRules.ts` ne reçoit que
+ * `status` et `endsAt`). Un contrat à venir est donc jugé exactement comme un
+ * contrat en cours, et le jour où un administrateur enregistre celui de
+ * l'année suivante, deux défauts SYMÉTRIQUES s'ouvrent : en `draft` ou
+ * `pending_payment`, ce contrat futur devient « le plus récent » et coupe
+ * l'école entière séance tenante ; en `active`, `now < endsAt` est vrai et
+ * l'école obtient l'accès AVANT le début du contrat, pour une année qu'elle
+ * n'a pas commencé à payer. Ne regarder que les contrats COMMENCÉS ferme les
+ * deux ; `schools.recordSubscription` verrouille le second en refusant
+ * d'enregistrer `active` un contrat qui n'a pas commencé.
+ *
+ * Pourquoi pas non plus « celui qui couvre `now` », filtré sur la couverture :
+ * une école ÉCHUE n'aurait alors plus aucun contrat et lirait
+ * `no_subscription` quand la vérité est `expired` — l'enfant recevrait le
+ * mauvais motif. Le contrat le plus récemment commencé, lui, le dit
+ * correctement : s'il est fini, `decideAccess` rend `expired` par `endsAt`,
+ * ce qu'il fait déjà.
+ *
+ * POURQUOI UN SEUL DOCUMENT SUFFIT — et c'est une propriété des DONNÉES, pas
+ * de cette requête. Le contrat le plus récemment commencé est celui en vigueur
+ * si `now < endsAt` ; s'il est échu, aucun contrat plus ancien ne peut couvrir
+ * `now`, parce que les contrats d'une école ne se CHEVAUCHENT PAS. Cet
+ * invariant n'est pas un pari : `schools.recordSubscription` est l'unique
+ * écrivain de la table, il refuse tout contrat dont la période en croise une
+ * autre, et la table est partie de vide. Qui le relâchera devra revenir ici —
+ * la lecture redeviendrait fausse pour une école dont un contrat COURT
+ * chevaucherait un long : le court, plus récemment commencé, gagnerait puis
+ * expirerait, coupant une école que le long couvre encore.
+ *
+ * Seule EXCEPTION tolérée : un contrat `cancelled` peut en croiser un autre —
+ * `recordSubscription` ne compte pas les résiliés comme conflit, sans quoi une
+ * période résiliée resterait à jamais inutilisable. Un contrat résilié n'ouvre
+ * aucun accès dans `decideAccess` ; le pire écart possible est donc un MOTIF
+ * (`expired` au lieu de `cancelled`), jamais un droit accordé à tort.
+ *
+ * Le repli sur « le plus récent tout court » ne coûte un second document que
+ * si l'école n'a AUCUN contrat commencé. Il existe pour celle dont le tout
+ * premier contrat est daté de la rentrée prochaine : elle doit lire
+ * `pending_payment`, pas `no_subscription`. C'est l'ancienne règle, réduite au
+ * seul cas où elle ne peut pas nuire — il n'y a alors aucun droit en cours
+ * qu'elle pourrait contredire.
+ *
+ * UNE SEULE règle pour ses lecteurs — le verdict d'accès ici, le plafond de
+ * sièges et `getEnrollmentOutlook` dans `schools.ts` : un plafond assis sur un
+ * autre contrat que le paywall surveillerait le mauvais.
+ *
+ * `decideAccess` reste INCHANGÉ : on change quel abonnement lui est présenté,
+ * jamais comment il le juge.
+ */
+export async function currentSchoolSubscription(
+  ctx: QueryCtx | MutationCtx,
+  schoolId: Id<"schools">,
+  now: number,
+): Promise<Doc<"subscriptions"> | null> {
+  // La plage est bornée par l'INDEX lui-même, `by_owner_startsAt` portant
+  // `startsAt` en dernière position : UN document lu, quel que soit
+  // l'historique de contrats de l'école. Le paywall passe ici à chaque lecture
+  // d'un élève — c'est le chemin le plus chaud du dépôt.
+  const started = await ctx.db
+    .query("subscriptions")
+    .withIndex("by_owner_startsAt", (q) =>
+      q.eq("ownerType", "school").eq("ownerId", schoolId).lte("startsAt", now),
+    )
+    .order("desc")
+    .first();
+  if (started) return started;
+
+  return await ctx.db
+    .query("subscriptions")
+    .withIndex("by_owner_startsAt", (q) =>
+      q.eq("ownerType", "school").eq("ownerId", schoolId),
+    )
+    .order("desc")
+    .first();
+}
 
 /**
  * Construit l'entrée de decideAccess depuis un profil DÉJÀ lu.
@@ -65,18 +150,13 @@ export async function loadAccessInput(
     };
   }
 
-  // Abonnement le PLUS RÉCENT, sans filtrer sur la couverture temporelle :
-  // c'est decideAccess qui juge l'expiration via endsAt. Filtrer ici ferait
-  // remonter "no_subscription" au lieu de "expired" pour une école échue.
-  const latest = await ctx.db
-    .query("subscriptions")
-    .withIndex("by_owner_startsAt", (q) =>
-      q.eq("ownerType", "school").eq("ownerId", active.schoolId as string),
-    )
-    .order("desc")
-    .first();
+  // Le contrat le plus récemment COMMENCÉ, et non le plus récent : voir
+  // `currentSchoolSubscription`. C'est toujours `decideAccess` qui juge
+  // l'expiration via `endsAt` — cette lecture ne fait que lui présenter le bon
+  // contrat.
+  const current = await currentSchoolSubscription(ctx, active.schoolId, now);
 
-  if (!latest) {
+  if (!current) {
     return {
       ...empty,
       role: "student",
@@ -88,10 +168,10 @@ export async function loadAccessInput(
   // Lecture des tranches seulement dans la branche past_due : le chemin
   // courant reste à trois lectures de documents.
   let oldestOverdueDueAt: number | null = null;
-  if (latest.status === "past_due") {
+  if (current.status === "past_due") {
     const rows = await ctx.db
       .query("installments")
-      .withIndex("by_subscription", (q) => q.eq("subscriptionId", latest._id))
+      .withIndex("by_subscription", (q) => q.eq("subscriptionId", current._id))
       .take(12);
     const dues = rows
       .filter((r) => r.status === "overdue")
@@ -105,8 +185,8 @@ export async function loadAccessInput(
     activeMembership: { schoolId: active.schoolId as string },
     hasReleasedMembership: hasReleased,
     subscription: {
-      status: latest.status as SubscriptionStatus,
-      endsAt: latest.endsAt,
+      status: current.status,
+      endsAt: current.endsAt,
     },
     oldestOverdueDueAt,
   };

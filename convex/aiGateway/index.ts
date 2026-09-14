@@ -9,6 +9,7 @@ import {
   approximateTokenCount,
   estimateCostUsd,
   getPurposeConfig,
+  isRetryableFailure,
   resolveModel,
 } from "./registry";
 import { evaluateBudget } from "./budget";
@@ -291,9 +292,10 @@ export const generate = internalAction({
           try {
             parsed = JSON.parse(text);
           } catch (err) {
-            throw new Error(
-              `Model emitted invalid JSON: ${(err as Error).message}`,
-            );
+            // Relancé en `Error` ordinaire, donc NON réessayable au sens de
+            // `isRetryableFailure` : la réponse est arrivée et elle est payée.
+            const detail = err instanceof Error ? err.message : String(err);
+            throw new Error(`Model emitted invalid JSON: ${detail}`);
           }
         }
 
@@ -321,10 +323,7 @@ export const generate = internalAction({
         };
       } catch (err) {
         lastError = err;
-        const msg = (err as Error)?.message ?? String(err);
-        const retryable =
-          /timeout|ECONNRESET|ETIMEDOUT|fetch failed|5\d{2}/i.test(msg);
-        if (!retryable || attempts >= maxAttempts) break;
+        if (!isRetryableFailure(err) || attempts >= maxAttempts) break;
         await sleep(500);
       }
     }

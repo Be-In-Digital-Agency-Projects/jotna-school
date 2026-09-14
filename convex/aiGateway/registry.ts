@@ -9,6 +9,55 @@
  * Pure module — no Convex imports. Can run in actions or queries.
  */
 
+import {
+  APIConnectionError,
+  APIError,
+  APIUserAbortError,
+} from "openai";
+
+/**
+ * Faut-il réessayer cet échec ?
+ *
+ * Le prédicat précédent cherchait `/timeout|ECONNRESET|ETIMEDOUT|fetch failed|5\d{2}/`
+ * dans le TEXTE du message. `5\d{2}` visait un code HTTP 5xx, mais trois chiffres
+ * commençant par 5 se trouvent n'importe où — notamment dans la position d'octet
+ * d'un `JSON.parse` raté, que la passerelle relance sous la forme
+ * « Model emitted invalid JSON: ... at position 506 ». Vérifié en exécution :
+ * position 506 réessayait, 106 et 706 non. Le sort d'une génération à 6 000
+ * jetons se jouait donc sur l'endroit où la réponse se faisait couper.
+ *
+ * La règle est désormais structurelle, et elle tient en une phrase : ON NE PAIE
+ * JAMAIS DEUX FOIS POUR UNE RÉPONSE DÉJÀ REÇUE.
+ *
+ *   - Coupure réseau ou délai dépassé (`APIConnectionError`, dont
+ *     `APIConnectionTimeoutError`) : rien n'est arrivé, donc rien n'est facturé.
+ *     Réessai.
+ *   - 5xx, et 429 : la requête est rejetée par le serveur sans production de
+ *     jetons. Réessai.
+ *   - Abandon volontaire : non.
+ *   - TOUT LE RESTE, dont le JSON invalide : la réponse est arrivée et elle est
+ *     facturée. Un réessai doublerait un coût connu sans rien garantir — à
+ *     `temperature` non nulle c'est un nouveau tirage, et si la cause est une
+ *     troncature sur `maxOutputTokens` le second tirage tronquera pareil. Le
+ *     bon remède est le prompt ou le plafond de jetons, pas une seconde
+ *     facture. Depuis que la dépense est comptée même en échec, un JSON
+ *     invalide fréquent se voit dans l'agrégat mensuel : c'est là qu'il faut
+ *     le lire, et non le masquer en payant deux fois.
+ *
+ * Décision réversible : si la fiabilité prime un jour sur le coût, c'est ici
+ * qu'on ajoute une branche, explicitement, et non par un motif de texte.
+ */
+export function isRetryableFailure(err: unknown): boolean {
+  if (err instanceof APIUserAbortError) return false;
+  if (err instanceof APIConnectionError) return true;
+  if (err instanceof APIError) {
+    const { status } = err;
+    if (typeof status !== "number") return false;
+    return status === 429 || (status >= 500 && status < 600);
+  }
+  return false;
+}
+
 export type AiPurpose =
   | "palier_base"
   | "palier_personalized"

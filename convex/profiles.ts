@@ -267,13 +267,15 @@ export const linkChildToParent = internalMutation({
  * élève-là. Ne restait comme obstacle que d'ignorer l'identifiant de la cible :
  * de l'opacité, pas une autorisation.
  *
- * La pièce manquante est une preuve de ce droit — code de rattachement remis
- * par l'école, invitation nominative — qui n'existe nulle part dans ce produit.
- * Une vérification de lien préalable serait circulaire : c'est précisément
- * `linkChild` qui crée le lien. Tant que cette preuve n'est pas conçue avec le
- * parcours école, il n'existe pas de contrat public sûr, donc pas d'export
- * public. Les gardes sont conservées : elles restent justes pour un appelant
- * interne et documentent la règle voulue.
+ * La pièce manquante est une preuve de ce droit — et elle existe déjà,
+ * ailleurs : `linkRequests.createRequest` ouvre une demande avec un jeton de
+ * 48 h envoyé par courriel, et `linkRequests.resolveByToken`, interne, écrit le
+ * lien une fois le jeton résolu. C'est ce consentement que `linkChild`
+ * court-circuitait : ni jeton, ni courriel, ni accord. Ajouter ici une
+ * vérification de lien préalable serait par ailleurs circulaire — c'est
+ * précisément cette mutation qui crée le lien. Faute de contrat public sûr, pas
+ * d'export public. Les gardes sont conservées : elles restent justes pour un
+ * appelant interne et documentent la règle voulue.
  *
  * La décision d'autorisation vit dans `convex/linkRules.ts`, pure et testée ;
  * il ne reste ici que l'authentification, les lectures et l'écriture.

@@ -265,7 +265,9 @@ function seatsHeld(currentSeats: number): number {
 }
 
 /**
- * Ce que coûte l'ajout de sièges à un contrat en cours.
+ * Ce que coûte l'ajout de sièges à un contrat déjà signé — en vigueur, ou
+ * pas encore commencé, auquel cas la part vaut 1 et la période se facture
+ * entière.
  *
  * DEUX DEVIS, JAMAIS UNE MULTIPLICATION. Le coût de vingt sièges de plus est
  * la DIFFÉRENCE entre le devis d'après et le devis d'avant, et non vingt fois

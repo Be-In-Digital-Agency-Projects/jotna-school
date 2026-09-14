@@ -612,9 +612,24 @@ async function readSeatState(
  *
  * LES DEUX BRANCHES NE SE RECOUVRENT NI NE LAISSENT DE TROU. La première ne
  * retient `current` que s'il COUVRE `now` (`startsAt <= now < endsAt`) ; la
- * seconde ne lit que `startsAt > now`. Aucun contrat amendable n'est écarté :
- * sous disjointness, un contrat commencé qui n'est pas `current` s'est achevé
- * avant le début de `current`, donc avant `now` — il est échu lui aussi.
+ * seconde ne lit que `startsAt > now`. Aucun contrat COMMENCÉ n'est écarté à
+ * tort : sous disjointness, un contrat commencé qui n'est pas `current` s'est
+ * achevé avant le début de `current`, donc avant `now` — il est échu lui aussi.
+ *
+ * MAIS UN CONTRAT À VENIR AU-DELÀ DU PROCHAIN L'EST, et il faut le dire. Cette
+ * règle n'atteint que deux contrats : celui en vigueur, et le suivant. Une
+ * école dont le contrat de cette année court encore et qui a déjà signé celui
+ * de l'an prochain ne peut donc pas agrandir celui de l'an prochain. La limite
+ * est TEMPORAIRE — le contrat lointain devient la cible dès que le plus proche
+ * s'achève — et elle ne ment jamais : le formulaire affiche les dates et les
+ * chiffres du contrat qu'il vise réellement. La lever demanderait de désigner
+ * le contrat par son identifiant, ce que le design refuse (aucun écran n'a à
+ * désigner un contrat) : c'est une décision de produit, pas un oubli.
+ *
+ * À SAVOIR AUSSI : quand l'école n'a AUCUN contrat commencé, `current` est le
+ * repli de `currentSchoolSubscription`, donc le contrat de plus GRAND
+ * `startsAt`. La cible, elle, est le plus PROCHE. Les deux peuvent différer,
+ * et c'est voulu — c'est le plus proche qui décidera en premier.
  *
  * NE REND JAMAIS UN CONTRAT ÉCHU : la première branche exige `now < endsAt`,
  * la seconde `now < startsAt < endsAt`. C'est ce qui garde la borne BASSE de
@@ -1095,7 +1110,8 @@ export const createSchool = mutation({
  * et rien n'en déplace les dates ni n'en réduit les sièges. Ce qui manquait
  * aussi — une école qui voulait plus de sièges en février ne pouvait pas en
  * obtenir avant la fin du contrat courant — ne manque plus : `amendSeats`, en
- * dessous, agrandit le contrat en vigueur au prorata de la période restante,
+ * dessous, agrandit un contrat DÉJÀ SIGNÉ — celui en vigueur au prorata de la
+ * période restante, ou à défaut le prochain à commencer, au plein tarif —
  * sans créer le second contrat que le refus de chevauchement interdit ici. Ce
  * qui reste hors de portée l'est pour la raison d'origine : réduire, résilier
  * ou redater, c'est décider ce qu'il advient du montant déjà facturé, et cette
@@ -1183,9 +1199,13 @@ export const recordSubscription = mutation({
           `celui-ci débute le ${formatDay(args.startsAt)}. Marqué actif dès ` +
           "aujourd'hui, il ouvrirait l'accès pour une année qui n'a pas " +
           "commencé — le paywall ne juge que la date de FIN. Enregistrez-le " +
-          "en brouillon ou en attente de paiement ; il faudra l'enregistrer " +
-          "actif le jour de son entrée en vigueur, rien ici ne change un " +
-          "statut tout seul.",
+          "en brouillon ou en attente de paiement — MAIS SACHEZ QUE RIEN NE " +
+          "SAIT ENCORE L'ACTIVER ENSUITE : aucune mutation ne modifie le " +
+          "statut d'un contrat, et le réenregistrer actif serait refusé pour " +
+          "chevauchement avec celui-ci. Tant que la facturation n'existe pas, " +
+          "un contrat n'ouvre l'accès que s'il est enregistré ACTIF une fois " +
+          "commencé. Enregistrez-le à sa date de début, ou acceptez qu'il " +
+          "reste une réservation sans accès.",
       );
     }
 

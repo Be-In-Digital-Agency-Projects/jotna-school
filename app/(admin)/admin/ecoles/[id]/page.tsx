@@ -598,9 +598,13 @@ function SubscriptionSection({
             L&apos;enregistrement sera REFUSÉ : un contrat ne se déclare pas
             actif avant d&apos;avoir commencé. Le paywall ne juge que la date de
             fin — marqué actif dès aujourd&apos;hui, ce contrat ouvrirait
-            l&apos;accès pour une année qui n&apos;a pas commencé. Enregistrez-le
-            en brouillon ou en attente de paiement, puis à nouveau en actif le
-            jour de son entrée en vigueur.
+            l&apos;accès pour une année qui n&apos;a pas commencé. Vous pouvez
+            l&apos;enregistrer en brouillon ou en attente de paiement — mais
+            rien ne sait encore l&apos;activer ensuite : aucune mutation ne
+            modifie le statut d&apos;un contrat, et le réenregistrer actif
+            serait refusé pour chevauchement. Tant que la facturation
+            n&apos;existe pas, un contrat n&apos;ouvre l&apos;accès que s&apos;il
+            est enregistré ACTIF une fois commencé.
           </span>
         </div>
       )}
@@ -863,13 +867,17 @@ function SeatAmendmentForm({
           <span>
             Ce contrat n&apos;a pas encore commencé : il court du{" "}
             {formatDay(contract.startsAt)} au {formatDay(contract.endsAt)}, et
-            c&apos;est LUI que l&apos;avenant agrandira. Les sièges ajoutés
-            n&apos;ouvriront qu&apos;au {formatDay(contract.startsAt)} — le
-            plafond d&apos;inscription lit le contrat qui décide de
-            l&apos;accès aujourd&apos;hui, donc le précédent tant que celui-ci
-            n&apos;a pas démarré. Aucune place ne se libère dès maintenant. La
-            période étant tout entière devant, ces sièges se facturent au PLEIN
-            tarif, sans prorata.
+            c&apos;est LUI que l&apos;avenant agrandira. Aucune place ne se
+            libère dès maintenant : le plafond d&apos;inscription lit le contrat
+            qui décide de l&apos;accès aujourd&apos;hui, donc le précédent tant
+            que celui-ci n&apos;a pas démarré. La période étant tout entière
+            devant, ces sièges se facturent au PLEIN tarif, sans prorata.
+            <strong className="mt-1 block">
+              Et ils n&apos;ouvriront pas d&apos;eux-mêmes le{" "}
+              {formatDay(contract.startsAt)} : rien ne sait encore faire passer
+              un contrat en actif. Ce contrat restera une réservation sans accès
+              tant que la facturation n&apos;existe pas.
+            </strong>
           </span>
         </div>
       )}

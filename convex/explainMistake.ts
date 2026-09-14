@@ -192,6 +192,19 @@ export const explainExercise = action({
       };
     }
 
+    // Paywall (spec §5.4) — contrôle le droit du studentId dérivé ci-dessus,
+    // AVANT toute lecture de cache et tout appel au gateway IA. Le but est
+    // d'éviter la dépense en amont, pas de la rattraper après coup : le
+    // verrou posé dans aiGateway.generate (tâche 4) reste le dernier
+    // recours. Une action n'a pas de ctx.db, d'où le passage par la requête
+    // interne de la tâche 3.
+    const access = await ctx.runQuery(internal.access.getAccessStateForProfile, {
+      profileId: studentId,
+    });
+    if (!access.ok) {
+      throw new Error(`ACCESS_DENIED:${access.reason}`);
+    }
+
     // Cache check.
     const cached: Doc<"exerciseExplanations"> | null = await ctx.runQuery(
       internal.explainMistake.getCached,

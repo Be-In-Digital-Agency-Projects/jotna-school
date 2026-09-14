@@ -24,6 +24,29 @@ export const generateExplanation = action({
       throw new Error("Non authentifié");
     }
 
+    // Paywall (spec §5.4) — contrôle le droit de L'APPELANT, pas celui de
+    // args.studentId : un utilisateur authentifié pourrait sinon passer
+    // l'identifiant d'un autre élève couvert et se servir de son abonnement.
+    // Avant toute lecture de contexte et tout appel IA (cette action appelle
+    // OpenAI directement, sans passer par aiGateway.generate — il n'y a donc
+    // pas de verrou de tâche 4 en aval ici). Même motif que
+    // paliers.index.getBucket : résoudre le profil de l'appelant via la
+    // requête interne existante, puis interroger getAccessStateForProfile
+    // (tâche 3). Une action n'a pas de ctx.db.
+    const callerProfile = await ctx.runQuery(
+      internal.paliers.index.getProfileByUserId,
+      { userId: userId as string },
+    );
+    if (!callerProfile) {
+      throw new Error("Profil introuvable");
+    }
+    const access = await ctx.runQuery(internal.access.getAccessStateForProfile, {
+      profileId: callerProfile._id,
+    });
+    if (!access.ok) {
+      throw new Error(`ACCESS_DENIED:${access.reason}`);
+    }
+
     type AttemptsData = {
       exercise: {
         prompt: string;

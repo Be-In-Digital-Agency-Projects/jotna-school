@@ -72,6 +72,37 @@ export const generate = internalAction({
       return { ok: false, traceId, reason: "SETTINGS_MISSING" };
     }
 
+    // 1bis) Droit d'accès — verrou sur la dépense.
+    //
+    // generate est le seul chemin par lequel de l'argent se dépense. Le
+    // contrôle est ici pour qu'une fonction future qui oublierait son propre
+    // contrôle d'entrée ne puisse pas facturer une école qui n'a pas payé.
+    //
+    // Sans userId, l'appel est système ou administrateur : aucun élève à
+    // vérifier, on laisse passer.
+    if (args.userId) {
+      const access = await ctx.runQuery(
+        internal.access.getAccessStateForProfile,
+        { profileId: args.userId },
+      );
+      if (!access.ok) {
+        await ctx.runMutation(internal.aiGateway.db.recordUsage, {
+          userId: args.userId,
+          purpose,
+          modelUsed: cfg.defaultModel,
+          inputTokens: 0,
+          outputTokens: 0,
+          costUsd: 0,
+          latencyMs: 0,
+          status: "rejected_access",
+          traceId,
+          month,
+          errorMessage: `access:${access.reason}`,
+        });
+        return { ok: false, traceId, reason: "NO_ACCESS" };
+      }
+    }
+
     // 2) Daily quota (kid_initiated only — system_regen is unbounded here).
     if (args.userId && (scope === "kid_initiated" || scope === "system_regen")) {
       const currentCount: number = await ctx.runQuery(

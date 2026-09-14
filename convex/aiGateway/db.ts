@@ -143,6 +143,7 @@ export const recordUsage = internalMutation({
       v.literal("failed"),
       v.literal("rejected_budget"),
       v.literal("rejected_quota"),
+      v.literal("rejected_access"),
     ),
     traceId: v.string(),
     metadata: v.optional(v.any()),

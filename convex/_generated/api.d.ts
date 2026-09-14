@@ -9,6 +9,8 @@
  */
 
 import type * as ResendOTPPasswordReset from "../ResendOTPPasswordReset.js";
+import type * as access from "../access.js";
+import type * as accessRules from "../accessRules.js";
 import type * as aiGateway_budget from "../aiGateway/budget.js";
 import type * as aiGateway_db from "../aiGateway/db.js";
 import type * as aiGateway_factCheck from "../aiGateway/factCheck.js";
@@ -54,6 +56,8 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   ResendOTPPasswordReset: typeof ResendOTPPasswordReset;
+  access: typeof access;
+  accessRules: typeof accessRules;
   "aiGateway/budget": typeof aiGateway_budget;
   "aiGateway/db": typeof aiGateway_db;
   "aiGateway/factCheck": typeof aiGateway_factCheck;

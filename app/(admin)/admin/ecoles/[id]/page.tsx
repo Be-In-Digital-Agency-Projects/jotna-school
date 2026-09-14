@@ -43,6 +43,12 @@ type EnrollmentOutlook = FunctionReturnType<
 >;
 type OutlookReason = NonNullable<NonNullable<EnrollmentOutlook>["reason"]>;
 
+/**
+ * L'état des sièges du contrat — `null` quand l'école n'a aucun abonnement,
+ * donc aucun plafond. La forme vient du serveur : rien n'est recopié ici.
+ */
+type SeatState = NonNullable<NonNullable<EnrollmentOutlook>["seats"]>;
+
 type ClassLevel = Doc<"schoolClasses">["class"];
 type StaffRole = Doc<"schoolStaff">["staffRole"];
 
@@ -100,6 +106,141 @@ function PartialListNotice({ subject }: { subject: string }) {
   );
 }
 
+/** « 1 siège », « 40 sièges » — l'écran compte comme le serveur. */
+function plural(n: number, singular: string, many: string): string {
+  return `${n} ${n === 1 ? singular : many}`;
+}
+
+/**
+ * Les sièges occupés, dits sans mentir.
+ *
+ * `atLeast` signale que le décompte du serveur a buté sur sa borne : il y a AU
+ * MOINS ce nombre d'inscriptions actives, et afficher le chiffre nu serait
+ * faux. C'est l'état d'une école dont le contrat est passé sous son effectif
+ * déjà inscrit — le total exact n'est alors pas lu, et un chiffre inventé
+ * vaudrait moins qu'un minimum vrai.
+ */
+function seatsUsedLabel(seats: SeatState): string {
+  const counted = plural(seats.used, "siège occupé", "sièges occupés");
+  return seats.atLeast ? `au moins ${counted}` : counted;
+}
+
+function seatsContractLabel(seats: SeatState): string {
+  return plural(seats.purchased, "siège au contrat", "sièges au contrat");
+}
+
+/**
+ * L'occupation des sièges, AVANT que l'administrateur remplisse quoi que ce
+ * soit.
+ *
+ * Le plafond se refuse à l'inscription (`enrollStudent`), mais un refus qui
+ * n'arrive qu'après coup fait travailler pour rien : l'administrateur choisit
+ * un élève, prévient peut-être sa famille, puis se fait dire non. L'état du
+ * contrat se lit donc en haut de l'école, à côté de son identité, avant le
+ * personnel et les classes.
+ *
+ * Rien tant que le verdict est inconnu, rien non plus sans abonnement : une
+ * école sans contrat n'a pas de sièges à occuper, et c'est
+ * `EnrollmentOutlookNotice` qui dit déjà ce que l'absence d'abonnement coûte à
+ * l'élève.
+ */
+function SeatUsageNotice({
+  outlook,
+}: {
+  outlook: EnrollmentOutlook | undefined;
+}) {
+  if (outlook === undefined || outlook === null) return null;
+
+  const seats = outlook.seats;
+  if (seats === null) return null;
+
+  // Au-delà du contrat : le cas d'une école dont les sièges ont été réduits
+  // sous son effectif. Il se distingue du simple « complet » parce qu'il ne se
+  // règle pas en libérant UN siège, et parce qu'il faut dire tout de suite que
+  // les enfants déjà inscrits, eux, ne perdent rien.
+  if (seats.used > seats.purchased) {
+    return (
+      <div className="mb-6 flex gap-3 rounded-xl border border-red-200 bg-red-50 p-4 shadow-sm">
+        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-red-600" />
+        <div className="text-sm text-red-800">
+          <p className="font-semibold">
+            Contrat dépassé : {seatsUsedLabel(seats)} pour{" "}
+            {seatsContractLabel(seats)}.
+          </p>
+          <p className="mt-1">
+            Les élèves déjà inscrits gardent leur accès — aucun enfant ne perd
+            l&apos;application parce qu&apos;un autre a été inscrit. En
+            revanche, aucune inscription nouvelle ne sera acceptée : libérez des
+            sièges, ou augmentez le nombre de sièges de l&apos;abonnement.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (seats.full) {
+    return (
+      <div className="mb-6 flex gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 shadow-sm">
+        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
+        <div className="text-sm text-amber-800">
+          <p className="font-semibold">
+            École au complet : {seatsUsedLabel(seats)} pour{" "}
+            {seatsContractLabel(seats)}.
+          </p>
+          <p className="mt-1">
+            Aucune inscription nouvelle ne sera acceptée. Libérez le siège
+            d&apos;un élève déjà inscrit, ou augmentez le nombre de sièges de
+            l&apos;abonnement.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // Le solde n'est exact que si le décompte l'est : « au plus » sinon, pour la
+  // même raison que `seatsUsedLabel`.
+  const free = plural(
+    seats.purchased - seats.used,
+    "siège encore libre",
+    "sièges encore libres",
+  );
+
+  return (
+    <div className="mb-6 flex items-center gap-3 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+      <Users className="h-5 w-5 shrink-0 text-gray-400" />
+      <p className="text-sm text-gray-600">
+        <span className="font-medium text-gray-900">
+          {seatsUsedLabel(seats)}
+        </span>{" "}
+        pour {seatsContractLabel(seats)} — {seats.atLeast ? "au plus " : ""}
+        {free}.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Le refus à venir, là où l'inscription se décide.
+ *
+ * L'encart du haut donne les chiffres pour toute l'école ; celui-ci se tient
+ * contre le formulaire, parce qu'une école peut avoir dix classes et que
+ * l'administrateur qui en a déroulé la page ne voit plus le haut. Il dit ce
+ * que le serveur répondra, dans les mêmes termes que son message de refus.
+ */
+function SeatsFullNotice({ seats }: { seats: SeatState }) {
+  return (
+    <div className="mb-3 flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+      <span>
+        L&apos;inscription sera REFUSÉE : cette école a atteint son plafond de
+        sièges, {seatsUsedLabel(seats)} pour {seatsContractLabel(seats)}.
+        Libérez le siège d&apos;un élève déjà inscrit, ou augmentez le nombre de
+        sièges de l&apos;abonnement.
+      </span>
+    </div>
+  );
+}
+
 /**
  * Ce que l'inscription ouvre — ou n'ouvre pas — dans cette école.
  *
@@ -113,12 +254,22 @@ function PartialListNotice({ subject }: { subject: string }) {
  */
 function EnrollmentOutlookNotice({
   outlook,
+  seatsFull,
 }: {
   outlook: EnrollmentOutlook | undefined;
+  seatsFull: boolean;
 }) {
   if (outlook === undefined || outlook === null) return null;
 
   if (outlook.opensAccess) {
+    // Une école pleine n'inscrira personne : promettre l'accès qui suivrait
+    // l'inscription serait promettre ce qui n'aura pas lieu, l'écart même que
+    // cet encart existe pour fermer. `SeatsFullNotice`, au-dessus du
+    // formulaire, dit alors ce qui se passera vraiment. Le REFUS, lui, reste
+    // affiché dans les deux cas : un abonnement impayé et un plafond atteint
+    // sont deux problèmes distincts, et l'administrateur doit les connaître
+    // tous les deux.
+    if (seatsFull) return null;
     return (
       <p className="mt-2 text-xs text-emerald-700">
         L&apos;abonnement de cette école couvre l&apos;élève : son accès à
@@ -217,6 +368,8 @@ function SchoolDetail({ school }: { school: Doc<"schools"> }) {
           </p>
         </div>
       </div>
+
+      <SeatUsageNotice outlook={outlook} />
 
       <StaffSection
         schoolId={school._id}
@@ -594,6 +747,12 @@ function ClassCard({
   const [releaseConfirm, setReleaseConfirm] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Le plafond porte sur l'ÉCOLE, pas sur la classe : une classe à deux élèves
+  // dans une école pleine n'inscrit plus personne. `seats` à null vaut « aucun
+  // abonnement, donc aucun plafond » — le cas courant.
+  const seats = outlook?.seats ?? null;
+  const seatsFull = seats !== null && seats.full;
+
   // Le menu du professeur est piloté par la donnée serveur, sans état local :
   // pas de copie à resynchroniser après l'écriture.
   //
@@ -706,6 +865,7 @@ function ClassCard({
       )}
 
       <div className="mt-5 border-t border-gray-100 pt-4">
+        {seats !== null && seatsFull && <SeatsFullNotice seats={seats} />}
         <form onSubmit={handleEnroll} className="flex flex-wrap items-end gap-3">
           <div className="min-w-56 flex-1">
             <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -728,7 +888,7 @@ function ClassCard({
           </div>
           <button
             type="submit"
-            disabled={isEnrolling || studentId === ""}
+            disabled={isEnrolling || studentId === "" || seatsFull}
             className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50 transition-colors"
           >
             {isEnrolling ? (
@@ -745,7 +905,7 @@ function ClassCard({
           {schoolClass.class}. Un élève ne peut être inscrit que dans une seule
           classe à la fois.
         </p>
-        <EnrollmentOutlookNotice outlook={outlook} />
+        <EnrollmentOutlookNotice outlook={outlook} seatsFull={seatsFull} />
       </div>
 
       <div className="mt-5 border-t border-gray-100 pt-4">

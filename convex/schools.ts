@@ -1,5 +1,10 @@
 import { v } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import {
+  mutation,
+  query,
+  type MutationCtx,
+  type QueryCtx,
+} from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { callerIsAdmin } from "./access";
 import { decideAccess, type AccessReason } from "./accessRules";
@@ -90,6 +95,25 @@ const CANDIDATES_LIMIT = 100;
  * (`convex/schema.ts`), douze couvre largement.
  */
 const OVERDUE_INSTALLMENTS_LIMIT = 12;
+
+/**
+ * Inscriptions actives lues au plus pour juger du plafond de sièges.
+ *
+ * Le décompte est borné par le CONTRAT et non par la taille de l'école (voir
+ * `readSeatState`) ; cette constante n'est que le garde-fou du contrat
+ * invraisemblable — `.take()` exige un entier non négatif, et une transaction
+ * Convex a un plafond de documents lus. Sa valeur est l'effectif maximal que
+ * le reste du module sait déjà énumérer pour une école,
+ * `CLASSES_LIMIT × CLASS_STUDENTS_LIMIT` : au-delà, aucun écran de ce dépôt ne
+ * saurait de toute façon montrer les élèves concernés.
+ *
+ * Conséquence assumée : une école dont le contrat dépasse cette borne ET qui
+ * compte autant d'inscriptions actives cesserait d'être plafonnée. Aucune
+ * écriture du dépôt ne crée aujourd'hui de `subscriptions`, et une école
+ * primaire n'atteint pas cet effectif ; le jour où la facturation en créera,
+ * c'est ici qu'il faudra revenir.
+ */
+const SEAT_SCAN_LIMIT = CLASSES_LIMIT * CLASS_STUDENTS_LIMIT;
 
 /**
  * Niveaux, dans l'ordre scolaire — recopié de `classEnum`
@@ -406,10 +430,132 @@ export const listEnrollableStudents = query({
   },
 });
 
-/** Ce que `getEnrollmentOutlook` rend — `reason` absente quand l'accès s'ouvre. */
+/**
+ * L'état des sièges d'une école au regard de son contrat.
+ *
+ * `used` est BORNÉ : quand `atLeast` est vrai, il se lit « au moins `used` »
+ * et jamais comme un total. Qui l'affiche doit dire « au moins », sous peine
+ * de montrer un chiffre faux — c'est précisément le cas d'une école dont le
+ * contrat a été réduit sous son effectif déjà inscrit.
+ */
+type SeatState = {
+  /** Sièges ouverts par le contrat courant. */
+  purchased: number;
+  /** Inscriptions actives comptées — voir `atLeast`. */
+  used: number;
+  /** Le décompte a buté sur sa borne : il y en a AU MOINS `used`. */
+  atLeast: boolean;
+  /** `used` atteint `purchased` : la prochaine inscription est refusée. */
+  full: boolean;
+};
+
+/**
+ * L'abonnement que le paywall considère COURANT pour cette école.
+ *
+ * Exactement la lecture d'`access.loadAccessInput`
+ * (`convex/access.ts:71-77`) : le plus récent par `by_owner_startsAt`, sans
+ * filtrer sur la couverture temporelle — c'est `decideAccess` qui juge
+ * l'expiration par `endsAt`. Filtrer ici rendrait « aucun abonnement » là où
+ * la vérité est « abonnement échu ».
+ *
+ * Une seule fonction pour ses trois lecteurs — le verdict d'accès, le
+ * décompte de sièges, le refus d'`enrollStudent` — et c'est tout l'intérêt :
+ * si l'inscription plafonnait sur un autre contrat que celui que le paywall
+ * tient pour courant, le plafond surveillerait le mauvais contrat. Une école
+ * se verrait refuser des inscriptions au nom d'un contrat périmé, ou en
+ * obtenir au nom d'un contrat que personne n'honore.
+ */
+async function latestSchoolSubscription(
+  ctx: QueryCtx | MutationCtx,
+  schoolId: Id<"schools">,
+): Promise<Doc<"subscriptions"> | null> {
+  return await ctx.db
+    .query("subscriptions")
+    .withIndex("by_owner_startsAt", (q) =>
+      q.eq("ownerType", "school").eq("ownerId", schoolId),
+    )
+    .order("desc")
+    .first();
+}
+
+/**
+ * Les sièges qu'ouvre un contrat, ramenés à un entier exploitable.
+ *
+ * `subscriptions.seatsPurchased` est un `v.number()` — un flottant, que rien
+ * ne valide et qu'aucune écriture du dépôt ne produit à ce jour. Une valeur
+ * absurde (négative, fractionnaire, NaN) ne doit ni faire lever une requête
+ * (`.take()` exige un entier non négatif) ni ouvrir le plafond en silence :
+ * elle vaut zéro siège, et l'école n'inscrit personne sous ce contrat-là.
+ */
+function contractSeats(seatsPurchased: number): number {
+  if (!Number.isFinite(seatsPurchased) || seatsPurchased <= 0) return 0;
+  return Math.floor(seatsPurchased);
+}
+
+/**
+ * L'état des sièges d'une école, compté À L'APPEL.
+ *
+ * `schoolSeatUsage` existe au schéma et pas une ligne du dépôt ne la lit ni ne
+ * l'écrit : ce décompte NE LA MAINTIENT PAS, délibérément. La décision D7 de
+ * la spec pose que les droits se dérivent à l'appel et ne se matérialisent
+ * jamais, et un compteur dérive dès qu'une écriture échoue à mi-chemin — une
+ * inscription insérée sans son incrément, et l'école porte un siège fantôme
+ * jusqu'à ce que quelqu'un s'en aperçoive. Un décompte par index est juste par
+ * construction, et `by_school_status` existe exactement pour ça. Que personne
+ * n'aille « réparer » cette table plus tard : elle n'a pas de lecteur parce
+ * qu'elle n'a pas lieu d'être.
+ *
+ * Le décompte est borné par le CONTRAT, jamais par la taille de l'école :
+ * `purchased + 1` lignes suffisent. `purchased` lignes répondraient déjà à la
+ * seule question du plafond (`used >= purchased`) ; la ligne de plus est celle
+ * qui distingue « exactement plein » de « au-delà du contrat », le cas où
+ * l'écran doit dire « au moins » plutôt qu'un chiffre. Une école à 40 sièges
+ * lit donc 41 documents, qu'elle compte 40 élèves ou 4000.
+ *
+ * Rend `null` quand l'école n'a AUCUN abonnement : aucun contrat, aucun
+ * plafond. C'est le cas courant — rien dans le dépôt ne crée d'abonnement — et
+ * une école peut légitimement inscrire avant de payer ; l'élève n'aura
+ * simplement pas d'accès, ce que `getEnrollmentOutlook` annonce déjà.
+ */
+async function readSeatState(
+  ctx: QueryCtx | MutationCtx,
+  schoolId: Id<"schools">,
+  subscription: Doc<"subscriptions"> | null,
+): Promise<SeatState | null> {
+  if (!subscription) return null;
+
+  const purchased = contractSeats(subscription.seatsPurchased);
+  const bound = Math.min(purchased + 1, SEAT_SCAN_LIMIT);
+
+  const active = await ctx.db
+    .query("schoolMemberships")
+    .withIndex("by_school_status", (q) =>
+      q.eq("schoolId", schoolId).eq("status", "active"),
+    )
+    .take(bound);
+
+  return {
+    purchased,
+    used: active.length,
+    atLeast: active.length === bound,
+    full: active.length >= purchased,
+  };
+}
+
+/** Accord du pluriel : les refus de ce module sont lus par un adulte. */
+function pluralCount(n: number, singular: string, plural: string): string {
+  return `${n} ${n === 1 ? singular : plural}`;
+}
+
+/**
+ * Ce que `getEnrollmentOutlook` rend — `reason` absente quand l'accès
+ * s'ouvre, `seats` absente quand l'école n'a aucun abonnement, donc aucun
+ * plafond.
+ */
 type EnrollmentOutlook = {
   opensAccess: boolean;
   reason: AccessReason | null;
+  seats: SeatState | null;
 };
 
 /**
@@ -430,10 +576,21 @@ type EnrollmentOutlook = {
  * `no_school`, `seat_released`) sont hors d'atteinte par construction — le
  * verdict ne peut porter que sur l'abonnement.
  *
+ * Rend AUSSI l'état des sièges du contrat (`seats`), pour que l'écran montre
+ * l'occupation AVANT que l'administrateur remplisse le formulaire, et non
+ * seulement en message d'erreur après coup. Le plafond se refuse dans
+ * `enrollStudent` ; ici il s'annonce. Les deux lisent le même abonnement et
+ * font le même décompte, donc l'écran ne peut pas montrer un siège libre là
+ * où l'inscription sera refusée.
+ *
+ * `seats` à `null` veut dire « aucun abonnement, donc aucun plafond », et non
+ * « zéro siège » : un contrat qui n'existe pas ne plafonne rien.
+ *
  * Lectures : le chemin de `access.loadAccessInput`, à l'identique —
  * l'abonnement le plus récent par `by_owner_startsAt`, les tranches seulement
- * en `past_due`. Une lecture de plus par école affichée, jamais par classe :
- * l'écran hisse la requête au niveau de l'école.
+ * en `past_due` — plus le décompte des sièges, borné par le contrat. Une
+ * lecture de plus par école affichée, jamais par classe : l'écran hisse la
+ * requête au niveau de l'école.
  *
  * Ne lève pas : `null` pour tout appelant non-`admin` comme pour une école
  * introuvable, et l'écran n'affiche alors rien plutôt qu'une promesse.
@@ -446,16 +603,7 @@ export const getEnrollmentOutlook = query({
     const school = await ctx.db.get(args.schoolId);
     if (!school) return null;
 
-    // Le plus récent, sans filtrer sur la couverture temporelle : c'est
-    // `decideAccess` qui juge l'expiration par `endsAt`. Filtrer ici rendrait
-    // « aucun abonnement » là où la vérité est « abonnement échu ».
-    const latest = await ctx.db
-      .query("subscriptions")
-      .withIndex("by_owner_startsAt", (q) =>
-        q.eq("ownerType", "school").eq("ownerId", args.schoolId),
-      )
-      .order("desc")
-      .first();
+    const latest = await latestSchoolSubscription(ctx, args.schoolId);
 
     let oldestOverdueDueAt: number | null = null;
     if (latest && latest.status === "past_due") {
@@ -483,6 +631,7 @@ export const getEnrollmentOutlook = query({
     return {
       opensAccess: verdict.ok,
       reason: verdict.ok ? null : verdict.reason,
+      seats: await readSeatState(ctx, args.schoolId, latest),
     };
   },
 });
@@ -744,7 +893,7 @@ export const assignTeacher = mutation({
 /**
  * Inscrit un élève dans une classe — acte qui OUVRE son accès.
  *
- * Trois invariants tiennent dans cette mutation :
+ * Quatre invariants tiennent dans cette mutation :
  *
  * - UNE SEULE inscription active par élève. `access.loadAccessInput` résout le
  *   droit par `by_student_status` puis `.first()` : deux lignes actives
@@ -754,6 +903,8 @@ export const assignTeacher = mutation({
  *   inscription dont l'école ne serait pas celle de sa classe placerait
  *   l'élève sous le mauvais abonnement.
  * - Le niveau du profil s'aligne sur celui de la classe — voir plus bas.
+ * - Le PLAFOND DE SIÈGES de l'école se refuse ici, et nulle part ailleurs —
+ *   voir le commentaire du refus, plus bas.
  *
  * Sur l'alignement du niveau : `profiles.class` n'est aujourd'hui lu par AUCUNE
  * fonction du dépôt (le niveau d'une session de palier vient de `topic.class`,
@@ -788,6 +939,37 @@ export const enrollStudent = mutation({
     if (active) {
       throw new Error(
         "Cet élève a déjà une inscription active : libérez-la d'abord",
+      );
+    }
+
+    // Le plafond de sièges est un contrôle d'ADMISSION, pas un contrôle
+    // d'accès : il se refuse ICI, devant l'adulte qui inscrit, et jamais dans
+    // `decideAccess`. Refuser l'application à un élève « au-delà du quota »
+    // supposerait de classer les inscriptions dans un ordre arbitraire : un
+    // enfant perdrait son accès parce qu'un AUTRE a été inscrit, sans rien
+    // avoir fait, et avec un message qu'on ne saurait pas lui expliquer.
+    //
+    // L'abonnement lu est celui du paywall — `latestSchoolSubscription`, la
+    // lecture d'`access.ts` : un plafond assis sur un autre contrat
+    // surveillerait le mauvais. Aucun abonnement ⇒ aucun plafond : l'école
+    // peut légitimement inscrire avant de payer, l'élève tombera simplement
+    // sur le paywall, ce que l'écran annonce déjà.
+    const subscription = await latestSchoolSubscription(
+      ctx,
+      schoolClass.schoolId,
+    );
+    const seats = await readSeatState(ctx, schoolClass.schoolId, subscription);
+    if (seats && seats.full) {
+      // « au moins » quand le décompte a buté sur sa borne : l'école dépasse
+      // alors son contrat et le total exact n'a pas été lu. Mieux vaut un
+      // minimum vrai qu'un chiffre faux dans un message qui demande un acte.
+      const counted = pluralCount(seats.used, "siège occupé", "sièges occupés");
+      const occupied = seats.atLeast ? `au moins ${counted}` : counted;
+      throw new Error(
+        `Cette école a atteint son plafond de sièges : ${occupied} pour ` +
+          `${pluralCount(seats.purchased, "siège", "sièges")} au contrat. ` +
+          `Libérez le siège d'un élève déjà inscrit, ou augmentez le nombre ` +
+          `de sièges de l'abonnement, avant d'inscrire celui-ci.`,
       );
     }
 

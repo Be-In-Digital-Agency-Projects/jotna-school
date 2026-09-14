@@ -7,15 +7,38 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { callerMayReadStudent } from "./access";
 
 // ---------------------------------------------------------------------------
 // Public Queries
 // ---------------------------------------------------------------------------
 
-/** List all topic reports for a given student, joined with topic & subject names. */
+/**
+ * Bilans d'un élève, joints aux noms de thématique et de matière.
+ *
+ * Garde de LIEN — elle n'en avait AUCUN : ni authentification, ni rôle, ni
+ * rapport avec l'élève. Elle rendait les bilans rédigés sur un enfant (score,
+ * forces, faiblesses, erreurs fréquentes) à quiconque détenait son
+ * identifiant, sans même de compte.
+ *
+ * `callerMayReadStudent` accepte le lien `studentGuardians` quelle que soit sa
+ * relation, et c'est ce dont dépendent les quatre écrans parents appelants
+ * (`app/(parent)/parent/dashboard`, `/children`, `/children/[id]/progress`,
+ * `/children/[id]/reports/[topicId]`) : `profiles.getChildren` leur donne des
+ * enfants liés en "parent" ou "tuteur", jamais en "professeur".
+ *
+ * Les deux écrans professeur appelants (`app/(teacher)/teacher/students/[id]`
+ * et `/teacher/reports/[studentId]/[topicId]`) passent par le même lien. La
+ * vérification côté client de la page de détail reste en place : elle
+ * redirige proprement, elle ne protège rien — le verrou est ici.
+ *
+ * Une requête ne lève jamais : [] pour tout autre appelant.
+ */
 export const listByStudent = query({
   args: { studentId: v.id("profiles") },
   handler: async (ctx, args) => {
+    if (!(await callerMayReadStudent(ctx, args.studentId))) return [];
+
     const reports = await ctx.db
       .query("topicReports")
       .withIndex("by_studentId_topicId", (q) =>

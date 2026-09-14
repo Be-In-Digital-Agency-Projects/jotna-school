@@ -6,7 +6,7 @@ import {
   type QueryCtx,
   type MutationCtx,
 } from "./_generated/server";
-import type { Doc } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import {
   decideAccess,
   type AccessInput,
@@ -208,6 +208,63 @@ export async function callerIsStaff(ctx: QueryCtx): Promise<boolean> {
  */
 export async function callerIsAdmin(ctx: QueryCtx): Promise<boolean> {
   return (await callerRole(ctx)) === "admin";
+}
+
+/**
+ * Vrai si l'appelant a le droit de lire les données de CET élève-là.
+ *
+ * Garde de LIEN, et non de rôle. Les trois gardes ci-dessus répondent « quelle
+ * sorte de personne appelle ? » ; celle-ci répond « quel rapport cette
+ * personne a-t-elle avec cet élève ? ». C'est la seule question qui vaille
+ * pour une fonction qui reçoit un `studentId` en argument : un garde de rôle y
+ * laisse tout le personnel lire le dossier de n'importe quel élève, et
+ * l'absence de garde y laisse le faire à qui détient l'identifiant, sans même
+ * de compte.
+ *
+ * Trois façons d'y avoir droit, pas une de plus :
+ *   - être `admin` — l'écran `app/(admin)/admin/eleves/[id]` voit tout,
+ *     comme avant ;
+ *   - être cet élève soi-même ;
+ *   - porter une ligne `studentGuardians` vers lui.
+ *
+ * AUCUNE relation particulière n'est exigée, et c'est délibéré. Filtrer sur
+ * "professeur", comme le font `profiles.getTeacherStudents` et
+ * `reports.listByTeacher` qui ÉNUMÈRENT les élèves d'un enseignant, casserait
+ * les quatre écrans parents de `reports.listByStudent` : un parent porte la
+ * relation "parent", un tuteur légal "tuteur". La question n'est pas à quel
+ * titre le lien existe, seulement s'il existe.
+ *
+ * Lecture par `by_studentId` et non `by_guardianId` : un élève a quelques
+ * tuteurs, un enseignant peut avoir des centaines d'élèves. Le dépôt lit
+ * ailleurs par `by_guardianId` avec `.take(200)` — la bonne forme pour
+ * énumérer, la mauvaise pour vérifier UN lien. Borné à 50 comme
+ * `reports.getGuardians`, qui lit la même arête dans le même sens.
+ *
+ * Un appelant non authentifié, ou authentifié sans profil, est refusé :
+ * `currentProfile` rend null et la fonction s'arrête là.
+ *
+ * Cette règle n'est pas nouvelle — elle existait côté CLIENT seulement, dans
+ * `app/(teacher)/teacher/students/[id]/page.tsx`, qui compare le `studentId`
+ * à `getTeacherStudents` et redirige sinon. Cette vérification-là reste en
+ * place et ne fait pas doublon avec celle-ci : elle offre une redirection
+ * propre plutôt qu'une page vide, là où celle-ci est le verrou. Un client
+ * n'exécute que le code qu'il veut bien exécuter ; le serveur, lui, décide.
+ */
+export async function callerMayReadStudent(
+  ctx: QueryCtx,
+  studentId: Id<"profiles">,
+): Promise<boolean> {
+  const profile = await currentProfile(ctx);
+  if (!profile) return false;
+  if (profile.role === "admin") return true;
+  if (profile._id === studentId) return true;
+
+  const links = await ctx.db
+    .query("studentGuardians")
+    .withIndex("by_studentId", (q) => q.eq("studentId", studentId))
+    .take(50);
+
+  return links.some((link) => link.guardianId === profile._id);
 }
 
 /**

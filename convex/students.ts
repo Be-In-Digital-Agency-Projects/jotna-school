@@ -5,7 +5,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { getConditionText, normalizeRarity } from "./badges";
 import {
   callerIsAdmin,
-  callerIsStaff,
+  callerMayReadStudent,
   checkAccess,
   requireAccess,
 } from "./access";
@@ -171,24 +171,25 @@ export const listStudents = query({
 /**
  * Dossier complet d'un élève — écrans administration et professeur.
  *
- * Garde de RÔLE et non de paywall : progression par matière, badges et dix
+ * Garde de LIEN et non de paywall : progression par matière, badges et dix
  * dernières tentatives d'un élève nommé en argument. `blockedStudent` et
- * `requireAccess` jugeraient l'abonnement, pas la qualité de l'appelant.
+ * `requireAccess` jugeraient l'abonnement, pas le droit de l'appelant sur cet
+ * élève-là.
  *
- * `admin` + `professeur` : appelée par `app/(admin)/admin/eleves/[id]` et
- * `app/(teacher)/teacher/students/[id]`.
- *
- * Ce garde autorise un professeur à lire le dossier de N'IMPORTE QUEL élève,
- * pas seulement des siens — la page enseignant redirige déjà dans ce cas, mais
- * côté client seulement. Restreindre au lien `studentGuardians` demande un
- * arbitrage produit et n'est pas fait ici.
+ * `callerMayReadStudent` et non `callerIsStaff` : le garde de rôle autorisait
+ * tout le personnel à lire le dossier de N'IMPORTE QUEL élève. La page
+ * enseignant vérifiait bien le lien, mais côté client seulement
+ * (`app/(teacher)/teacher/students/[id]/page.tsx`) — une redirection est du
+ * confort, pas une autorisation. Cette vérification client reste en place ;
+ * ici est le verrou. Un `admin` continue de tout voir, donc
+ * `app/(admin)/admin/eleves/[id]` ne régresse pas.
  *
  * Une requête ne lève jamais : null pour tout autre appelant.
  */
 export const getStudentDetail = query({
   args: { studentId: v.id("profiles") },
   handler: async (ctx, args) => {
-    if (!(await callerIsStaff(ctx))) return null;
+    if (!(await callerMayReadStudent(ctx, args.studentId))) return null;
 
     const student = await ctx.db.get(args.studentId);
     if (!student || student.role !== "student") {
@@ -556,18 +557,20 @@ export const getMyEarnedBadges = query({
 /**
  * Statistiques agrégées d'un élève — écran professeur.
  *
- * Garde de RÔLE et non de paywall, même raisonnement que `getStudentDetail`
- * ci-dessus, y compris la réserve : un professeur voit les statistiques de
- * n'importe quel élève, pas seulement des siens.
+ * Garde de LIEN et non de paywall, même raisonnement que `getStudentDetail`
+ * ci-dessus, réserve comprise : le garde de rôle qui vivait ici rendait les
+ * statistiques de n'importe quel élève à n'importe quel membre du personnel.
  *
- * `admin` + `professeur` : appelée par `app/(teacher)/teacher/students/[id]`.
+ * Appelée par `app/(teacher)/teacher/students/[id]`, dont la vérification de
+ * lien côté client reste en place — elle redirige proprement, elle ne protège
+ * rien.
  *
  * Une requête ne lève jamais : null pour tout autre appelant.
  */
 export const getStudentStats = query({
   args: { studentId: v.id("profiles") },
   handler: async (ctx, args) => {
-    if (!(await callerIsStaff(ctx))) return null;
+    if (!(await callerMayReadStudent(ctx, args.studentId))) return null;
 
     const student = await ctx.db.get(args.studentId);
     if (!student || student.role !== "student") {

@@ -265,7 +265,12 @@ function PalierSession({ topicId, palierIndex }: { topicId: string; palierIndex:
       setHintShown({ text: res.hint, index: res.hintIndex });
       setLocalHintsUsedThisExo(hintsUsedThisExo + 1);
     } catch (err) {
-      console.error(err);
+      const msg = err instanceof Error ? err.message : "";
+      if (msg.includes(ACCESS_DENIED_PREFIX)) {
+        setSceneAlert({ type: "access-blocked" });
+      } else {
+        console.error(err);
+      }
     }
   }, [exercises, palierAttemptId, currentIndex, hintsUsedThisExo, requestHint]);
 
@@ -287,7 +292,12 @@ function PalierSession({ topicId, palierIndex }: { topicId: string; palierIndex:
       const res = await submitPalier({ palierAttemptId });
       setPalierResult(res as PalierResult);
     } catch (err) {
-      console.error(err);
+      const msg = err instanceof Error ? err.message : "";
+      if (msg.includes(ACCESS_DENIED_PREFIX)) {
+        setSceneAlert({ type: "access-blocked" });
+      } else {
+        console.error(err);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -324,7 +334,12 @@ function PalierSession({ topicId, palierIndex }: { topicId: string; palierIndex:
           }
         }
       } catch (err) {
-        console.error(err);
+        const msg = err instanceof Error ? err.message : "";
+        if (msg.includes(ACCESS_DENIED_PREFIX)) {
+          setSceneAlert({ type: "access-blocked" });
+        } else {
+          console.error(err);
+        }
       }
     },
     [

@@ -7,6 +7,8 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { useExerciseSessionStore } from "@/stores/exercise-session-store";
 import { useGamificationStore } from "@/stores/gamification-store";
 import { Lightbulb, ArrowRight, Loader2, Sparkles } from "lucide-react";
+import { kidMessages } from "@/lib/kidCopy";
+import { StudentAlertDialog } from "@/components/student/student-alert-dialog";
 import QcmExercise from "./QcmExercise";
 import MatchExercise from "./MatchExercise";
 import OrderExercise from "./OrderExercise";
@@ -40,6 +42,11 @@ interface ExercisePlayerProps {
 
 const MAX_ATTEMPTS = 5;
 const MAX_HINTS = 3;
+
+// Posé par requireAccess() côté serveur (convex/access.ts) sur attempts.submit
+// quand l'école n'a plus d'accès valide (spec §5.8). Même convention que
+// app/(student)/student/topics/[id]/session/page.tsx.
+const ACCESS_DENIED_PREFIX = "ACCESS_DENIED:";
 
 export default function ExercisePlayer({
   exercises,
@@ -76,6 +83,7 @@ export default function ExercisePlayer({
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [aiExplanation, setAiExplanation] = useState<string | null>(null);
   const [aiExplanationLoading, setAiExplanationLoading] = useState(false);
+  const [accessBlocked, setAccessBlocked] = useState(false);
 
   // Timer
   const exerciseStartTime = useRef<number>(Date.now());
@@ -184,6 +192,7 @@ export default function ExercisePlayer({
             result = { ...result, isCorrect: true };
           }
         } catch (err) {
+          // ACCESS_DENIED possible ici (accès révoqué entre deux appels déjà réussis, fenêtre étroite) — non traité : retomber sur "réponse fausse" est un compromis accepté (tâche 8).
           console.error("AI verification failed:", err);
         }
       }
@@ -238,7 +247,12 @@ export default function ExercisePlayer({
         }
       }
     } catch (error) {
-      console.error("Error submitting attempt:", error);
+      const msg = error instanceof Error ? error.message : "";
+      if (msg.includes(ACCESS_DENIED_PREFIX)) {
+        setAccessBlocked(true);
+      } else {
+        console.error("Error submitting attempt:", error);
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -455,6 +469,23 @@ export default function ExercisePlayer({
           Tentative {attemptCount}/{MAX_ATTEMPTS}
         </div>
       )}
+
+      {/* Paywall (spec §5.8) : attempts.submit lève ACCESS_DENIED:<reason>
+          quand l'école n'a plus d'accès valide. Même copy que AccessGate et
+          que la variante SceneAlert "access-blocked" de session/page.tsx —
+          jamais le code brut ni la raison. */}
+      <StudentAlertDialog
+        open={accessBlocked}
+        onOpenChange={(open) => {
+          if (!open) setAccessBlocked(false);
+        }}
+        tone="info"
+        label="Petit blocage"
+        title="Message pour toi"
+        description={kidMessages.accessNotOpen}
+        primaryLabel="J'ai compris"
+        onPrimary={() => setAccessBlocked(false)}
+      />
     </div>
   );
 }

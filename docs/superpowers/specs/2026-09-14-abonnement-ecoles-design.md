@@ -263,10 +263,19 @@ type AccessState =
         | "expired"            // année écoulée
         | "cancelled" };
 
-export const getAccessState = query({ ... });              // UI
-export const getAccessStateInternal = internalQuery({...}); // depuis les actions
+// Fonction PURE — aucun accès base, reçoit les documents déjà lus.
+// C'est elle que les tests ciblent (motif aiGateway/budget.ts).
+export function decideAccess(input: AccessInput): AccessState;
+
+// Wrappers minces : lire les documents, déléguer à decideAccess.
+export const getAccessState = query({ ... });               // UI
+export const getAccessStateInternal = internalQuery({...});  // depuis les actions
 export async function requireActiveAccess(ctx, profileId);   // mutations → throw
 ```
+
+Le découpage pur / wrapper n'est pas cosmétique : c'est ce qui rend les huit
+branches de la section 5.3 testables sans base de données, conformément au
+motif déjà en place dans le repo (cf. section 9).
 
 ### 5.3 Algorithme de dérivation
 
@@ -617,8 +626,20 @@ par moyen de paiement, et comportement en cas de paiement partiel.
 
 ## 9. Tests
 
-Conformément aux guidelines : `convex-test` + `vitest`, fichiers dans
-`convex/`, module map via `import.meta.glob`.
+**Motif de test du repo, à suivre.** Les guidelines Convex prescrivent
+`convex-test` + `@edge-runtime/vm` ; **ce repo ne les utilise pas** et ne les
+a pas en dépendances. `vitest.config.ts` tourne en `environment: "jsdom"`, et
+les tests de `convex/__tests__/` importent des **fonctions pures exportées**
+depuis les modules Convex (`evaluateBudget` et `projectMonthEndSpend` depuis
+`aiGateway/budget`, `evaluateQuota` depuis `aiGateway/quota`,
+`shuffleDeterministic` depuis `paliers`). Aucun handler `query`/`mutation`
+n'est appelé directement.
+
+On suit ce motif : **toute la logique de décision est extraite en fonction
+pure**, le wrapper Convex se limitant à lire les documents et à déléguer.
+`aiGateway/budget.ts` et `aiGateway/quota.ts` sont les modèles à imiter.
+Introduire `convex-test` est hors périmètre de ce chantier ; ce serait un
+changement d'outillage transverse, à traiter séparément.
 
 **Dérivation des droits (`convex/__tests__/access.test.ts`)** — un cas par
 branche de la section 5.3 : élève sans école, siège libéré, contrat signé non

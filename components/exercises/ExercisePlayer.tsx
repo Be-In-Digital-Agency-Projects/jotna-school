@@ -8,6 +8,7 @@ import { useExerciseSessionStore } from "@/stores/exercise-session-store";
 import { useGamificationStore } from "@/stores/gamification-store";
 import { Lightbulb, ArrowRight, Loader2, Sparkles } from "lucide-react";
 import { kidMessages } from "@/lib/kidCopy";
+import { isAccessDenied } from "@/lib/accessCopy";
 import { StudentAlertDialog } from "@/components/student/student-alert-dialog";
 import QcmExercise from "./QcmExercise";
 import MatchExercise from "./MatchExercise";
@@ -42,11 +43,6 @@ interface ExercisePlayerProps {
 
 const MAX_ATTEMPTS = 5;
 const MAX_HINTS = 3;
-
-// Posé par requireAccess() côté serveur (convex/access.ts) sur attempts.submit
-// quand l'école n'a plus d'accès valide (spec §5.8). Même convention que
-// app/(student)/student/topics/[id]/session/page.tsx.
-const ACCESS_DENIED_PREFIX = "ACCESS_DENIED:";
 
 export default function ExercisePlayer({
   exercises,
@@ -247,8 +243,7 @@ export default function ExercisePlayer({
         }
       }
     } catch (error) {
-      const msg = error instanceof Error ? error.message : "";
-      if (msg.includes(ACCESS_DENIED_PREFIX)) {
+      if (isAccessDenied(error)) {
         setAccessBlocked(true);
       } else {
         console.error("Error submitting attempt:", error);

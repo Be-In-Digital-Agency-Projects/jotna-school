@@ -4,7 +4,7 @@
  * Decisions: 3, 9, 10, 46, 50, 52, 53, 56, 60, 71, 75, 77, 78.
  */
 
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import {
   action,
   internalMutation,
@@ -591,7 +591,7 @@ export const getBucket = action({
       { profileId: callerProfile._id },
     );
     if (!access.ok) {
-      throw new Error(`ACCESS_DENIED:${access.reason}`);
+      throw new ConvexError({ code: "ACCESS_DENIED", reason: access.reason });
     }
 
     if (args.palierIndex > 1) {
@@ -785,7 +785,7 @@ export const regenerateFailedExercises = action({
       profileId: attempt.userId,
     });
     if (!access.ok) {
-      throw new Error(`ACCESS_DENIED:${access.reason}`);
+      throw new ConvexError({ code: "ACCESS_DENIED", reason: access.reason });
     }
 
     if (failed.length === 0) {

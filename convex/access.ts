@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import {
   query,
@@ -163,7 +163,7 @@ export async function requireAccess(
 ): Promise<{ schoolId: string; endsAt: number }> {
   const state = await checkAccess(ctx, profile);
   if (!state.ok) {
-    throw new Error(`ACCESS_DENIED:${state.reason}`);
+    throw new ConvexError({ code: "ACCESS_DENIED", reason: state.reason });
   }
   return { schoolId: state.schoolId, endsAt: state.endsAt };
 }

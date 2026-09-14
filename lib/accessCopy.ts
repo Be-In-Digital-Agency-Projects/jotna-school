@@ -57,3 +57,40 @@ export function accessMessageForAdult(reason: AccessReason): {
       };
   }
 }
+
+/**
+ * Repli de détection quand seul le message brut de l'erreur est disponible
+ * (pas de donnée structurée — voir isAccessDenied ci-dessous). Posé par les
+ * cinq sites qui lèvent dans convex/ (requireAccess, attemptsVerify,
+ * attemptsExplain, paliers/index ×2).
+ */
+export const ACCESS_DENIED_PREFIX = "ACCESS_DENIED:";
+
+/**
+ * Vrai si `err` est un rejet du paywall (spec §5.8).
+ *
+ * Convex occulte par défaut le message et la pile d'une Error ordinaire
+ * côté client hors développement (elles ne remontent qu'en
+ * `npx convex dev`) — un simple test de sous-chaîne sur `err.message` ne
+ * suffirait donc pas en production. Les cinq sites qui lèvent dans convex/
+ * utilisent ConvexError, dont le champ `data` est, lui, toujours transmis au
+ * client, dans les deux cas. On le teste en premier
+ * (`err.data.code === "ACCESS_DENIED"`), et on ne retombe sur
+ * ACCESS_DENIED_PREFIX qu'à défaut — utile en développement et si un site
+ * encore sur une Error ordinaire échappait à ce relevé.
+ */
+export function isAccessDenied(err: unknown): boolean {
+  if (
+    typeof err === "object" &&
+    err !== null &&
+    "data" in err &&
+    typeof err.data === "object" &&
+    err.data !== null &&
+    "code" in err.data &&
+    err.data.code === "ACCESS_DENIED"
+  ) {
+    return true;
+  }
+  const msg = err instanceof Error ? err.message : "";
+  return msg.includes(ACCESS_DENIED_PREFIX);
+}

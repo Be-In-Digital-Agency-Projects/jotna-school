@@ -1,6 +1,6 @@
 "use node";
 
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { action } from "./_generated/server";
 import { internal } from "./_generated/api";
 import OpenAI from "openai";
@@ -48,7 +48,7 @@ export const verifyShortAnswerWithAI = action({
       { profileId: callerProfile._id },
     );
     if (!access.ok) {
-      throw new Error(`ACCESS_DENIED:${access.reason}`);
+      throw new ConvexError({ code: "ACCESS_DENIED", reason: access.reason });
     }
 
     type AttemptContext = {

@@ -24,6 +24,7 @@ import { playCorrect, setSoundEnabledLocal } from "@/lib/sounds";
 import { PalierStarsBar } from "@/components/star-rating";
 import { CapRegenAlternatives } from "@/components/cap-regen-alternatives";
 import { kidMessages } from "@/lib/kidCopy";
+import { isAccessDenied } from "@/lib/accessCopy";
 import { ExplainStepByStep } from "@/components/student/explain-step-by-step";
 import { Pio } from "@/components/student/pio";
 import { StudentAlertDialog } from "@/components/student/student-alert-dialog";
@@ -67,14 +68,6 @@ type AttemptProgress = {
   failedAttemptsThisExo: number;
   hintsUsedThisExo: number;
 };
-
-// Posé par requireAccess() côté serveur (convex/access.ts) sur getBucket,
-// startPalierAttempt, verifyAttempt, requestHint, submitPalier et
-// regenerateFailedExercises quand l'école n'a plus d'accès valide (spec
-// §5.8). Ce code brut — et la raison qui l'accompagne, parfois liée à
-// l'argent (ex. "no_subscription", "past_due") — ne doit jamais atteindre
-// l'élève tel quel : on le remplace toujours par kidMessages.accessNotOpen.
-const ACCESS_DENIED_PREFIX = "ACCESS_DENIED:";
 
 export default function TopicSessionPage({
   params,
@@ -212,7 +205,7 @@ function PalierSession({ topicId, palierIndex }: { topicId: string; palierIndex:
         const match = msg.match(/Uncaught Error:\s*(.+?)(?:\n|$)/);
         if (match) msg = match[1].trim();
         setBootstrapError(
-          msg.includes(ACCESS_DENIED_PREFIX) ? kidMessages.accessNotOpen : msg,
+          isAccessDenied(err) ? kidMessages.accessNotOpen : msg,
         );
       } finally {
         setBootstrapping(false);
@@ -265,8 +258,7 @@ function PalierSession({ topicId, palierIndex }: { topicId: string; palierIndex:
       setHintShown({ text: res.hint, index: res.hintIndex });
       setLocalHintsUsedThisExo(hintsUsedThisExo + 1);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "";
-      if (msg.includes(ACCESS_DENIED_PREFIX)) {
+      if (isAccessDenied(err)) {
         setSceneAlert({ type: "access-blocked" });
       } else {
         console.error(err);
@@ -292,8 +284,7 @@ function PalierSession({ topicId, palierIndex }: { topicId: string; palierIndex:
       const res = await submitPalier({ palierAttemptId });
       setPalierResult(res as PalierResult);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "";
-      if (msg.includes(ACCESS_DENIED_PREFIX)) {
+      if (isAccessDenied(err)) {
         setSceneAlert({ type: "access-blocked" });
       } else {
         console.error(err);
@@ -334,8 +325,7 @@ function PalierSession({ topicId, palierIndex }: { topicId: string; palierIndex:
           }
         }
       } catch (err) {
-        const msg = err instanceof Error ? err.message : "";
-        if (msg.includes(ACCESS_DENIED_PREFIX)) {
+        if (isAccessDenied(err)) {
           setSceneAlert({ type: "access-blocked" });
         } else {
           console.error(err);
@@ -365,7 +355,7 @@ function PalierSession({ topicId, palierIndex }: { topicId: string; palierIndex:
       setLocalFailedAttemptsThisExo(0);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Erreur";
-      if (msg.includes(ACCESS_DENIED_PREFIX)) {
+      if (isAccessDenied(err)) {
         setSceneAlert({ type: "access-blocked" });
       } else {
         setSceneAlert({ type: "regen-error", message: msg });

@@ -9,6 +9,7 @@ import Link from "next/link";
 import {
   ArrowLeft,
   ArrowLeftRight,
+  History,
   Loader2,
   Plus,
   School,
@@ -24,6 +25,11 @@ type StaffRow = FunctionReturnType<typeof api.schools.listStaff>[number];
 type ClassRow = FunctionReturnType<typeof api.schools.listClasses>[number];
 type ClassStudentRow = FunctionReturnType<
   typeof api.schools.listClassStudents
+>[number];
+
+/** Une ligne du journal d'une inscription — noms déjà résolus par le serveur. */
+type MembershipEventRow = FunctionReturnType<
+  typeof api.schools.listMembershipEvents
 >[number];
 
 /**
@@ -61,6 +67,38 @@ const STAFF_ROLE_LABEL: Record<StaffRole, string> = {
   professeur: "Professeur",
   directeur: "Directeur",
 };
+
+/**
+ * Les trois actes journalisés, dits par leur EFFET sur l'enfant.
+ *
+ * `Record` complet et non `Partial` : le type vient du serveur, donc un
+ * quatrième acte journalisé un jour ne compilera pas tant qu'il n'aura pas
+ * sa phrase ici — mieux vaut un écran qui refuse de se construire qu'un
+ * registre d'audit qui affiche « transferred » à un directeur d'école.
+ */
+const EVENT_LABEL: Record<MembershipEventRow["kind"], string> = {
+  enrolled: "Inscrit — accès ouvert",
+  released: "Siège libéré — accès coupé",
+  transferred: "Changement de classe — accès inchangé",
+};
+
+/**
+ * Un acte daté à la MINUTE, et non au jour.
+ *
+ * Le reste de l'écran n'affiche pas de date ; celle-ci est la pièce d'un
+ * registre d'audit, où « qui a libéré ce siège avant la réinscription » se
+ * joue parfois à quelques minutes. Même forme que les autres écrans
+ * d'administration (`admin/pdf-uploads`).
+ */
+function formatEventMoment(timestamp: number): string {
+  return new Date(timestamp).toLocaleDateString("fr-FR", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
 /**
  * Pourquoi l'inscription n'ouvrira pas l'accès, en clair.
@@ -759,6 +797,7 @@ function ClassCard({
   const [isEnrolling, setIsEnrolling] = useState(false);
   const [releaseConfirm, setReleaseConfirm] = useState<string | null>(null);
   const [transferFor, setTransferFor] = useState<string | null>(null);
+  const [historyFor, setHistoryFor] = useState<string | null>(null);
   const [transferTarget, setTransferTarget] = useState("");
   const [isTransferring, setIsTransferring] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -841,22 +880,33 @@ function ClassCard({
     }
   };
 
-  // Les deux volets d'une ligne d'élève s'excluent : ouvrir l'un ferme
-  // l'autre. Ils disent le contraire l'un de l'autre — « il perdra son
-  // accès » et « il ne perd pas son accès » — et les afficher ensemble sur
-  // le même enfant serait la pire des confusions possibles juste avant un
-  // clic de confirmation.
+  // Les volets d'une ligne d'élève s'excluent : ouvrir l'un ferme les autres.
+  // Les deux volets d'action disent le contraire l'un de l'autre — « il perdra
+  // son accès » et « il ne perd pas son accès » — et les afficher ensemble sur
+  // le même enfant serait la pire des confusions possibles juste avant un clic
+  // de confirmation. L'historique s'y range par la même porte : il n'énonce
+  // aucune conséquence, mais il est long, et le déplier sous une demande de
+  // confirmation éloignerait l'avertissement du bouton qu'il qualifie.
   const openRelease = (row: ClassStudentRow) => {
     setError(null);
     setTransferFor(null);
+    setHistoryFor(null);
     setReleaseConfirm(row.membershipId);
   };
 
   const openTransfer = (row: ClassStudentRow) => {
     setError(null);
     setReleaseConfirm(null);
+    setHistoryFor(null);
     setTransferTarget("");
     setTransferFor(row.membershipId);
+  };
+
+  const openHistory = (row: ClassStudentRow) => {
+    setError(null);
+    setReleaseConfirm(null);
+    setTransferFor(null);
+    setHistoryFor(row.membershipId);
   };
 
   // L'identifiant typé vient de la liste, jamais de la valeur du menu — même
@@ -1036,8 +1086,29 @@ function ClassCard({
                         Annuler
                       </button>
                     </div>
+                  ) : historyFor === row.membershipId ? (
+                    <button
+                      onClick={() => setHistoryFor(null)}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+                    >
+                      <History className="h-3.5 w-3.5" />
+                      Masquer l&apos;historique
+                    </button>
                   ) : (
-                    <div className="flex items-center gap-2">
+                    // `flex-wrap` : trois actions sur une ligne d'élève ne
+                    // tiennent plus à côté du nom sur un écran étroit.
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                      {/* L'historique se demande, il ne se charge jamais tout
+                          seul : une classe de soixante élèves ouvrirait
+                          soixante souscriptions temps réel pour un panneau
+                          qu'on ouvre sur un enfant. */}
+                      <button
+                        onClick={() => openHistory(row)}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors"
+                      >
+                        <History className="h-3.5 w-3.5" />
+                        Historique
+                      </button>
                       {/* Sans autre classe dans l'école, l'action n'a aucune
                           destination : le bouton disparaît au lieu de se
                           proposer pour ouvrir un menu vide. */}
@@ -1088,11 +1159,100 @@ function ClassCard({
                     </span>
                   </p>
                 )}
+                {historyFor === row.membershipId && (
+                  <MembershipHistory membershipId={row.membershipId} />
+                )}
               </div>
             ))}
           </div>
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * « en CM1 A », « de CM1 A vers CM1 B » — le contexte de classe d'un acte.
+ *
+ * Les deux dernières branches ne servent qu'aux lignes ABÎMÉES : le serveur
+ * rend `null` pour une classe qu'il ne retrouve pas, et une trace à demi
+ * lisible vaut mieux qu'une trace muette. Un transfert normal porte toujours
+ * ses deux classes, une inscription seulement celle d'arrivée, une libération
+ * aucune.
+ */
+function classContext(event: MembershipEventRow): string | null {
+  if (event.fromClassName && event.toClassName) {
+    return `de ${event.fromClassName} vers ${event.toClassName}`;
+  }
+  if (event.toClassName) return `en ${event.toClassName}`;
+  if (event.fromClassName) return `depuis ${event.fromClassName}`;
+  return null;
+}
+
+/**
+ * Le journal d'UNE inscription — qui a agi sur l'accès de cet enfant, et quand.
+ *
+ * COMPOSANT À PART, et c'est là tout l'enjeu : `useQuery` s'abonne tant que le
+ * composant est monté. Écrit dans `ClassCard`, l'appel s'exécuterait pour
+ * CHAQUE ligne d'élève de CHAQUE classe — des dizaines de souscriptions temps
+ * réel par école, pour un panneau que l'administrateur ouvre sur un enfant à
+ * la fois. Monté seulement quand le volet est ouvert, il n'en ouvre qu'une, et
+ * la referme en se démontant.
+ *
+ * Il ne reçoit que l'identifiant de l'inscription : les noms — l'auteur, les
+ * classes — sont déjà résolus par `listMembershipEvents`, cet écran ne
+ * rattrape rien côté client.
+ */
+function MembershipHistory({
+  membershipId,
+}: {
+  membershipId: ClassStudentRow["membershipId"];
+}) {
+  const events = useQuery(api.schools.listMembershipEvents, { membershipId });
+
+  if (events === undefined) {
+    return (
+      <div className="mt-3 flex items-center gap-2 rounded-lg border border-gray-200 bg-white p-3 text-sm text-gray-500">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Chargement de l&apos;historique...
+      </div>
+    );
+  }
+
+  // Le journal ne remonte pas avant sa mise en place : une inscription plus
+  // ancienne n'a rien à montrer, et l'écran doit le DIRE. « Aucun acte » tout
+  // court se lirait comme « personne n'a rien fait à cet enfant », ce qui est
+  // exactement l'inverse de ce qu'un registre d'audit doit laisser croire.
+  if (events.length === 0) {
+    return (
+      <p className="mt-3 rounded-lg border border-gray-200 bg-white p-3 text-sm text-gray-500">
+        Aucun acte enregistré pour cette inscription. Le journal n&apos;a pas
+        été reconstitué pour les inscriptions antérieures à sa mise en
+        place&nbsp;: une absence ici ne veut pas dire qu&apos;il ne s&apos;est
+        rien passé.
+      </p>
+    );
+  }
+
+  return (
+    <ul className="mt-3 space-y-2 rounded-lg border border-gray-200 bg-white p-3">
+      {events.map((event) => {
+        const context = classContext(event);
+        return (
+          <li
+            key={event._id}
+            className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-sm"
+          >
+            <span className="font-medium text-gray-900">
+              {EVENT_LABEL[event.kind]}
+            </span>
+            {context && <span className="text-gray-600">{context}</span>}
+            <span className="text-gray-500">par {event.actorName}</span>
+            <span className="text-gray-400">·</span>
+            <span className="text-gray-500">{formatEventMoment(event.at)}</span>
+          </li>
+        );
+      })}
+    </ul>
   );
 }

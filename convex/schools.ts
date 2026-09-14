@@ -6,7 +6,7 @@ import {
   type QueryCtx,
 } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
-import { callerIsAdmin } from "./access";
+import { callerAdminProfile, callerIsAdmin } from "./access";
 import { decideAccess, type AccessReason } from "./accessRules";
 
 /**
@@ -18,11 +18,12 @@ import { decideAccess, type AccessReason } from "./accessRules";
  * et que chaque étape se valide contre la précédente. Les séparer obligerait à
  * importer l'une depuis l'autre pour ces vérifications croisées.
  *
- * TOUT ici est réservé à l'`admin` (`callerIsAdmin`). Les requêtes ne lèvent
- * jamais et rendent leur valeur vide — `[]`, `null`, ou `{ items: [] }` pour
- * les deux listes qui signalent leur troncature ; les mutations lèvent
- * `new Error("Rôle non autorisé")` — pas de `ConvexError`, que le client
- * réserve au refus de paywall (`accessRules.ts`).
+ * TOUT ici est réservé à l'`admin` (`callerIsAdmin`, ou `callerAdminProfile`
+ * là où l'auteur de l'acte doit être nommé : même garde, mêmes refus). Les
+ * requêtes ne lèvent jamais et rendent leur valeur vide — `[]`, `null`, ou
+ * `{ items: [] }` pour les deux listes qui signalent leur troncature ; les
+ * mutations lèvent `new Error("Rôle non autorisé")` — pas de `ConvexError`,
+ * que le client réserve au refus de paywall (`accessRules.ts`).
  *
  * Ce module est le PREMIER écrivain de ces tables : rien d'autre dans le dépôt
  * n'y insère une ligne. Ses invariants sont donc les seules garanties dont
@@ -114,6 +115,22 @@ const OVERDUE_INSTALLMENTS_LIMIT = 12;
  * c'est ici qu'il faudra revenir.
  */
 const SEAT_SCAN_LIMIT = CLASSES_LIMIT * CLASS_STUDENTS_LIMIT;
+
+/**
+ * Événements lus pour UNE inscription.
+ *
+ * Une inscription porte au plus une entrée et une libération ; tout le reste
+ * est fait de transferts, et une école qui redistribue ses sections à chaque
+ * trimestre en produit une poignée par année. 50 couvre une scolarité entière
+ * sans laisser la lecture grandir avec la table.
+ *
+ * Borne franchie : ce sont les événements les PLUS ANCIENS qui tombent, la
+ * lecture étant décroissante. L'écran montre donc toujours les actes récents,
+ * jamais une fenêtre arbitraire. Le contraire d'un balayage de `profiles`,
+ * d'où l'absence de `truncated` ici : sur un journal daté et complet par le
+ * haut, la dernière ligne affichée dit elle-même où s'arrête ce qui est lu.
+ */
+const MEMBERSHIP_EVENTS_LIMIT = 50;
 
 /**
  * Niveaux, dans l'ordre scolaire — recopié de `classEnum`
@@ -636,6 +653,68 @@ export const getEnrollmentOutlook = query({
   },
 });
 
+/**
+ * Le journal d'une inscription — qui a inscrit, transféré, libéré, et quand.
+ *
+ * Du PLUS RÉCENT au plus ancien : la question posée devant cette liste est
+ * « qu'est-il arrivé en dernier à cet enfant », pas « comment tout a
+ * commencé ». L'ordre vient de l'index et non d'un tri en mémoire —
+ * `by_membership` range les lignes d'une même inscription par `_creationTime`,
+ * et une ligne est insérée à l'instant de son acte, donc l'ordre de l'index
+ * EST l'ordre chronologique.
+ *
+ * Les NOMS sont résolus ici, pas les identifiants : « Profil #j57x… a
+ * transféré vers la classe #k39z… » ne dit rien à l'administrateur qui
+ * demande des comptes. Un auteur, une classe de départ, une classe
+ * d'arrivée — tous trois lus au moment de la lecture et jamais figés dans
+ * l'événement, pour qu'un directeur qui change de nom soit nommé
+ * correctement partout.
+ *
+ * Un document introuvable ne fait pas disparaître la ligne ni lever : le nom
+ * manquant vaut `UNKNOWN_NAME`, la classe manquante vaut `null`. Une trace
+ * amputée reste une trace — l'acte, sa date et son type, eux, sont dans la
+ * ligne elle-même et ne dépendent d'aucune autre table. C'est exactement le
+ * choix déjà fait par `listClassStudents` pour un profil d'élève absent.
+ *
+ * Réservée à l'`admin` comme tout ce module, et ne lève pas : `[]` pour tout
+ * autre appelant, comme les autres listes.
+ */
+export const listMembershipEvents = query({
+  args: { membershipId: v.id("schoolMemberships") },
+  handler: async (ctx, args) => {
+    if (!(await callerIsAdmin(ctx))) return [];
+
+    const events = await ctx.db
+      .query("schoolMembershipEvents")
+      .withIndex("by_membership", (q) =>
+        q.eq("membershipId", args.membershipId),
+      )
+      .order("desc")
+      .take(MEMBERSHIP_EVENTS_LIMIT);
+
+    return await Promise.all(
+      events.map(async (event) => {
+        const actor = await ctx.db.get(event.actorProfileId);
+        const from = event.fromSchoolClassId
+          ? await ctx.db.get(event.fromSchoolClassId)
+          : null;
+        const to = event.toSchoolClassId
+          ? await ctx.db.get(event.toSchoolClassId)
+          : null;
+
+        return {
+          _id: event._id,
+          kind: event.kind,
+          at: event.at,
+          actorName: actor?.name ?? UNKNOWN_NAME,
+          fromClassName: from ? `${from.class} ${from.label}` : null,
+          toClassName: to ? `${to.class} ${to.label}` : null,
+        };
+      }),
+    );
+  },
+});
+
 // ---------------------------------------------------------------------------
 // Mutations — `admin` seul, garde en PREMIÈRE instruction : rien n'est lu
 // avant que le rôle soit établi. Un seul message de refus de rôle, comme
@@ -912,6 +991,12 @@ export const assignTeacher = mutation({
  * par le commentaire de `convex/schema.ts:51`, et cette inscription est la
  * seule écriture qui en connaisse la valeur vraie. L'écrire ici ne change donc
  * rien au comportement actuel et rend le champ honnête le jour où il servira.
+ *
+ * TRACE — une ligne `schoolMembershipEvents` de type `enrolled` s'écrit dans
+ * CETTE transaction, portant l'admin qui inscrit et la classe d'inscription.
+ * Même transaction que l'acte, toujours : un acte sans sa trace, ou une trace
+ * sans son acte, seraient tous deux pires que rien. Le journal n'entre dans
+ * aucun des quatre refus ci-dessus — il observe, il ne décide pas.
  */
 export const enrollStudent = mutation({
   args: {
@@ -919,7 +1004,8 @@ export const enrollStudent = mutation({
     schoolClassId: v.id("schoolClasses"),
   },
   handler: async (ctx, args) => {
-    if (!(await callerIsAdmin(ctx))) throw new Error("Rôle non autorisé");
+    const actor = await callerAdminProfile(ctx);
+    if (!actor) throw new Error("Rôle non autorisé");
 
     const schoolClass = await ctx.db.get(args.schoolClassId);
     if (!schoolClass) throw new Error("Classe introuvable");
@@ -973,12 +1059,27 @@ export const enrollStudent = mutation({
       );
     }
 
+    // Un seul `now` pour l'inscription et pour sa trace : `enrolledAt` et
+    // l'événement datent le MÊME acte, et deux appels à `Date.now()` les
+    // feraient diverger sans raison.
+    const now = Date.now();
+
     const membershipId = await ctx.db.insert("schoolMemberships", {
       schoolId: schoolClass.schoolId,
       studentId: args.studentId,
       schoolClassId: schoolClass._id,
       status: "active",
-      enrolledAt: Date.now(),
+      enrolledAt: now,
+    });
+
+    await ctx.db.insert("schoolMembershipEvents", {
+      membershipId,
+      studentId: args.studentId,
+      schoolId: schoolClass.schoolId,
+      kind: "enrolled",
+      actorProfileId: actor._id,
+      at: now,
+      toSchoolClassId: schoolClass._id,
     });
 
     if (student.class !== schoolClass.class) {
@@ -999,20 +1100,41 @@ export const enrollStudent = mutation({
  *
  * Idempotente : une ligne déjà libérée n'est pas réécrite, sinon un second
  * clic effacerait la date de libération d'origine.
+ *
+ * TRACE — une ligne `schoolMembershipEvents` de type `released`, dans cette
+ * transaction. Le retour idempotent n'en écrit AUCUNE : il n'y a pas eu
+ * d'acte, et un journal qui compterait les clics sans conséquence ferait lire
+ * deux libérations là où l'accès n'a été coupé qu'une fois.
  */
 export const releaseStudent = mutation({
   args: { membershipId: v.id("schoolMemberships") },
   handler: async (ctx, args) => {
-    if (!(await callerIsAdmin(ctx))) throw new Error("Rôle non autorisé");
+    const actor = await callerAdminProfile(ctx);
+    if (!actor) throw new Error("Rôle non autorisé");
 
     const membership = await ctx.db.get(args.membershipId);
     if (!membership) throw new Error("Inscription introuvable");
+    // Le retour anticipé de l'idempotence passe AVANT l'écriture du journal,
+    // et c'est tout ce qu'il faut pour qu'un second clic n'invente pas un
+    // acte : il n'y a pas eu de libération, donc il n'y a rien à journaliser.
     if (membership.status !== "active") return null;
+
+    const now = Date.now();
 
     await ctx.db.patch(membership._id, {
       status: "released",
-      releasedAt: Date.now(),
+      releasedAt: now,
     });
+
+    await ctx.db.insert("schoolMembershipEvents", {
+      membershipId: membership._id,
+      studentId: membership.studentId,
+      schoolId: membership.schoolId,
+      kind: "released",
+      actorProfileId: actor._id,
+      at: now,
+    });
+
     return null;
   },
 });
@@ -1050,6 +1172,14 @@ export const releaseStudent = mutation({
  * depuis cette date-là, et un changement de classe n'est pas une
  * réinscription. Le `patch` ne porte donc qu'un champ — `schoolId` est déjà
  * le bon, la classe cible appartenant à la même école.
+ *
+ * TRACE — une ligne `schoolMembershipEvents` de type `transferred`, dans cette
+ * transaction, avec la classe de DÉPART et celle d'ARRIVÉE. C'était l'acte
+ * sans aucune trace : `enrolledAt` n'est pas réécrit — à juste titre — et
+ * `releasedAt` reste vide, donc l'inscription elle-même ne garde rien du
+ * passage. Et parce qu'un transfert SE RÉPÈTE, c'est un journal et non un
+ * champ « dernier transfert par » : le champ écraserait le précédent à chaque
+ * changement de classe.
  *
  * AUCUN CONTRÔLE DE SIÈGE ICI, et cette absence est DÉLIBÉRÉE : ce n'est pas
  * un oubli, ne le « réparez » pas. Un transfert n'ajoute personne — une
@@ -1111,7 +1241,8 @@ export const transferStudent = mutation({
     targetSchoolClassId: v.id("schoolClasses"),
   },
   handler: async (ctx, args) => {
-    if (!(await callerIsAdmin(ctx))) throw new Error("Rôle non autorisé");
+    const actor = await callerAdminProfile(ctx);
+    if (!actor) throw new Error("Rôle non autorisé");
 
     const membership = await ctx.db.get(args.membershipId);
     if (!membership) throw new Error("Inscription introuvable");
@@ -1138,7 +1269,25 @@ export const transferStudent = mutation({
 
     const student = await ctx.db.get(membership.studentId);
 
+    // La classe de DÉPART, lue avant le `patch` : c'est la moitié de
+    // l'information qu'un transfert doit laisser derrière lui, et après
+    // l'écriture plus rien ne la porte. Un `patch` ne modifie pas le document
+    // déjà en mémoire, mais s'appuyer là-dessus rendrait la trace dépendante
+    // de l'ordre des lignes.
+    const fromSchoolClassId = membership.schoolClassId;
+
     await ctx.db.patch(membership._id, { schoolClassId: target._id });
+
+    await ctx.db.insert("schoolMembershipEvents", {
+      membershipId: membership._id,
+      studentId: membership.studentId,
+      schoolId: membership.schoolId,
+      kind: "transferred",
+      actorProfileId: actor._id,
+      at: Date.now(),
+      fromSchoolClassId,
+      toSchoolClassId: target._id,
+    });
 
     // Le niveau du profil suit la classe, exactement comme `enrollStudent`
     // l'aligne à l'inscription : passer de CM1 A à CM2 B change le niveau de

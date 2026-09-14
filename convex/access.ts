@@ -211,6 +211,35 @@ export async function callerIsAdmin(ctx: QueryCtx): Promise<boolean> {
 }
 
 /**
+ * Le PROFIL de l'appelant s'il est `admin`, `null` sinon.
+ *
+ * Même garde que `callerIsAdmin` — mêmes refus, exactement — mais qui rend
+ * l'auteur au lieu de le jeter. Destiné aux mutations qui doivent NOMMER
+ * celui qui agit : les trois actes sur l'inscription d'un élève
+ * (`schools.enrollStudent`, `releaseStudent`, `transferStudent`) écrivent une
+ * ligne `schoolMembershipEvents` portant `actorProfileId`.
+ *
+ * Il REMPLACE `callerIsAdmin` dans ces mutations-là, il ne s'y ajoute pas :
+ * `callerIsAdmin` résout le profil puis n'en garde que le rôle, donc l'appeler
+ * en plus relirait `profiles` une seconde fois pour une réponse déjà connue.
+ * Un seul appel sert ici à la fois de garde et de source de l'auteur.
+ *
+ * `callerIsAdmin` reste en place et INCHANGÉ : les onze autres fonctions de
+ * `schools.ts` n'ont besoin que du booléen, et un profil complet là où une
+ * réponse par oui ou non suffit invite à s'en servir pour autre chose que la
+ * garde.
+ *
+ * Le rôle est toujours le seul critère — un `admin` administre toutes les
+ * écoles, ce module ne connaît pas d'admin d'école.
+ */
+export async function callerAdminProfile(
+  ctx: QueryCtx | MutationCtx,
+): Promise<Doc<"profiles"> | null> {
+  const profile = await currentProfile(ctx);
+  return profile?.role === "admin" ? profile : null;
+}
+
+/**
  * Nombre maximum de classes lues pour un professeur.
  *
  * Le dépôt ne modélise que six niveaux (CI → CM2) et une classe est une

@@ -534,6 +534,63 @@ export default defineSchema({
     .index("by_student_status", ["studentId", "status"])
     .index("by_class_status", ["schoolClassId", "status"]),
 
+  // Journal des actes portés sur l'INSCRIPTION d'un élève — qui, quand, quoi.
+  //
+  // `enrolledAt` et `releasedAt` disent quand, jamais qui, pour deux actes qui
+  // ouvrent et coupent l'accès d'un enfant sous abonnement payant ; le
+  // transfert, lui, ne laissait aucune trace. Ces deux champs RESTENT : ils
+  // sont lus (`schools.listClassStudents`) et ce journal les complète sans
+  // les remplacer.
+  //
+  // UN JOURNAL, PAS DES CHAMPS. Inscrire et libérer sont uniques par
+  // inscription — un `enrolledBy`/`releasedBy` aurait suffi. Mais un TRANSFERT
+  // SE RÉPÈTE, et un champ « dernier transfert par » écraserait silencieusement
+  // le précédent : un journal qui oublie n'est pas une traçabilité. Et deux
+  // mécanismes — des champs pour deux actes, des lignes pour le troisième —
+  // obligeraient qui demande « qu'est-il arrivé à cet enfant » à lire deux
+  // endroits en sachant pourquoi.
+  //
+  // FRONTIÈRE — seuls les trois actes sur l'inscription d'un ÉLÈVE s'écrivent
+  // ici. Ni les créations d'école ou de classe, ni les mouvements de personnel :
+  // ce sont des actes administratifs qui ne touchent pas directement l'accès
+  // d'un enfant, et les journaliser diluerait le registre dont l'objet est
+  // précisément « qu'est-il arrivé à l'accès de cet enfant ».
+  //
+  // Le journal OBSERVE, il ne décide pas : aucune ligne d'ici n'entre dans
+  // `accessRules.decideAccess`, qui juge l'accès sur `schoolMemberships` et
+  // l'abonnement, et sur eux seuls.
+  //
+  // Insertions seules : aucune fonction du dépôt ne modifie ni ne supprime une
+  // ligne de cette table.
+  schoolMembershipEvents: defineTable({
+    membershipId: v.id("schoolMemberships"),
+    // Redondant avec `membershipId`, et délibérément : il ouvre
+    // « qu'est-il arrivé à CET enfant » sans passer par ses inscriptions, y
+    // compris quand elles sont plusieurs (une libérée, une réinscription).
+    studentId: v.id("profiles"),
+    schoolId: v.id("schools"),
+    kind: v.union(
+      v.literal("enrolled"),
+      v.literal("released"),
+      v.literal("transferred"),
+    ),
+    // L'auteur de l'acte : le profil `admin` qui a appelé la mutation. Copié
+    // et jamais relu pour autoriser quoi que ce soit — c'est une trace.
+    actorProfileId: v.id("profiles"),
+    // L'instant de l'acte, et non celui de la ligne. `enrollStudent` et
+    // `releaseStudent` écrivent ici le `Date.now()` EXACT qu'elles posent sur
+    // `enrolledAt` et `releasedAt`, pour que la date du journal et celle de
+    // l'inscription ne divergent jamais d'un battement d'horloge ; un
+    // transfert, lui, ne date rien sur l'inscription — `at` est alors la
+    // SEULE date de cet acte, et c'est bien pourquoi ce journal existe.
+    // `_creationTime` existe aussi, mais il date l'insertion, pas l'acte.
+    at: v.number(),
+    fromSchoolClassId: v.optional(v.id("schoolClasses")), // transferts seulement
+    toSchoolClassId: v.optional(v.id("schoolClasses")), // inscriptions et transferts
+  })
+    .index("by_membership", ["membershipId"])
+    .index("by_student", ["studentId"]),
+
   // Compteur de sièges dans sa PROPRE table : l'import en masse ne doit pas
   // entrer en contention d'écriture avec le document d'abonnement.
   schoolSeatUsage: defineTable({

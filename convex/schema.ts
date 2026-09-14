@@ -517,6 +517,7 @@ export default defineSchema({
   })
     .index("by_school_status", ["schoolId", "status"])
     .index("by_student", ["studentId"])
+    .index("by_student_status", ["studentId", "status"])
     .index("by_class_status", ["schoolClassId", "status"]),
 
   // Compteur de sièges dans sa PROPRE table : l'import en masse ne doit pas
@@ -549,6 +550,7 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_owner", ["ownerType", "ownerId"])
+    .index("by_owner_startsAt", ["ownerType", "ownerId", "startsAt"])
     .index("by_status", ["status"])
     .index("by_endsAt", ["endsAt"]),
 

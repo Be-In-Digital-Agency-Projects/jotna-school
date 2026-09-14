@@ -39,15 +39,23 @@ export async function loadAccessInput(
   if (!profile) return empty;
   if (profile.role !== "student") return { ...empty, role: profile.role };
 
-  // Un élève n'a normalement qu'une inscription active ; on en prend 10 pour
-  // détecter aussi les sièges libérés sans lecture supplémentaire.
-  const memberships = await ctx.db
+  const active = await ctx.db
     .query("schoolMemberships")
-    .withIndex("by_student", (q) => q.eq("studentId", profile._id))
-    .take(10);
+    .withIndex("by_student_status", (q) =>
+      q.eq("studentId", profile._id).eq("status", "active"),
+    )
+    .first();
 
-  const active = memberships.find((m) => m.status === "active") ?? null;
-  const hasReleased = memberships.some((m) => m.status === "released");
+  let hasReleased = false;
+  if (!active) {
+    const released = await ctx.db
+      .query("schoolMemberships")
+      .withIndex("by_student_status", (q) =>
+        q.eq("studentId", profile._id).eq("status", "released"),
+      )
+      .first();
+    hasReleased = released !== null;
+  }
 
   if (!active) {
     return {
@@ -60,17 +68,13 @@ export async function loadAccessInput(
   // Abonnement le PLUS RÉCENT, sans filtrer sur la couverture temporelle :
   // c'est decideAccess qui juge l'expiration via endsAt. Filtrer ici ferait
   // remonter "no_subscription" au lieu de "expired" pour une école échue.
-  const subs = await ctx.db
+  const latest = await ctx.db
     .query("subscriptions")
-    .withIndex("by_owner", (q) =>
+    .withIndex("by_owner_startsAt", (q) =>
       q.eq("ownerType", "school").eq("ownerId", active.schoolId as string),
     )
-    .take(20);
-
-  const latest =
-    subs.length === 0
-      ? null
-      : subs.reduce((best, s) => (s.startsAt > best.startsAt ? s : best));
+    .order("desc")
+    .first();
 
   if (!latest) {
     return {
@@ -147,7 +151,12 @@ export async function blockedStudent(ctx: QueryCtx): Promise<boolean> {
   return !access.ok;
 }
 
-/** Pour les MUTATIONS et ACTIONS : lève si l'accès n'est pas ouvert. */
+/**
+ * Pour les MUTATIONS : lève si l'accès n'est pas ouvert.
+ *
+ * Les actions n'ont pas de ctx.db et ne peuvent pas appeler cette fonction ;
+ * elles passent par getAccessStateForProfile.
+ */
 export async function requireAccess(
   ctx: QueryCtx | MutationCtx,
   profile: Doc<"profiles"> | null,

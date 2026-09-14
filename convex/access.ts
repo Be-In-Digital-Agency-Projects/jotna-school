@@ -211,6 +211,88 @@ export async function callerIsAdmin(ctx: QueryCtx): Promise<boolean> {
 }
 
 /**
+ * Nombre maximum de classes lues pour un professeur.
+ *
+ * Le dépôt ne modélise que six niveaux (CI → CM2) et une classe est une
+ * section réelle ("CM1 A"), pas un niveau : un enseignant en porte une ou
+ * deux. 20 couvre largement le cas extrême d'un professeur affecté à toutes
+ * les sections d'une école, sans jamais laisser la lecture grandir avec la
+ * table.
+ */
+const TEACHER_CLASSES_LIMIT = 20;
+
+/**
+ * Nombre maximum d'élèves lus par classe.
+ *
+ * Une classe de primaire sénégalaise compte couramment cinquante à soixante
+ * élèves ; 60 les prend tous. Plafond agrégé : 20 × 60 = 1200 identifiants,
+ * du même ordre que le `.take(200)` sur `studentGuardians` qu'il remplace pour
+ * un professeur d'une ou deux classes.
+ */
+const CLASS_STUDENTS_LIMIT = 60;
+
+/**
+ * Les élèves qu'un professeur enseigne, par ses CLASSES et non par un lien de
+ * tutelle.
+ *
+ * Le lien historique était une ligne `studentGuardians` de relation
+ * "professeur" — qu'aucun flux atteignable ne crée : les deux seules écritures
+ * de cette table codent "parent" en dur, et `profiles.linkChild`, qui
+ * accepterait "professeur", est interne et sans appelant. L'espace professeur
+ * était donc structurellement vide. Le vrai mécanisme est
+ * `schoolClasses.teacherId` : une classe porte un enseignant, les élèves y sont
+ * rattachés par `schoolMemberships` en statut "active".
+ *
+ * Vit ici, et non dans un module neuf, pour trois raisons :
+ *   - c'est l'arête que `callerMayReadStudent` vérifie juste en dessous, prise
+ *     dans l'autre sens (énumérer plutôt que vérifier). Les séparer, c'est
+ *     rouvrir l'écart que cet addendum ferme : une liste et un détail qui ne
+ *     répondent pas la même chose ;
+ *   - `access.ts` n'est pas un fichier de prédicats booléens — `checkAccess`,
+ *     `loadAccessInput` et `requireAccess` y rendent déjà des objets. Son
+ *     contrat réel est « qui a droit à quoi », et cette liste en fait partie ;
+ *   - ses trois appelants sont déjà des clients de ce module (ou le
+ *     deviennent d'un seul import), là où un module neuf imposerait une
+ *     retouche manuelle de `_generated/api.d.ts`.
+ *
+ * Renvoie des identifiants DÉDUPLIQUÉS : rien n'interdit à un élève de porter
+ * deux inscriptions actives, et un même élève compté deux fois dupliquerait
+ * ses bilans dans `reports.listByTeacher`.
+ *
+ * Ne lève jamais et ne juge aucun rôle : le garde de rôle reste chez
+ * l'appelant, qui seul sait ce qu'il rend à un `admin`.
+ */
+export async function studentIdsTaughtBy(
+  ctx: QueryCtx,
+  teacherProfileId: Id<"profiles">,
+): Promise<Id<"profiles">[]> {
+  const classes = await ctx.db
+    .query("schoolClasses")
+    .withIndex("by_teacher", (q) => q.eq("teacherId", teacherProfileId))
+    .take(TEACHER_CLASSES_LIMIT);
+
+  const seen = new Set<string>();
+  const studentIds: Id<"profiles">[] = [];
+
+  for (const schoolClass of classes) {
+    const memberships = await ctx.db
+      .query("schoolMemberships")
+      .withIndex("by_class_status", (q) =>
+        q.eq("schoolClassId", schoolClass._id).eq("status", "active"),
+      )
+      .take(CLASS_STUDENTS_LIMIT);
+
+    for (const membership of memberships) {
+      if (seen.has(membership.studentId)) continue;
+      seen.add(membership.studentId);
+      studentIds.push(membership.studentId);
+    }
+  }
+
+  return studentIds;
+}
+
+/**
  * Vrai si l'appelant a le droit de lire les données de CET élève-là.
  *
  * Garde de LIEN, et non de rôle. Les trois gardes ci-dessus répondent « quelle
@@ -221,18 +303,26 @@ export async function callerIsAdmin(ctx: QueryCtx): Promise<boolean> {
  * l'absence de garde y laisse le faire à qui détient l'identifiant, sans même
  * de compte.
  *
- * Trois façons d'y avoir droit, pas une de plus :
+ * Quatre façons d'y avoir droit, pas une de plus :
  *   - être `admin` — l'écran `app/(admin)/admin/eleves/[id]` voit tout,
  *     comme avant ;
  *   - être cet élève soi-même ;
- *   - porter une ligne `studentGuardians` vers lui.
+ *   - porter une ligne `studentGuardians` vers lui ;
+ *   - enseigner une classe où il est inscrit en "active".
  *
- * AUCUNE relation particulière n'est exigée, et c'est délibéré. Filtrer sur
- * "professeur", comme le font `profiles.getTeacherStudents` et
- * `reports.listByTeacher` qui ÉNUMÈRENT les élèves d'un enseignant, casserait
- * les quatre écrans parents de `reports.listByStudent` : un parent porte la
- * relation "parent", un tuteur légal "tuteur". La question n'est pas à quel
- * titre le lien existe, seulement s'il existe.
+ * La quatrième branche est ce qui rend le détail cohérent avec la liste :
+ * `studentIdsTaughtBy` ci-dessus énumère les élèves d'un professeur par ses
+ * classes, et sans elle ce professeur les verrait en liste pour se faire
+ * refuser leur page de détail — la porte à demi close. Elle prend le chemin
+ * INVERSE de l'énumération, parce qu'il est beaucoup moins cher : depuis
+ * l'élève, son inscription active, puis sa classe, plutôt que toutes les
+ * classes du professeur et tous leurs inscrits.
+ *
+ * La branche `studentGuardians`, elle, n'exige AUCUNE relation particulière,
+ * et c'est délibéré : filtrer sur "professeur" casserait les quatre écrans
+ * parents de `reports.listByStudent` — un parent porte la relation "parent",
+ * un tuteur légal "tuteur". La question n'est pas à quel titre le lien
+ * existe, seulement s'il existe. Elle reste en place telle quelle.
  *
  * Lecture par `by_studentId` et non `by_guardianId` : un élève a quelques
  * tuteurs, un enseignant peut avoir des centaines d'élèves. Le dépôt lit
@@ -264,7 +354,27 @@ export async function callerMayReadStudent(
     .withIndex("by_studentId", (q) => q.eq("studentId", studentId))
     .take(50);
 
-  return links.some((link) => link.guardianId === profile._id);
+  if (links.some((link) => link.guardianId === profile._id)) return true;
+
+  // Le professeur de la classe de cet élève. `.take(4)` et non `.first()` :
+  // rien n'interdit deux inscriptions actives, et `studentIdsTaughtBy`
+  // énumère TOUS les inscrits actifs d'une classe. S'arrêter à la première
+  // inscription rendrait la liste et le détail incohérents dans ce cas —
+  // exactement ce que cette branche existe pour empêcher. Le coût reste
+  // constant, sur le même index et dans le même sens.
+  const memberships = await ctx.db
+    .query("schoolMemberships")
+    .withIndex("by_student_status", (q) =>
+      q.eq("studentId", studentId).eq("status", "active"),
+    )
+    .take(4);
+
+  for (const membership of memberships) {
+    const schoolClass = await ctx.db.get(membership.schoolClassId);
+    if (schoolClass && schoolClass.teacherId === profile._id) return true;
+  }
+
+  return false;
 }
 
 /**

@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { createAccount, getAuthUserId } from "@convex-dev/auth/server";
 import { internal } from "./_generated/api";
 import { decideLinkChild } from "./linkRules";
+import { studentIdsTaughtBy } from "./access";
 
 // ---------------------------------------------------------------------------
 // Queries
@@ -32,8 +33,19 @@ export const getCurrentProfile = query({
 });
 
 /**
- * Get students linked to the current signed-in teacher via studentGuardians
- * with relation === "professeur". Returns [] if not a teacher or unauthenticated.
+ * Les élèves du professeur de la SESSION, par ses classes.
+ *
+ * Résolus par `schoolClasses.teacherId` → `schoolMemberships` actives, et non
+ * plus par un lien `studentGuardians` de relation "professeur" : ce lien-là
+ * n'était créé par aucun flux atteignable, donc cette liste était vide par
+ * construction (voir `access.studentIdsTaughtBy`).
+ *
+ * Le garde de rôle et la forme de retour sont inchangés : les trois écrans
+ * professeur appelants reçoivent exactement les mêmes champs. Un `admin`
+ * traverse le même chemin qu'avant — lister toute la plateforme reste
+ * l'affaire de `students.listStudents`.
+ *
+ * Une requête ne lève jamais : [] si l'appelant n'est ni professeur ni admin.
  */
 export const getTeacherStudents = query({
   args: {},
@@ -48,16 +60,11 @@ export const getTeacherStudents = query({
     if (!profile) return [];
     if (profile.role !== "professeur" && profile.role !== "admin") return [];
 
-    const links = await ctx.db
-      .query("studentGuardians")
-      .withIndex("by_guardianId", (q) => q.eq("guardianId", profile._id))
-      .take(200);
-
-    const teacherLinks = links.filter((l) => l.relation === "professeur");
+    const studentIds = await studentIdsTaughtBy(ctx, profile._id);
 
     const students = await Promise.all(
-      teacherLinks.map(async (link) => {
-        const student = await ctx.db.get(link.studentId);
+      studentIds.map(async (studentId) => {
+        const student = await ctx.db.get(studentId);
         if (!student) return null;
 
         // Count completed topics and exercises

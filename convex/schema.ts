@@ -505,7 +505,12 @@ export default defineSchema({
     teacherId: v.optional(v.id("profiles")),
   })
     .index("by_school", ["schoolId"])
-    .index("by_school_class", ["schoolId", "class"]),
+    .index("by_school_class", ["schoolId", "class"])
+    // « les classes de ce professeur » — l'arête qui relie un enseignant à ses
+    // élèves (classe → schoolMemberships), sans balayer la table. `teacherId`
+    // est optionnel : les classes sans professeur se rangent sous `undefined`
+    // et ne répondent à aucune requête portant un vrai `Id<"profiles">`.
+    .index("by_teacher", ["teacherId"]),
 
   schoolMemberships: defineTable({
     schoolId: v.id("schools"),

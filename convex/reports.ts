@@ -7,7 +7,7 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { callerMayReadStudent } from "./access";
+import { callerMayReadStudent, studentIdsTaughtBy } from "./access";
 
 // ---------------------------------------------------------------------------
 // Public Queries
@@ -63,8 +63,12 @@ export const listByStudent = query({
 });
 
 /**
- * List topic reports for all students linked to the current teacher
- * via studentGuardians with relation === "professeur".
+ * Bilans de tous les élèves du professeur de la SESSION.
+ *
+ * Élèves résolus par ses classes (`access.studentIdsTaughtBy`) et non plus par
+ * un lien `studentGuardians` de relation "professeur", que rien ne crée. Garde
+ * de rôle, tri et forme de retour inchangés : `app/(teacher)/teacher/reports`
+ * et le tableau de bord reçoivent exactement les mêmes champs.
  */
 export const listByTeacher = query({
   args: {},
@@ -79,14 +83,7 @@ export const listByTeacher = query({
     if (!profile) return [];
     if (profile.role !== "professeur" && profile.role !== "admin") return [];
 
-    const links = await ctx.db
-      .query("studentGuardians")
-      .withIndex("by_guardianId", (q) => q.eq("guardianId", profile._id))
-      .take(200);
-
-    const studentIds = links
-      .filter((l) => l.relation === "professeur")
-      .map((l) => l.studentId);
+    const studentIds = await studentIdsTaughtBy(ctx, profile._id);
 
     if (studentIds.length === 0) return [];
 

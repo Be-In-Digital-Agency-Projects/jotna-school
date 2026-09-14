@@ -2,7 +2,12 @@ import { query, mutation, internalQuery, internalMutation } from "./_generated/s
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { internal } from "./_generated/api";
-import { checkAccess, requireAccess, blockedStudent } from "./access";
+import {
+  checkAccess,
+  requireAccess,
+  blockedStudent,
+  studentIdsTaughtBy,
+} from "./access";
 
 /**
  * Compute where the current student should resume in a given topic session.
@@ -415,8 +420,12 @@ export const getAttemptsForExercise = internalQuery({
 });
 
 /**
- * List recent attempts from students linked to the current teacher.
- * Used for teacher dashboard recent activity.
+ * Tentatives récentes des élèves du professeur de la SESSION.
+ *
+ * Alimente l'activité récente du tableau de bord enseignant. Élèves résolus
+ * par ses classes (`access.studentIdsTaughtBy`) et non plus par un lien
+ * `studentGuardians` de relation "professeur", que rien ne crée. Garde de
+ * rôle, `limit` et forme de retour inchangés.
  */
 export const listByTeacherStudents = query({
   args: { limit: v.optional(v.number()) },
@@ -431,14 +440,7 @@ export const listByTeacherStudents = query({
     if (!profile) return [];
     if (profile.role !== "professeur" && profile.role !== "admin") return [];
 
-    const links = await ctx.db
-      .query("studentGuardians")
-      .withIndex("by_guardianId", (q) => q.eq("guardianId", profile._id))
-      .take(200);
-
-    const studentIds = links
-      .filter((l) => l.relation === "professeur")
-      .map((l) => l.studentId);
+    const studentIds = await studentIdsTaughtBy(ctx, profile._id);
 
     if (studentIds.length === 0) return [];
 

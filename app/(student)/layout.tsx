@@ -7,6 +7,7 @@ import { api } from "@/convex/_generated/api";
 import { Home, Award, UserCircle, Star, Flame } from "lucide-react";
 import { UserMenu } from "@/components/ui/user-menu";
 import { Brand } from "@/components/landing/brand";
+import { AccessGate } from "@/components/AccessGate";
 import { MotionConfig } from "framer-motion";
 
 const navLinks = [
@@ -84,7 +85,7 @@ export default function StudentLayout({
             !focusMode ? "pb-24 sm:pb-6" : ""
           }`}
         >
-          {children}
+          <AccessGate>{children}</AccessGate>
         </main>
 
         {/* D5 — bottom tab nav: mobile only. Hidden during focus mode. */}

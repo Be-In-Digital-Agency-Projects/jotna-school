@@ -816,6 +816,14 @@ qu'un intendant est en retard est cruel et commercialement suicidaire.
 > est coupée immédiatement au lieu de disposer de ses 21 jours. C'est le prix de
 > fermer ce trou, et il se paie là-bas.
 >
+> **Et la borne de lecture en fait partie.** `access.ts` cherche l'ancre par
+> `by_subscription` avec un `.take(12)`, sur un modèle qui prévoit trois
+> tranches par abonnement (§8.1) — quatre fois la marge. Si le plan 3 écrivait
+> plus de douze tranches pour un même abonnement, la plus ancienne échue
+> pourrait sortir de la fenêtre, l'ancre remonterait `null`, et l'école serait
+> coupée. Même exigence qu'en §4.5 : une borne ne vaut que par l'invariante qui
+> la garantit, jamais parce qu'elle « devrait suffire ».
+>
 > Sans effet aujourd'hui : `recordSubscription` refuse `past_due` à la saisie
 > (§4.5), c'est le seul écrivain de `subscriptions`, et **rien n'écrit jamais
 > d'`installments`** — le statut est donc inatteignable et l'ancre toujours

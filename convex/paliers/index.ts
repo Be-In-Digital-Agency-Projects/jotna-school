@@ -768,6 +768,30 @@ export const regenerateFailedExercises = action({
     | { ok: true; replacedCount: number; cumulativeRegens: number }
     | { ok: false; reason: string; kidMessage?: string }
   > => {
+    // L'appelant est résolu depuis sa SESSION, jamais depuis les arguments :
+    // `palierAttemptId` désigne une tentative, il ne prouve aucune identité.
+    // Cette action dépense de la génération IA facturée à l'école et réécrit
+    // les exercices de la tentative — le propriétaire de la tentative doit
+    // donc être cet appelant. Une action n'a pas de ctx.db : le profil et le
+    // droit d'accès passent par des requêtes internes.
+    const callerUserId = await getAuthUserId(ctx);
+    if (!callerUserId) {
+      throw new ConvexError({
+        code: "ACCESS_DENIED",
+        reason: "not_authenticated",
+      });
+    }
+    const callerProfile = await ctx.runQuery(
+      internal.paliers.index.getProfileByUserId,
+      { userId: callerUserId },
+    );
+    if (!callerProfile) {
+      throw new ConvexError({
+        code: "ACCESS_DENIED",
+        reason: "not_authenticated",
+      });
+    }
+
     const ctxData = await ctx.runQuery(internal.paliers.index.loadRegenContext, {
       palierAttemptId: args.palierAttemptId,
     });
@@ -777,12 +801,17 @@ export const regenerateFailedExercises = action({
 
     const { attempt, palier, topic, subject, failed } = ctxData;
 
-    // Paywall (spec §5.4) — cette action ne résout aucun profil appelant :
-    // l'élève dont il faut vérifier le droit est le PROPRIÉTAIRE de la
-    // tentative (attempt.userId), pas un appelant résolu par getAuthUserId.
-    // Une action n'a pas de ctx.db, d'où le passage par la requête interne.
+    // Propriété : la tentative doit appartenir à l'appelant. Sans cette garde,
+    // un identifiant de tentative valide suffisait à déclencher une dépense IA
+    // sur le compte d'autrui.
+    if (attempt.userId !== callerProfile._id) {
+      throw new ConvexError({ code: "ACCESS_DENIED", reason: "not_owner" });
+    }
+
+    // Paywall (spec §5.4) — évalué sur le profil de l'appelant, désormais
+    // prouvé propriétaire de la tentative.
     const access = await ctx.runQuery(internal.access.getAccessStateForProfile, {
-      profileId: attempt.userId,
+      profileId: callerProfile._id,
     });
     if (!access.ok) {
       throw new ConvexError({ code: "ACCESS_DENIED", reason: access.reason });

@@ -1,6 +1,41 @@
-import { query, mutation, internalMutation } from "./_generated/server";
+import {
+  query,
+  mutation,
+  internalMutation,
+  type QueryCtx,
+} from "./_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
+
+/**
+ * Vrai si l'appelant est un professeur ou un admin.
+ *
+ * Les quatre lectures ci-dessous rendent le document `exercises` BRUT : il
+ * porte `answerKey`, le tableau complet des `hints` et un `payload` qui
+ * contient la réponse (`correctIndex`, paires correctes…). Ce sont des
+ * lectures d'écrans adultes — admin et professeur. Le chemin élève légitime
+ * passe par `paliers/index.ts`, qui retire la réponse via
+ * `stripAnswerFromExercise` avant de rendre quoi que ce soit.
+ *
+ * Ce n'est pas un contrôle de paywall mais un contrôle de rôle : aucun élève,
+ * payant ou non, ne doit lire ces corrigés. D'où un garde de rôle et non
+ * `blockedStudent` / `requireAccess`.
+ *
+ * Écrit une fois ici plutôt que recopié dans les quatre handlers : quatre
+ * copies de la même règle, c'est quatre endroits où la corriger.
+ */
+async function callerIsStaff(ctx: QueryCtx): Promise<boolean> {
+  const userId = await getAuthUserId(ctx);
+  if (userId === null) return false;
+
+  const profile = await ctx.db
+    .query("profiles")
+    .withIndex("by_userId", (q) => q.eq("userId", userId))
+    .unique();
+  if (!profile) return false;
+
+  return profile.role === "professeur" || profile.role === "admin";
+}
 
 // ---------------------------------------------------------------------------
 // Queries
@@ -14,6 +49,9 @@ export const listByTopic = query({
     ),
   },
   handler: async (ctx, args) => {
+    // Réservé aux adultes : rend le document brut, corrigé compris.
+    if (!(await callerIsStaff(ctx))) return [];
+
     const exercises = await ctx.db
       .query("exercises")
       .withIndex("by_topicId", (q) => q.eq("topicId", args.topicId))
@@ -33,6 +71,9 @@ export const listByTopic = query({
 export const listAllDrafts = query({
   args: {},
   handler: async (ctx) => {
+    // Réservé aux adultes : rend le document brut, corrigé compris.
+    if (!(await callerIsStaff(ctx))) return [];
+
     const exercises = await ctx.db.query("exercises").take(1000);
     return exercises.filter((e) => e.status === "draft");
   },
@@ -41,6 +82,10 @@ export const listAllDrafts = query({
 export const listAllPublished = query({
   args: {},
   handler: async (ctx) => {
+    // Réservé aux adultes : les exercices de palier générés par l'IA sont
+    // insérés "published" (paliers/index.ts), corrigé inclus.
+    if (!(await callerIsStaff(ctx))) return [];
+
     const exercises = await ctx.db.query("exercises").take(1000);
     return exercises.filter((e) => e.status === "published");
   },
@@ -49,6 +94,9 @@ export const listAllPublished = query({
 export const getById = query({
   args: { id: v.id("exercises") },
   handler: async (ctx, args) => {
+    // Réservé aux adultes : rend le document brut, corrigé compris.
+    if (!(await callerIsStaff(ctx))) return null;
+
     return await ctx.db.get(args.id);
   },
 });

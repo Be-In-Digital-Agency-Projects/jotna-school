@@ -160,6 +160,29 @@ async function callerRole(
 }
 
 /**
+ * Vrai si l'appelant a un PROFIL — pas seulement une session ouverte.
+ *
+ * Garde d'IDENTITÉ, le plus faible de la famille : il ne demande aucun rôle
+ * particulier, seulement que l'appelant existe dans `profiles`. Un compte
+ * authentifié sans profil n'a rien à lire non plus, d'où le profil et non le
+ * simple jeton.
+ *
+ * Sa raison d'être : `blockedStudent` rend `false` pour un appelant NON
+ * authentifié, par conception — il ne doit bloquer ni un adulte ni un
+ * visiteur. Seul, il laisse donc lire les catalogues partagés à qui retire
+ * simplement son jeton de session. Les deux gardes se cumulent sans se
+ * remplacer : celui-ci établit l'identité, `blockedStudent` le droit d'accès
+ * (un élève impayé a bien un profil).
+ *
+ * Bâti sur le même `callerRole` que `callerIsStaff` et `callerIsAdmin` :
+ * `profiles.role` est un champ obligatoire, donc un rôle nul signifie
+ * exactement « pas de profil ».
+ */
+export async function callerHasProfile(ctx: QueryCtx): Promise<boolean> {
+  return (await callerRole(ctx)) !== null;
+}
+
+/**
  * Vrai si l'appelant est un professeur ou un admin.
  *
  * Garde de RÔLE, pas garde de paywall : il répond « cette personne fait-elle

@@ -3,7 +3,12 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { internal } from "./_generated/api";
 import { readStudentPreferences, type StudentPreferences } from "./students";
-import { blockedStudent, requireAccess } from "./access";
+import {
+  blockedStudent,
+  callerHasProfile,
+  callerIsAdmin,
+  requireAccess,
+} from "./access";
 
 // ---------------------------------------------------------------------------
 // D10 — Rarity tier normalization. The schema currently widens
@@ -53,12 +58,31 @@ export function getConditionText(condition: string): string {
   }
 }
 
+// ---------------------------------------------------------------------------
+// `list` et `getById` — DEUX gardes qui se cumulent, dans cet ordre.
+//
+// 1. `callerHasProfile` établit l'IDENTITÉ. Nécessaire parce que
+//    `blockedStudent` rend false pour un appelant NON authentifié, par
+//    conception : il ne doit bloquer ni un adulte ni un visiteur. Seul, il se
+//    contournait en retirant simplement le jeton de session.
+// 2. `blockedStudent` établit le DROIT D'ACCÈS (paywall, spec §5.4). Lecture
+//    partagée avec l'administration : il ne bloque qu'un élève sans droit
+//    valide, jamais un adulte.
+//
+// Le premier ne remplace pas le second — un élève impayé a bien un profil.
+// Tous les appelants sont des écrans authentifiés (élève, admin) ; `getById`
+// n'en a aucun.
+//
+// Une requête ne lève jamais : même valeur vide que le chemin nominal.
+// C'est le même couple que `listMyEarned` plus bas, qui établit son identité
+// lui-même puisqu'il a besoin du profil pour travailler.
+// ---------------------------------------------------------------------------
+
 export const list = query({
   args: {},
   handler: async (ctx) => {
-    // Paywall (spec §5.4) — lecture partagée avec l'administration et les
-    // professeurs : blockedStudent(ctx) ne bloque qu'un élève sans droit
-    // valide, jamais un adulte ni un visiteur non authentifié.
+    // Identité puis paywall — voir l'en-tête : les deux se cumulent.
+    if (!(await callerHasProfile(ctx))) return [];
     if (await blockedStudent(ctx)) return [];
 
     const rows = await ctx.db.query("badges").take(100);
@@ -73,9 +97,8 @@ export const list = query({
 export const getById = query({
   args: { id: v.id("badges") },
   handler: async (ctx, args) => {
-    // Paywall (spec §5.4) — lecture partagée avec l'administration et les
-    // professeurs : blockedStudent(ctx) ne bloque qu'un élève sans droit
-    // valide, jamais un adulte ni un visiteur non authentifié.
+    // Identité puis paywall — voir l'en-tête : les deux se cumulent.
+    if (!(await callerHasProfile(ctx))) return null;
     if (await blockedStudent(ctx)) return null;
 
     return await ctx.db.get(args.id);
@@ -141,6 +164,20 @@ export const listMyEarned = query({
 
 // ---------------------------------------------------------------------------
 // Mutations
+//
+// `create`, `update` et `remove` — garde de RÔLE, pas garde de paywall. Ces
+// trois écritures définissent le catalogue de badges lui-même et n'ont rien à
+// voir avec le droit d'accès d'un élève : `blockedStudent` et `requireAccess`
+// jugent un abonnement, pas la qualité de l'appelant. `admin` seul, leur
+// unique appelant étant `app/(admin)/admin/badges/page.tsx`.
+//
+// Une mutation peut lever, et le garde est la toute première instruction :
+// rien n'est lu avant d'avoir établi le rôle. Un seul message pour tous les
+// refus de rôle, comme `profiles.linkChild` — pas de `ConvexError`, que le
+// client réserve au refus de paywall.
+//
+// `markBadgesSeen` plus bas est le cas inverse et garde son `requireAccess` :
+// c'est l'élève lui-même qui écrit, sur son propre profil.
 // ---------------------------------------------------------------------------
 
 export const create = mutation({
@@ -152,6 +189,8 @@ export const create = mutation({
     subjectId: v.optional(v.id("subjects")),
   },
   handler: async (ctx, args) => {
+    if (!(await callerIsAdmin(ctx))) throw new Error("Rôle non autorisé");
+
     return await ctx.db.insert("badges", {
       name: args.name,
       description: args.description,
@@ -172,6 +211,8 @@ export const update = mutation({
     subjectId: v.optional(v.id("subjects")),
   },
   handler: async (ctx, args) => {
+    if (!(await callerIsAdmin(ctx))) throw new Error("Rôle non autorisé");
+
     const { id, ...fields } = args;
     const existing = await ctx.db.get(id);
     if (!existing) {
@@ -190,6 +231,8 @@ export const update = mutation({
 export const remove = mutation({
   args: { id: v.id("badges") },
   handler: async (ctx, args) => {
+    if (!(await callerIsAdmin(ctx))) throw new Error("Rôle non autorisé");
+
     const existing = await ctx.db.get(args.id);
     if (!existing) {
       throw new Error("Badge introuvable");

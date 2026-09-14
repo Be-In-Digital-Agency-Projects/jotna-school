@@ -1,13 +1,30 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
-import { blockedStudent } from "./access";
+import { blockedStudent, callerHasProfile, callerIsAdmin } from "./access";
+
+// ---------------------------------------------------------------------------
+// Queries — DEUX gardes qui se cumulent, dans cet ordre.
+//
+// 1. `callerHasProfile` établit l'IDENTITÉ. Nécessaire parce que
+//    `blockedStudent` rend false pour un appelant NON authentifié, par
+//    conception : il ne doit bloquer ni un adulte ni un visiteur. Seul, il se
+//    contournait en retirant simplement le jeton de session.
+// 2. `blockedStudent` établit le DROIT D'ACCÈS (paywall, spec §5.4). Lecture
+//    partagée avec l'administration et les professeurs : il ne bloque qu'un
+//    élève sans droit valide, jamais un adulte.
+//
+// Le premier ne remplace pas le second — un élève impayé a bien un profil.
+// Tous les appelants sont des écrans authentifiés (élève, parent, professeur,
+// admin), donc exiger un profil n'en casse aucun.
+//
+// Une requête ne lève jamais : même valeur vide que le chemin nominal.
+// ---------------------------------------------------------------------------
 
 export const list = query({
   args: {},
   handler: async (ctx) => {
-    // Paywall (spec §5.4) — lecture partagée avec l'administration et les
-    // professeurs : blockedStudent(ctx) ne bloque qu'un élève sans droit
-    // valide, jamais un adulte ni un visiteur non authentifié.
+    // Identité puis paywall — voir l'en-tête : les deux se cumulent.
+    if (!(await callerHasProfile(ctx))) return [];
     if (await blockedStudent(ctx)) return [];
 
     const subjects = await ctx.db.query("subjects").take(50);
@@ -18,14 +35,28 @@ export const list = query({
 export const getById = query({
   args: { id: v.id("subjects") },
   handler: async (ctx, args) => {
-    // Paywall (spec §5.4) — lecture partagée avec l'administration et les
-    // professeurs : blockedStudent(ctx) ne bloque qu'un élève sans droit
-    // valide, jamais un adulte ni un visiteur non authentifié.
+    // Identité puis paywall — voir l'en-tête : les deux se cumulent.
+    if (!(await callerHasProfile(ctx))) return null;
     if (await blockedStudent(ctx)) return null;
 
     return await ctx.db.get(args.id);
   },
 });
+
+// ---------------------------------------------------------------------------
+// Mutations — garde de RÔLE, pas garde de paywall.
+//
+// Les quatre écritures ci-dessous créent, modifient et suppriment le
+// curriculum lui-même. Elles n'ont rien à voir avec le droit d'accès d'un
+// élève : `blockedStudent` et `requireAccess` jugent un abonnement, pas la
+// qualité de l'appelant. `admin` seul — leurs appelants sont les écrans
+// `app/(admin)/admin/subjects/*`, et `seedDefaults` n'en a aucun.
+//
+// Une mutation peut lever, et le garde est la toute première instruction :
+// rien n'est lu avant d'avoir établi le rôle. Un seul message pour tous les
+// refus de rôle, comme `profiles.linkChild` — pas de `ConvexError`, que le
+// client réserve au refus de paywall.
+// ---------------------------------------------------------------------------
 
 export const create = mutation({
   args: {
@@ -35,6 +66,8 @@ export const create = mutation({
     order: v.number(),
   },
   handler: async (ctx, args) => {
+    if (!(await callerIsAdmin(ctx))) throw new Error("Rôle non autorisé");
+
     return await ctx.db.insert("subjects", {
       name: args.name,
       icon: args.icon,
@@ -53,6 +86,8 @@ export const update = mutation({
     order: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    if (!(await callerIsAdmin(ctx))) throw new Error("Rôle non autorisé");
+
     const { id, ...fields } = args;
     const existing = await ctx.db.get(id);
     if (!existing) {
@@ -72,12 +107,17 @@ export const update = mutation({
 /**
  * Seed default subjects (CE2-CM2 curriculum, francophone context).
  * Idempotent: skips subjects that already exist by name.
- * Can be called from any authenticated user; safe for manual runs via
- * `pnpx convex run subjects:seedDefaults`.
+ *
+ * Réservée à un `admin` : elle n'avait aucun appelant et acceptait n'importe
+ * qui, jeton de session compris — huit insertions dans `subjects` offertes au
+ * réseau public. Un `pnpx convex run subjects:seedDefaults` n'a pas de
+ * session, donc plus de lancement manuel anonyme : il faut une session admin.
  */
 export const seedDefaults = mutation({
   args: {},
   handler: async (ctx) => {
+    if (!(await callerIsAdmin(ctx))) throw new Error("Rôle non autorisé");
+
     const defaults = [
       { name: "Mathématiques", icon: "Calculator", color: "#4f46e5", order: 1 },
       { name: "Français", icon: "Book", color: "#db2777", order: 2 },
@@ -106,6 +146,8 @@ export const seedDefaults = mutation({
 export const remove = mutation({
   args: { id: v.id("subjects") },
   handler: async (ctx, args) => {
+    if (!(await callerIsAdmin(ctx))) throw new Error("Rôle non autorisé");
+
     // Check if any topics reference this subject
     const topics = await ctx.db
       .query("topics")

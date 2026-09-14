@@ -1,13 +1,35 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
-import { blockedStudent } from "./access";
+import {
+  blockedStudent,
+  callerHasProfile,
+  callerIsAdmin,
+  callerIsStaff,
+} from "./access";
+
+// ---------------------------------------------------------------------------
+// Queries — DEUX gardes qui se cumulent, dans cet ordre.
+//
+// 1. `callerHasProfile` établit l'IDENTITÉ. Nécessaire parce que
+//    `blockedStudent` rend false pour un appelant NON authentifié, par
+//    conception : il ne doit bloquer ni un adulte ni un visiteur. Seul, il se
+//    contournait en retirant simplement le jeton de session.
+// 2. `blockedStudent` établit le DROIT D'ACCÈS (paywall, spec §5.4). Lecture
+//    partagée avec l'administration et les professeurs : il ne bloque qu'un
+//    élève sans droit valide, jamais un adulte.
+//
+// Le premier ne remplace pas le second — un élève impayé a bien un profil.
+// Tous les appelants sont des écrans authentifiés (élève, parent, professeur,
+// admin), donc exiger un profil n'en casse aucun.
+//
+// Une requête ne lève jamais : même valeur vide que le chemin nominal.
+// ---------------------------------------------------------------------------
 
 export const listAll = query({
   args: {},
   handler: async (ctx) => {
-    // Paywall (spec §5.4) — lecture partagée avec l'administration et les
-    // professeurs : blockedStudent(ctx) ne bloque qu'un élève sans droit
-    // valide, jamais un adulte ni un visiteur non authentifié.
+    // Identité puis paywall — voir l'en-tête : les deux se cumulent.
+    if (!(await callerHasProfile(ctx))) return [];
     if (await blockedStudent(ctx)) return [];
 
     return await ctx.db.query("topics").take(200);
@@ -17,9 +39,8 @@ export const listAll = query({
 export const listBySubject = query({
   args: { subjectId: v.id("subjects") },
   handler: async (ctx, args) => {
-    // Paywall (spec §5.4) — lecture partagée avec l'administration et les
-    // professeurs : blockedStudent(ctx) ne bloque qu'un élève sans droit
-    // valide, jamais un adulte ni un visiteur non authentifié.
+    // Identité puis paywall — voir l'en-tête : les deux se cumulent.
+    if (!(await callerHasProfile(ctx))) return [];
     if (await blockedStudent(ctx)) return [];
 
     const topics = await ctx.db
@@ -33,14 +54,30 @@ export const listBySubject = query({
 export const getById = query({
   args: { id: v.id("topics") },
   handler: async (ctx, args) => {
-    // Paywall (spec §5.4) — lecture partagée avec l'administration et les
-    // professeurs : blockedStudent(ctx) ne bloque qu'un élève sans droit
-    // valide, jamais un adulte ni un visiteur non authentifié.
+    // Identité puis paywall — voir l'en-tête : les deux se cumulent.
+    if (!(await callerHasProfile(ctx))) return null;
     if (await blockedStudent(ctx)) return null;
 
     return await ctx.db.get(args.id);
   },
 });
+
+// ---------------------------------------------------------------------------
+// Mutations — garde de RÔLE, pas garde de paywall.
+//
+// Les cinq écritures ci-dessous créent, modifient et suppriment le curriculum
+// lui-même. Elles n'ont rien à voir avec le droit d'accès d'un élève :
+// `blockedStudent` et `requireAccess` jugent un abonnement, pas la qualité de
+// l'appelant. `admin` pour les quatre premières, dont les appelants sont les
+// écrans `app/(admin)/admin/subjects/*` ; `removeWithExercises` est la seule
+// exception, appelée par `app/(teacher)/teacher/exercises/page.tsx`, d'où
+// `callerIsStaff` (professeur + admin).
+//
+// Une mutation peut lever, et le garde est la toute première instruction :
+// rien n'est lu avant d'avoir établi le rôle. Un seul message pour tous les
+// refus de rôle, comme `profiles.linkChild` — pas de `ConvexError`, que le
+// client réserve au refus de paywall.
+// ---------------------------------------------------------------------------
 
 export const create = mutation({
   args: {
@@ -50,6 +87,8 @@ export const create = mutation({
     order: v.number(),
   },
   handler: async (ctx, args) => {
+    if (!(await callerIsAdmin(ctx))) throw new Error("Rôle non autorisé");
+
     // Verify subject exists
     const subject = await ctx.db.get(args.subjectId);
     if (!subject) {
@@ -72,6 +111,8 @@ export const update = mutation({
     order: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    if (!(await callerIsAdmin(ctx))) throw new Error("Rôle non autorisé");
+
     const { id, ...fields } = args;
     const existing = await ctx.db.get(id);
     if (!existing) {
@@ -90,6 +131,8 @@ export const update = mutation({
 export const remove = mutation({
   args: { id: v.id("topics") },
   handler: async (ctx, args) => {
+    if (!(await callerIsAdmin(ctx))) throw new Error("Rôle non autorisé");
+
     // Check if any exercises reference this topic
     const exercise = await ctx.db
       .query("exercises")
@@ -109,10 +152,18 @@ export const remove = mutation({
  * attached to it. Used by the teacher space when a thematic folder must be
  * removed (for instance an auto-generated "Général" topic from an early
  * extraction that the teacher wants to clean up).
+ *
+ * `callerIsStaff` et non `callerIsAdmin` : son unique appelant est l'écran
+ * professeur, que restreindre à `admin` casserait. C'était la pire des onze
+ * écritures ouvertes — publique et sans aucune authentification, un simple
+ * `Id<"topics">` suffisait à effacer un chapitre, jusqu'à 500 de ses
+ * exercices, toutes les tentatives des élèves dessus et leur progression.
  */
 export const removeWithExercises = mutation({
   args: { id: v.id("topics") },
   handler: async (ctx, { id }) => {
+    if (!(await callerIsStaff(ctx))) throw new Error("Rôle non autorisé");
+
     const topic = await ctx.db.get(id);
     if (!topic) throw new Error("Thématique introuvable");
 

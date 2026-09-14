@@ -19,6 +19,7 @@ import {
 } from "./_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { Doc, Id } from "./_generated/dataModel";
+import { kidMessages } from "../lib/kidCopy";
 
 // ---------------------------------------------------------------------------
 // Types — match the JSON envelope the model is asked to return.
@@ -198,11 +199,23 @@ export const explainExercise = action({
     // verrou posé dans aiGateway.generate (tâche 4) reste le dernier
     // recours. Une action n'a pas de ctx.db, d'où le passage par la requête
     // interne de la tâche 3.
+    //
+    // Retourne la forme contractuelle (ok:false + kidMessage) plutôt que de
+    // lever (correction ronde 1) : le composant appelant
+    // (components/student/explain-step-by-step.tsx) catch les Error non
+    // gérées et affiche un message de "connexion lente, réessaie" — un
+    // élève bloqué par le paywall réessaierait alors en boucle sans jamais
+    // alerter un adulte. kidMessages.accessNotOpen l'oriente vers son
+    // maître, sans mentionner l'école ni l'abonnement (spec §5.8).
     const access = await ctx.runQuery(internal.access.getAccessStateForProfile, {
       profileId: studentId,
     });
     if (!access.ok) {
-      throw new Error(`ACCESS_DENIED:${access.reason}`);
+      return {
+        ok: false,
+        reason: "ACCESS_DENIED",
+        kidMessage: kidMessages.accessNotOpen,
+      };
     }
 
     // Cache check.

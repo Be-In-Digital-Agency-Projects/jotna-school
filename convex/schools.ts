@@ -13,6 +13,10 @@ import {
 } from "./access";
 import { decideAccess, type AccessReason } from "./accessRules";
 import {
+  decideActivation,
+  type ActivationDenyReason,
+} from "./subscriptionRules";
+import {
   PRICING_SCALE,
   quoteSeatAmendment,
   quoteSubscription,
@@ -187,14 +191,17 @@ const classValidator = v.union(
 
 /**
  * Les SIX statuts du schéma, alors que `recordSubscription` n'en accepte que
- * quatre — et c'est délibéré.
+ * DEUX — et c'est délibéré.
  *
- * Un validateur à quatre littéraux refuserait bien `past_due` et `expired`,
- * mais par une erreur de validation générique. Ces deux-là ne sont pas des
- * valeurs invalides : ce sont des statuts valides qu'une PERSONNE ne pose pas.
- * L'administrateur qui les choisit a besoin de l'apprendre, pas d'un message de
- * type. Le refus vit donc dans le handler, avec sa raison ; le validateur reste
- * la forme du champ, et le handler reste le seul juge.
+ * Un validateur à deux littéraux refuserait bien les quatre autres, mais par
+ * une erreur de validation générique. Ce ne sont pas des valeurs invalides :
+ * ce sont des statuts valides qu'une PERSONNE ne pose pas, chacun pour une
+ * raison différente — `past_due` et `expired` appartiennent à une machine,
+ * `cancelled` dit la fin d'un contrat que rien ne sait prononcer, et `draft`
+ * fabriquerait une ligne que rien ne pourrait plus faire avancer. Celui qui
+ * les choisit a besoin de l'apprendre, pas d'un message de type. Le refus vit
+ * donc dans le handler, avec sa raison ; le validateur reste la forme du
+ * champ, et le handler reste le seul juge.
  */
 const subscriptionStatusValidator = v.union(
   v.literal("draft"),
@@ -693,6 +700,18 @@ type ContractSummary = {
   totalFcfa: number;
   /** Tarif effectif moyen, affichage seul — jamais remultiplié (spec §7.2). */
   pricePerSeatFcfa: number;
+  /**
+   * Vrai quand ce contrat attend d'être activé ET peut l'être aujourd'hui.
+   *
+   * Décidé ICI, par `subscriptionRules.decideActivation` — la fonction même
+   * qu'exécute `activateSubscription` — et non recalculé par l'écran, pour la
+   * raison qui vaut déjà pour `AmendableContract.hasStarted` : l'horloge du
+   * navigateur est figée au montage et répondrait autrement que le serveur au
+   * jour près de l'entrée en vigueur. Un bouton qui s'affiche quand la
+   * mutation refuserait, ou qui manque quand elle accepterait, serait un
+   * mensonge d'écran sur le seul geste qui ouvre l'accès d'une école.
+   */
+  canActivate: boolean;
 };
 
 /**
@@ -781,7 +800,10 @@ type EnrollmentOutlook = {
  * requête séparée : cette fonction lit DÉJÀ ce document-là, et deux requêtes
  * pourraient, entre deux enregistrements, montrer un contrat qui n'est pas
  * celui sur lequel le verdict porte — l'incohérence même contre laquelle
- * `currentSchoolSubscription` existe.
+ * `currentSchoolSubscription` existe. Le contrat porte `canActivate`, décidé
+ * par la règle qu'exécute `activateSubscription` : c'est le même document, le
+ * même instant et la même fonction qui décident de montrer le bouton et de
+ * l'honorer.
  *
  * Rend ENFIN le contrat AMENDABLE (`amendable`), pour la même raison portée à
  * l'argent : l'écran calcule l'aperçu d'un avenant, `schools.amendSeats` le
@@ -862,6 +884,15 @@ export const getEnrollmentOutlook = query({
             status: current.status,
             totalFcfa: current.totalFcfa,
             pricePerSeatFcfa: current.pricePerSeatFcfa,
+            // Le MÊME `now` que le verdict d'accès et que la sélection du
+            // contrat : l'écran ne peut pas proposer d'activer un contrat que
+            // la mutation jugerait non commencé sur un autre instant.
+            canActivate: decideActivation({
+              status: current.status,
+              startsAt: current.startsAt,
+              endsAt: current.endsAt,
+              now,
+            }).ok,
           }
         : null,
       amendable: amendable
@@ -1079,7 +1110,7 @@ export const createSchool = mutation({
  * doit lire le nombre payé, sans quoi l'école paierait des sièges qu'elle ne
  * pourrait pas occuper.
  *
- * SIX REFUS, et la raison de chacun :
+ * SEPT REFUS, et la raison de chacun :
  *
  *   - sièges : entier strictement positif. `readSeatState` passe ce nombre à
  *     `.take()`, qui LÈVE sur un argument non entier — un contrat à 12,5
@@ -1093,15 +1124,29 @@ export const createSchool = mutation({
  *     dans `decideAccess` — l'écrire en base créerait une seconde vérité sur
  *     la même question.
  *   - `cancelled` : résilier n'est pas enregistrer. Aucune mutation ne sait
- *     faire passer un contrat existant à « résilié » — cette table ne connaît
- *     que l'insertion et l'avenant de sièges d'`amendSeats`, qui ne touche
- *     JAMAIS au statut — donc une ligne saisie résiliée d'emblée ne décrit
- *     aucun contrat qui aurait eu lieu. Elle coûterait cher : elle n'ouvre
- *     aucun accès, mais `access.currentSchoolSubscription` la retiendrait
- *     comme contrat COURANT dès sa date de début, puisque cette sélection ne
- *     compare que les `startsAt` — et couperait une école qu'un contrat actif
- *     couvre. La résiliation viendra avec la facturation, à qui appartient la
- *     question du montant déjà facturé.
+ *     faire passer un contrat existant à « résilié » — les deux `patch` de la
+ *     table sont l'avenant de sièges d'`amendSeats`, qui ne touche JAMAIS au
+ *     statut, et `activateSubscription`, qui n'écrit que `active` — donc une
+ *     ligne saisie résiliée d'emblée ne décrit aucun contrat qui aurait eu
+ *     lieu. Elle coûterait cher : elle n'ouvre aucun accès, mais
+ *     `access.currentSchoolSubscription` la retiendrait comme contrat COURANT
+ *     dès sa date de début, puisque cette sélection ne compare que les
+ *     `startsAt` — et couperait une école qu'un contrat actif couvre. La
+ *     résiliation viendra avec la facturation, à qui appartient la question du
+ *     montant déjà facturé.
+ *   - `draft` : le REFUS LE PLUS RÉCENT, et celui qui referme un piège.
+ *     « Brouillon » n'ouvre aucun accès, comme « en attente de paiement », et
+ *     les deux se ressemblaient assez pour qu'on laisse le choix. Mais
+ *     `activateSubscription` ne fait avancer qu'un contrat « en attente de
+ *     paiement » — activer, c'est ouvrir l'accès de toute une école, et un
+ *     brouillon n'atteste d'aucun accord. Une ligne `draft` serait donc
+ *     IMMOBILE : rien ne la fait avancer, rien ne la supprime, rien ne la
+ *     redate, et elle OCCUPE sa période — le contrôle de chevauchement
+ *     ci-dessous ne regarde pas le statut, donc le vrai contrat de ces dates
+ *     serait refusé pour toujours. Une école à qui un brouillon aurait été
+ *     saisi par erreur n'aurait plus jamais d'accès sur cette période. Le
+ *     refuser à la saisie est ce qui rend vraie la propriété dont tout le
+ *     reste dépend : TOUT CONTRAT ENREGISTRABLE PEUT AVANCER.
  *   - `active` daté du futur : voir juste en dessous.
  *   - CHEVAUCHEMENT d'une période déjà contractée : voir le refus lui-même,
  *     c'est celui dont dépend la justesse de la lecture du paywall.
@@ -1126,18 +1171,22 @@ export const createSchool = mutation({
  * n'a pas encore commencé à payer. `access.currentSchoolSubscription` ferme la
  * moitié du trou en ne se repliant que sur les contrats déjà commencés ; ce
  * refus ferme l'autre moitié, en garantissant qu'un contrat à venir ne porte
- * jamais qu'un statut qui refuse.
+ * jamais qu'un statut qui refuse. Le contrat signé d'avance n'est plus pour
+ * autant une impasse : `activateSubscription`, plus bas, l'active le jour où
+ * il commence — c'est exactement ce que ce refus-ci demande d'attendre.
  *
  * UN RENOUVELLEMENT EST UNE LIGNE NEUVE, et cette mutation n'écrit que des
  * lignes neuves : le schéma indexe par `startsAt`, l'historique des contrats a
  * de la valeur, et déplacer les dates de la ligne en cours ferait disparaître
  * le contrat sous les élèves qu'il couvre.
  *
- * LE SEUL `PATCH` DE LA TABLE est celui d'`amendSeats`, juste en dessous, et
- * il est ÉTROIT par construction : il fait grossir un contrat déjà signé —
- * celui en vigueur, ou à défaut le prochain à commencer —
- * `seatsPurchased`, `totalFcfa` et le tarif moyen d'affichage qui s'en déduit
- * — sans jamais toucher au statut ni aux dates. Les deux propriétés dont ce
+ * LES DEUX `PATCH` DE LA TABLE sont étroits par construction, et c'est d'eux
+ * que ce refus-ci dépend. `amendSeats`, juste en dessous, fait grossir un
+ * contrat déjà signé — celui en vigueur, ou à défaut le prochain à commencer —
+ * `seatsPurchased`, `totalFcfa` et le tarif moyen d'affichage qui s'en déduit,
+ * sans jamais toucher au statut ni aux dates. `activateSubscription` n'écrit
+ * QUE `status`, et une seule valeur : `active`, depuis `pending_payment`, sur
+ * un contrat qui a commencé et n'est pas fini. Les deux propriétés dont ce
  * refus-ci dépend restent donc entières : une période n'est jamais déplacée,
  * donc aucun chevauchement ne peut naître après coup, et aucune ligne ne peut
  * DEVENIR `cancelled`.
@@ -1174,7 +1223,7 @@ export const recordSubscription = mutation({
         "Ce statut est posé par une machine, pas par une personne : " +
           "« impayé » viendra du suivi des tranches, et « échu » se déduit de " +
           "la date de fin du contrat à chaque lecture. Enregistrez ce contrat " +
-          "en brouillon, en attente de paiement ou actif.",
+          "en attente de paiement, ou actif s'il a déjà commencé.",
       );
     }
 
@@ -1187,7 +1236,27 @@ export const recordSubscription = mutation({
           "l'école à sa date de début, coupant les élèves qu'un contrat actif " +
           "couvre encore. La résiliation viendra avec la facturation, qui " +
           "devra dire ce qu'elle fait du montant déjà facturé. Enregistrez ce " +
-          "contrat en brouillon, en attente de paiement ou actif.",
+          "contrat en attente de paiement, ou actif s'il a déjà commencé.",
+      );
+    }
+
+    // `draft` : le refus qui garantit qu'aucune ligne ne reste IMMOBILE. Voir
+    // l'en-tête — un brouillon ne peut ni être activé (il n'atteste d'aucun
+    // accord), ni supprimé, ni redaté, et il occupe sa période contre tout
+    // autre contrat.
+    if (args.status === "draft") {
+      throw new Error(
+        "« Brouillon » n'est plus enregistrable, et c'est pour protéger " +
+          "l'école : un contrat en brouillon serait IMMOBILE. Il n'ouvre aucun " +
+          "accès, rien ne sait le faire avancer — l'activation ne part que " +
+          "d'un contrat « en attente de paiement », parce qu'activer ouvre " +
+          "l'application à tous les élèves inscrits et qu'un brouillon " +
+          "n'atteste d'aucun accord — et aucune mutation ne supprime ni ne " +
+          "redate une ligne d'abonnement. Il OCCUPERAIT pourtant sa période : " +
+          "le vrai contrat de ces dates serait ensuite refusé pour " +
+          "chevauchement, et l'école n'aurait jamais d'accès sur cette " +
+          "année-là. Enregistrez ce contrat en attente de paiement dès qu'un " +
+          "accord existe : il pourra être activé le jour où il commencera.",
       );
     }
 
@@ -1199,13 +1268,10 @@ export const recordSubscription = mutation({
           `celui-ci débute le ${formatDay(args.startsAt)}. Marqué actif dès ` +
           "aujourd'hui, il ouvrirait l'accès pour une année qui n'a pas " +
           "commencé — le paywall ne juge que la date de FIN. Enregistrez-le " +
-          "en brouillon ou en attente de paiement — MAIS SACHEZ QUE RIEN NE " +
-          "SAIT ENCORE L'ACTIVER ENSUITE : aucune mutation ne modifie le " +
-          "statut d'un contrat, et le réenregistrer actif serait refusé pour " +
-          "chevauchement avec celui-ci. Tant que la facturation n'existe pas, " +
-          "un contrat n'ouvre l'accès que s'il est enregistré ACTIF une fois " +
-          "commencé. Enregistrez-le à sa date de début, ou acceptez qu'il " +
-          "reste une réservation sans accès.",
+          "en attente de paiement : le contrat est réservé, sa période est " +
+          `tenue, et le ${formatDay(args.startsAt)} le bouton « Activer ce ` +
+          "contrat » apparaîtra sur la fiche de l'école. C'est lui qui " +
+          "ouvrira l'accès, le jour où le contrat commence et pas avant.",
       );
     }
 
@@ -1239,12 +1305,14 @@ export const recordSubscription = mutation({
     // tant qu'il dure, puis `expired` — pendant que le contrat actif la
     // couvre. Cette exemption n'aurait racheté qu'un scénario IMPOSSIBLE :
     // « recontracter une période résiliée » suppose qu'une ligne puisse
-    // DEVENIR résiliée. Or la table n'a que deux écrivains : l'insertion
-    // ci-dessous, qui refuse `cancelled` à la saisie, et le `patch`
-    // d'`amendSeats`, qui n'écrit ni le statut ni les dates. Aucun chemin ne
-    // fait donc passer un contrat existant à « résilié », ni ne déplace une
-    // période après coup. L'invariant est entier : les contrats d'une école
-    // sont disjoints, quel que soit leur statut.
+    // DEVENIR résiliée. Or la table n'a que trois écrivains : l'insertion
+    // ci-dessous, qui refuse `cancelled` à la saisie ; le `patch`
+    // d'`amendSeats`, qui n'écrit ni le statut ni les dates ; et celui
+    // d'`activateSubscription`, qui n'écrit que le statut et une seule valeur,
+    // `active`. Aucun chemin ne fait donc passer un contrat existant à
+    // « résilié », ni ne déplace une période après coup. L'invariant est
+    // entier : les contrats d'une école sont disjoints, quel que soit leur
+    // statut.
     //
     // UN SEUL DOCUMENT LU, ET LE CONTRÔLE EST EXACT — c'est cet invariant qui
     // le rend exact, pas la taille de la lecture. Le candidat est la ligne de
@@ -1263,8 +1331,10 @@ export const recordSubscription = mutation({
     // intercalées en évinçait le vrai conflit.
     //
     // POUR LE PLAN DE FACTURATION — le jour où une vraie résiliation existera
-    // (un `patch` du STATUT d'un contrat en cours vers `cancelled`, que celui
-    // d'`amendSeats` s'interdit précisément pour ne pas l'ouvrir), cet
+    // (un `patch` du STATUT d'un contrat en cours vers `cancelled`, que les
+    // deux `patch` d'aujourd'hui s'interdisent précisément pour ne pas
+    // l'ouvrir : l'un n'écrit pas le statut, l'autre n'en écrit qu'`active`),
+    // cet
     // invariant changera de NATURE : une période résiliée devra redevenir
     // contractable, donc les lignes `cancelled` cesseront de compter ici, et
     // la disjointness ne vaudra plus que pour les autres. DEUX choses devront
@@ -1401,11 +1471,12 @@ export const recordSubscription = mutation({
  *     Un avenant ne peut pas créer de chevauchement : il ne déplace aucune
  *     borne de période. La sélection en une lecture reste exacte, et le
  *     contrôle de chevauchement de `recordSubscription` garde sa preuve ;
- *   - LE STATUT NE BOUGE PAS, donc AUCUNE LIGNE NE PEUT DEVENIR `cancelled`.
- *     Deux raisonnements de cette branche en dépendent : le refus de
- *     `cancelled` à la saisie (§4.5) et la branche `past_due` de
- *     `decideAccess` (§8.5). Une ligne `subscriptions` change désormais, mais
- *     jamais de STATUT.
+ *   - LE STATUT NE BOUGE PAS ICI, et il ne bouge ailleurs que d'UNE façon :
+ *     `activateSubscription` écrit `active`, depuis `pending_payment`, sur un
+ *     contrat commencé et non fini. AUCUNE LIGNE NE PEUT DONC DEVENIR
+ *     `cancelled`, ni `past_due`. Deux raisonnements de cette branche en
+ *     dépendent : le refus de `cancelled` à la saisie (§4.5) et la branche
+ *     `past_due` de `decideAccess` (§8.5).
  *
  * LE PRIX N'EST PAS UN ARGUMENT, comme dans `recordSubscription` : il se
  * calcule par `pricing.quoteSeatAmendment`, module pur, à partir des seuls
@@ -1596,6 +1667,226 @@ export const amendSeats = mutation({
       amountFcfa: amendment.amountFcfa,
       totalFcfa: amendment.totalFcfa,
     };
+  },
+});
+
+/**
+ * Les phrases des refus d'activation — les motifs viennent de la RÈGLE
+ * (`subscriptionRules.decideActivation`), les mots sont ici.
+ *
+ * Même découpage que `decideAccess` et `lib/accessCopy.ts` : une fonction pure
+ * décide, un appelant met les phrases. Chaque motif appelle une conduite
+ * différente, et aucun ne conseille quelque chose d'impossible — c'est la
+ * faute que cette branche a déjà eu à corriger une fois, quand un refus
+ * conseillait un réenregistrement que le contrôle de chevauchement refusait à
+ * son tour.
+ */
+function activationRefusal(
+  reason: ActivationDenyReason,
+  contract: Doc<"subscriptions">,
+): string {
+  switch (reason) {
+    case "already_active":
+      return (
+        "Ce contrat est déjà actif : il n'y a rien à activer. Si les élèves " +
+        "n'ont pas l'accès, la cause est ailleurs — la fiche de l'école la " +
+        "nomme sous le contrat."
+      );
+
+    case "status_draft":
+      return (
+        "Ce contrat est un BROUILLON, et rien ne sait le faire avancer : " +
+        "l'activation ne part que d'un contrat « en attente de paiement », " +
+        "parce qu'elle ouvre l'application à tous les élèves inscrits et " +
+        "qu'un brouillon n'atteste d'aucun accord. Enregistrer un brouillon " +
+        "n'est d'ailleurs plus possible, précisément pour qu'aucune ligne ne " +
+        "reste immobile : celle-ci est antérieure à ce refus, ou vient " +
+        "d'ailleurs. En l'état elle ne peut ni s'activer, ni changer de " +
+        "dates, ni disparaître, et elle occupe sa période — le sort d'un " +
+        "devis appartient au plan de facturation."
+      );
+
+    case "status_past_due":
+      return (
+        "Ce contrat est marqué impayé : une activation ne solde aucune " +
+        "tranche. Ce statut-là est posé, et levé, par le suivi des tranches, " +
+        "jamais à la main — et l'accès des élèves y suit le délai de grâce, " +
+        "pas un bouton."
+      );
+
+    case "status_expired":
+      return (
+        "Ce contrat porte le statut « échu » : l'activer ne rouvrirait rien, " +
+        "le paywall jugeant l'expiration sur la date de fin. Enregistrez un " +
+        "contrat NEUF pour la période à venir."
+      );
+
+    case "status_cancelled":
+      return (
+        "Ce contrat est résilié : l'activer ne le ferait pas revivre, et ce " +
+        "qu'il advient du montant déjà facturé appartient à la facturation. " +
+        "Enregistrez un contrat NEUF pour la période à venir."
+      );
+
+    case "not_started":
+      return (
+        `Ce contrat ne commence que le ${formatDay(contract.startsAt)} : ` +
+        "l'activer aujourd'hui ouvrirait l'accès pour une période que " +
+        "l'école n'a pas encore commencée — le paywall ne juge que la date " +
+        "de FIN, jamais celle de début. Revenez le " +
+        `${formatDay(contract.startsAt)} : le bouton d'activation ` +
+        "apparaîtra sur cette fiche ce jour-là."
+      );
+
+    case "period_over":
+      return (
+        "Le dernier contrat commencé de cette école s'est achevé le " +
+        `${formatDay(contract.endsAt)} : l'activer n'ouvrirait aucun accès, ` +
+        "le paywall jugeant l'expiration sur la date de fin. Si un contrat a " +
+        "déjà été signé pour la suite, il s'activera à SA date de début ; " +
+        "sinon, enregistrez un contrat neuf."
+      );
+  }
+}
+
+/**
+ * ACTIVER un contrat — la seule écriture du dépôt qui change `status`.
+ *
+ * Une école qui signe son année en juillet enregistre son contrat « en attente
+ * de paiement » : `recordSubscription` refuse `active` sur un contrat qui n'a
+ * pas commencé, à raison — `decideAccess` ne lit jamais `startsAt`, donc la
+ * ligne ouvrirait l'accès dès sa saisie. Restait à savoir qui l'activerait le
+ * jour venu. Personne, jusqu'ici : aucune mutation n'écrivait `status`, et
+ * réenregistrer le contrat en actif était refusé pour chevauchement avec
+ * lui-même. L'école n'avait jamais l'accès de l'année qu'elle avait payée.
+ * C'est ce trou-là, et rien d'autre, que cette mutation ferme.
+ *
+ * L'ÉTROITESSE EST CE QUI AUTORISE CETTE MUTATION À EXISTER. C'est le PREMIER
+ * `patch` du dépôt qui écrit `subscriptions.status`, et deux raisonnements de
+ * cette branche reposaient sur le fait qu'il n'y en avait aucun :
+ *
+ *   - le REFUS DE `cancelled` À LA SAISIE (spec §4.5), dont toute la preuve
+ *     est « aucune ligne ne peut DEVENIR résiliée, puisque rien ne patche le
+ *     statut » — c'est lui qui garantit que les contrats d'une école restent
+ *     disjoints quel que soit leur statut, donc que la lecture en UN document
+ *     du paywall est exacte ;
+ *   - la BRANCHE `past_due` de `decideAccess` (spec §8.5), qui tient un
+ *     `past_due` sans tranche échue pour une incohérence de données, au motif
+ *     que ce statut est posé par une machine — celle qui marque la tranche.
+ *
+ * Les deux survivent parce que la transition est enfermée :
+ *
+ *   - STATUT DE DÉPART : `pending_payment`, et lui seul. Pas `draft` :
+ *     « brouillon » veut dire non conclu, et activer ouvre l'accès de toute
+ *     une école sans que rien ne sache le refermer. `recordSubscription` ne
+ *     l'accepte d'ailleurs plus à la saisie, pour qu'aucune ligne ne reste
+ *     immobile — les deux décisions vont ensemble ;
+ *   - STATUT D'ARRIVÉE : `active`, littéral dans le code. Jamais reçu en
+ *     argument : un statut d'arrivée paramétrable serait exactement le `patch`
+ *     générique que les deux raisonnements ci-dessus interdisent ;
+ *   - PÉRIODE : `startsAt <= now < endsAt`. Un contrat à venir activé
+ *     d'avance rouvrirait le trou que `recordSubscription` ferme ; un contrat
+ *     échu n'ouvrirait rien et laisserait en base un « actif » que la lecture
+ *     suivante contredit ;
+ *   - CHAMPS ÉCRITS : `status`, et lui seul. Ni les dates — la disjointness de
+ *     §4.5 reste donc intacte, aucune borne de période ne bougeant — ni les
+ *     sièges, ni les montants : activer n'est pas vendre.
+ *
+ * La règle elle-même vit dans `convex/subscriptionRules.ts`, module PUR et
+ * testé : c'est le seul endroit du dépôt où cette étroitesse est vérifiable,
+ * le reste vivant dans une mutation que le repo n'a pas de quoi appeler en
+ * test. L'écran lit la même règle par `getEnrollmentOutlook.contract
+ * .canActivate`, donc le bouton s'affiche exactement quand la mutation
+ * accepte.
+ *
+ * QUEL CONTRAT — celui qui couvre `now`, et l'école n'en a qu'un : c'est la
+ * disjointness. `access.currentSchoolSubscription` le rend déjà — le même
+ * helper que le paywall, que le plafond de sièges et que l'avenant — et cette
+ * mutation n'écrit pas une seconde lecture qui lui ressemblerait : deux
+ * sélections divergentes activeraient un autre contrat que celui dont l'écran
+ * montre les dates. Quand le contrat rendu ne couvre pas `now` — il est échu,
+ * ou l'école n'a que des contrats à venir — il n'y a rien à activer, et les
+ * deux refus de période le disent.
+ *
+ * CE QUE ÇA OUVRE, ET QUI EST SANS RETOUR : tous les élèves inscrits de
+ * l'école obtiennent l'application, d'un coup. Rien ne DÉSACTIVE un contrat —
+ * aucune mutation ne fait redescendre un statut, et c'est voulu : couper une
+ * école est une décision commerciale qui appartient à la facturation, avec la
+ * question du montant déjà facturé. L'écran doit donc le dire avant le clic,
+ * et il le dit.
+ *
+ * LA TRACE — une ligne `subscriptionActivations` dans la même transaction. Un
+ * `patch` écrase : sans elle, plus rien ne dirait qui a ouvert l'accès de
+ * cette école, ni quand. Mêmes principes que `schoolMembershipEvents` et
+ * `subscriptionAmendments` : l'auteur copié et jamais relu pour autoriser,
+ * `at` qui date l'ACTE.
+ *
+ * DEUX ACTIVATIONS CONCURRENTES ne produisent pas deux lignes de journal. Une
+ * mutation Convex est une transaction sérialisable : la seconde voit son
+ * ensemble de lecture invalidé, rejoue sur la ligne déjà activée, et se heurte
+ * au refus « déjà actif ». Le `patch` est idempotent, le journal ne l'est pas,
+ * et c'est le rejeu qui le garde exact.
+ */
+export const activateSubscription = mutation({
+  args: { schoolId: v.id("schools") },
+  handler: async (ctx, args) => {
+    // `callerAdminProfile` et non `callerIsAdmin` : cette mutation NOMME celui
+    // qui ouvre l'accès d'une école, comme l'avenant et les trois actes sur
+    // l'inscription d'un élève. Un seul appel sert de garde et de source de
+    // l'auteur.
+    const actor = await callerAdminProfile(ctx);
+    if (!actor) throw new Error("Rôle non autorisé");
+
+    const school = await ctx.db.get(args.schoolId);
+    if (!school) throw new Error("École introuvable");
+
+    // Un seul `now` pour les TROIS usages : choisir le contrat, juger qu'il a
+    // commencé et n'est pas fini, dater l'acte et sa trace.
+    const now = Date.now();
+
+    const current = await currentSchoolSubscription(ctx, args.schoolId, now);
+    if (current === null) {
+      throw new Error(
+        "Cette école n'a aucun contrat : il n'y a rien à activer. " +
+          "Enregistrez d'abord un contrat — il s'activera le jour où il " +
+          "commencera, ou tout de suite s'il a déjà commencé.",
+      );
+    }
+
+    const decision = decideActivation({
+      status: current.status,
+      startsAt: current.startsAt,
+      endsAt: current.endsAt,
+      now,
+    });
+    if (!decision.ok) {
+      throw new Error(activationRefusal(decision.reason, current));
+    }
+
+    // LE `PATCH` — un champ, et aucun autre. Ni les dates, ni les sièges, ni
+    // les montants : voir l'en-tête, c'est ce qui préserve la disjointness de
+    // §4.5 et la propriété « aucune ligne ne devient `cancelled` ni
+    // `past_due` ». Le statut d'arrivée est un LITTÉRAL, jamais un argument.
+    await ctx.db.patch(current._id, { status: "active" });
+
+    // `decision.from` et non `current.status` : la ligne de trace recopie ce
+    // que la RÈGLE a établi, et le schéma n'accepte que cette valeur-là. Un
+    // élargissement de la transition ne pourra donc pas laisser le journal
+    // derrière lui — il ne compilera pas.
+    await ctx.db.insert("subscriptionActivations", {
+      subscriptionId: current._id,
+      schoolId: args.schoolId,
+      statusBefore: decision.from,
+      actorProfileId: actor._id,
+      at: now,
+    });
+
+    // `null`, comme `releaseStudent` — l'autre acte qui patche et journalise
+    // sans rien avoir à rendre. L'écran n'a pas besoin d'une réponse : le
+    // verdict de `getEnrollmentOutlook` est réactif, donc la fiche repasse
+    // d'elle-même en « Actif » et le bouton disparaît. Une valeur de retour
+    // que personne ne lit finirait par être lue de travers.
+    return null;
   },
 });
 

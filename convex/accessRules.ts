@@ -100,6 +100,12 @@ export function decideAccess(input: AccessInput): AccessState {
       // paywall ne doit pas accorder un accès illimité sur des données
       // incohérentes.
       //
+      // Ce raisonnement tient MOT POUR MOT depuis que
+      // `schools.activateSubscription` existe : une personne écrit désormais
+      // `status`, mais elle n'écrit que `active`, et seulement depuis
+      // `pending_payment` (`convex/subscriptionRules.ts`). Aucune saisie
+      // humaine ne pose `past_due`, ici comme à l'enregistrement.
+      //
       // INVARIANTE QUE LE PLAN 3 DOIT TENIR — le cron qui fera basculer un
       // abonnement en `past_due` doit, DANS LA MÊME TRANSACTION, créer ou
       // marquer la tranche échue qui ancre la grâce. S'il pose le statut sans
@@ -114,6 +120,16 @@ export function decideAccess(input: AccessInput): AccessState {
         : { ok: false, reason: "past_due" };
     }
 
+    // `draft` est INATTEIGNABLE PAR LA SAISIE depuis que
+    // `schools.recordSubscription` ne l'accepte plus : rien dans le dépôt
+    // n'écrit cette valeur, ni à l'insertion ni par `patch`. La branche reste
+    // quand même, et ce n'est pas l'oubli d'un flux mort — c'est une défense
+    // sur une valeur que le SCHÉMA autorise toujours, parce qu'un flux de
+    // devis pourrait en créer un jour. Sans elle, la fonction ne compilerait
+    // pas (le `switch` est exhaustif), et la supprimer exigerait de retirer
+    // `draft` du schéma, ce qui n'est pas additif. Un brouillon n'ouvre aucun
+    // accès, et il est dit avec le même motif que « en attente de paiement » :
+    // pour l'élève, les deux veulent dire « pas encore payé ».
     case "draft":
     case "pending_payment":
       return { ok: false, reason: "pending_payment" };

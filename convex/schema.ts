@@ -649,6 +649,16 @@ export default defineSchema({
     totalFcfa: v.number(), // fait foi pour la facturation
     startsAt: v.number(),
     endsAt: v.number(),
+    // SIX valeurs au schéma, DEUX que le dépôt sait écrire aujourd'hui.
+    // `schools.recordSubscription` n'accepte à la saisie que
+    // `pending_payment` et `active` (ce dernier seulement sur un contrat déjà
+    // commencé), et `schools.activateSubscription` est le seul `patch` du
+    // statut : `pending_payment` → `active`, sur un contrat commencé et non
+    // fini. Les quatre autres restent des valeurs valides que rien n'écrit —
+    // `draft` attend un flux de devis, `past_due` le suivi des tranches,
+    // `expired` se déduit de `endsAt` à la lecture, `cancelled` une
+    // résiliation qui n'existe pas. Le validateur est la FORME du champ ; les
+    // refus vivent dans les handlers, avec leur raison.
     status: v.union(
       v.literal("draft"),
       v.literal("pending_payment"),
@@ -667,8 +677,10 @@ export default defineSchema({
   // Journal des AVENANTS de sièges — qui a agrandi quel contrat, de combien,
   // et pour quel montant.
   //
-  // POURQUOI IL EXISTE. `schools.amendSeats` est la seule écriture du dépôt qui
-  // MODIFIE une ligne `subscriptions` : elle augmente `seatsPurchased` et
+  // POURQUOI IL EXISTE. `schools.amendSeats` est l'une des deux écritures du
+  // dépôt qui MODIFIENT une ligne `subscriptions` — l'autre étant
+  // `schools.activateSubscription`, qui n'écrit que le statut et a son propre
+  // journal, juste en dessous. Elle augmente `seatsPurchased` et
   // `totalFcfa` d'un contrat déjà signé — celui en vigueur, ou à défaut le
   // prochain à commencer. Un `patch` écrase — sans ce journal, plus rien ne
   // dirait ce qui avait été signé, ni ce que l'école doit vraiment payer en
@@ -704,6 +716,55 @@ export default defineSchema({
     // Ce qui a été AJOUTÉ au total du contrat, au prorata de la période
     // restante (`pricing.quoteSeatAmendment`) — jamais le total du contrat.
     amountFcfa: v.number(),
+    actorProfileId: v.id("profiles"),
+    at: v.number(),
+  }).index("by_subscription", ["subscriptionId"]),
+
+  // Journal des ACTIVATIONS — qui a ouvert l'accès de quelle école, et quand.
+  //
+  // POURQUOI IL EXISTE. `schools.activateSubscription` fait passer un contrat
+  // de « en attente de paiement » à « actif ». C'est l'acte le plus conséquent
+  // du module : il ouvre l'application à TOUS les élèves inscrits de l'école,
+  // d'un coup, et rien ne sait le défaire — aucune mutation ne fait
+  // redescendre un statut. Un acte irréversible qui engage une école entière
+  // ne doit pas être anonyme, et le `patch` écrase le statut d'avant.
+  //
+  // Mêmes principes que `schoolMembershipEvents` et `subscriptionAmendments` :
+  //   - `actorProfileId` est COPIÉ et jamais relu pour autoriser quoi que ce
+  //     soit. C'est une trace, pas un droit ;
+  //   - `at` date l'ACTE — le `Date.now()` exact sur lequel la mutation a jugé
+  //     que le contrat avait commencé et n'était pas fini — et non l'insertion
+  //     de la ligne, que `_creationTime` porte déjà ;
+  //   - le journal OBSERVE, il ne décide pas : aucune ligne d'ici n'entre dans
+  //     `accessRules.decideAccess`, ni dans le plafond de sièges, ni dans la
+  //     sélection du contrat courant. Les effacer toutes ne changerait rien à
+  //     l'accès d'un seul enfant — seulement à ce qu'on peut expliquer.
+  //
+  // `statusBefore` NE VAUT AUJOURD'HUI QU'UNE SEULE CHOSE, et son validateur le
+  // dit : la règle d'activation (`convex/subscriptionRules.ts`) ne part que de
+  // `pending_payment`. Ce n'est pas une redondance inutile — c'est le point où
+  // un élargissement de la transition devra passer, en base et à la
+  // compilation : la mutation recopie ici ce que la RÈGLE a établi, donc
+  // ajouter un statut de départ sans toucher à cette ligne ne compilera pas.
+  // Pas de `statusAfter` en revanche : il vaudrait « actif » sur toutes les
+  // lignes, sans qu'aucun élargissement puisse jamais le changer — le statut
+  // d'arrivée est un littéral du code, pas une donnée.
+  //
+  // PAS DE LECTEUR AUJOURD'HUI, et c'est assumé : aucune requête du dépôt ne
+  // lit cette table, l'écran d'école n'affichant pas ce journal. Elle n'est pas
+  // pour autant sans usage — c'est le seul endroit où se lit qui a ouvert
+  // l'accès d'une école, question qui se pose contrat par contrat, d'où
+  // l'index. Une ligne par contrat et par an : la table ne grandit pas.
+  //
+  // Insertions seules : aucune fonction du dépôt ne modifie ni ne supprime une
+  // ligne de cette table.
+  subscriptionActivations: defineTable({
+    subscriptionId: v.id("subscriptions"),
+    // Redondant avec le contrat, et délibérément, comme dans
+    // `subscriptionAmendments` : il ouvre « qu'est-il arrivé au contrat de
+    // CETTE école » sans passer par la ligne d'abonnement.
+    schoolId: v.id("schools"),
+    statusBefore: v.literal("pending_payment"),
     actorProfileId: v.id("profiles"),
     at: v.number(),
   }).index("by_subscription", ["subscriptionId"]),

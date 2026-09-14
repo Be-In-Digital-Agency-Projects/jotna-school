@@ -31,6 +31,7 @@ import {
   UserPlus,
   GraduationCap,
   AlertTriangle,
+  Unlock,
 } from "lucide-react";
 
 /** Les types viennent des fonctions Convex : aucune forme n'est recopiée. */
@@ -109,14 +110,16 @@ const SUBSCRIPTION_STATUS_LABEL: Record<SubscriptionStatus, string> = {
 };
 
 /**
- * Les trois statuts qu'une PERSONNE pose.
+ * Les DEUX statuts qu'une personne pose — et ce qui est arrivé aux quatre
+ * autres.
  *
  * `past_due` viendra du suivi des tranches, `expired` se déduit de la date de
  * fin à chaque lecture, et « résilié » dit la FIN d'un contrat existant que
- * rien ne sait encore prononcer. La table a deux écrivains — l'insertion de
- * `recordSubscription` et l'avenant de sièges d'`amendSeats` — et AUCUN des
- * deux n'écrit le statut : l'un le reçoit à la création et le refuse s'il vaut
- * « résilié », l'autre ne touche ni le statut ni les dates. Les trois sont refusés par la mutation, et le formulaire n'a pas à
+ * rien ne sait encore prononcer. La table a trois écrivains — l'insertion de
+ * `recordSubscription`, l'avenant de sièges d'`amendSeats` qui ne touche ni le
+ * statut ni les dates, et `activateSubscription` qui n'écrit qu'une seule
+ * valeur de statut, « actif » — donc aucune ligne ne peut devenir résiliée ni
+ * impayée. Les quatre sont refusés par la mutation, et le formulaire n'a pas à
  * proposer ce qui sera refusé : c'est pourquoi aucun encart n'annonce leur
  * refus, à la différence d'« actif » daté du futur ou du plafond de sièges,
  * que le menu peut encore produire.
@@ -126,16 +129,25 @@ const SUBSCRIPTION_STATUS_LABEL: Record<SubscriptionStatus, string> = {
  * sélection du paywall ne compare que les `startsAt` — et coupait les élèves
  * qu'un contrat actif couvrait encore.
  *
- * `Exclude` sur le type du schéma, et non une liste recopiée : les trois
+ * « BROUILLON » a disparu du menu pour une raison voisine et pire encore : il
+ * n'ouvre aucun accès, et rien ne peut le faire avancer — l'activation ne part
+ * que d'« en attente de paiement », un brouillon n'attestant d'aucun accord.
+ * Immobile, il occuperait pourtant sa période, et le vrai contrat de ces dates
+ * serait ensuite refusé pour chevauchement : l'école n'aurait plus jamais
+ * d'accès sur cette année-là. Les deux statuts qui restent peuvent tous deux
+ * avancer — « en attente de paiement » s'active, « actif » est déjà en
+ * vigueur.
+ *
+ * `Exclude` sur le type du schéma, et non une liste recopiée : les quatre
  * exclus sont nommés une fois, et le menu ne peut pas proposer une valeur que
  * le schéma ignore.
  */
 type AdminStatus = Exclude<
   SubscriptionStatus,
-  "past_due" | "expired" | "cancelled"
+  "draft" | "past_due" | "expired" | "cancelled"
 >;
 
-const ADMIN_STATUSES: AdminStatus[] = ["draft", "pending_payment", "active"];
+const ADMIN_STATUSES: AdminStatus[] = ["pending_payment", "active"];
 
 /** Niveaux et rôles en dur, mais TYPÉS par le schéma : une valeur inventée ne compile pas. */
 const CLASS_LEVELS: ClassLevel[] = ["CI", "CP", "CE1", "CE2", "CM1", "CM2"];
@@ -570,6 +582,15 @@ function SubscriptionSection({
                   }.`}
             </p>
           )}
+
+          {/* Le SERVEUR dit si ce contrat peut être activé — même fonction que
+              la mutation, même instant, même document. L'écran ne refait pas ce
+              calcul : l'horloge du navigateur est figée au montage et ferait
+              apparaître le bouton un jour trop tôt, ou manquer un jour de
+              trop. */}
+          {contract.canActivate && (
+            <ContractActivation schoolId={schoolId} contract={contract} />
+          )}
         </div>
       )}
 
@@ -598,13 +619,12 @@ function SubscriptionSection({
             L&apos;enregistrement sera REFUSÉ : un contrat ne se déclare pas
             actif avant d&apos;avoir commencé. Le paywall ne juge que la date de
             fin — marqué actif dès aujourd&apos;hui, ce contrat ouvrirait
-            l&apos;accès pour une année qui n&apos;a pas commencé. Vous pouvez
-            l&apos;enregistrer en brouillon ou en attente de paiement — mais
-            rien ne sait encore l&apos;activer ensuite : aucune mutation ne
-            modifie le statut d&apos;un contrat, et le réenregistrer actif
-            serait refusé pour chevauchement. Tant que la facturation
-            n&apos;existe pas, un contrat n&apos;ouvre l&apos;accès que s&apos;il
-            est enregistré ACTIF une fois commencé.
+            l&apos;accès pour une année qui n&apos;a pas commencé.
+            Enregistrez-le en attente de paiement : sa période est retenue dès
+            maintenant, et le {formatDay(fromDayInput(startsAt) ?? now)} le
+            bouton « Activer ce contrat » apparaîtra sur cette fiche. C&apos;est
+            lui qui ouvrira l&apos;accès, le jour où le contrat commence et pas
+            avant.
           </span>
         </div>
       )}
@@ -735,12 +755,111 @@ function SubscriptionSection({
         n&apos;a qu&apos;un contrat en vigueur à la fois, faute de quoi ni son
         accès ni son nombre de sièges ne seraient décidables. Tant que le
         nouveau n&apos;a pas commencé, c&apos;est l&apos;ancien qui décide de
-        l&apos;accès des élèves. Pour agrandir l&apos;école, c&apos;est
+        l&apos;accès des élèves ; le jour où il commence, il faut
+        l&apos;ACTIVER, et le bouton apparaît alors sur cette fiche. Pour
+        agrandir l&apos;école, c&apos;est
         l&apos;avenant ci-dessus : il ajoute des sièges au contrat en vigueur —
         ou, si aucun ne court, au prochain à commencer — sans jamais en
         déplacer les dates, et chaque ajout reste lisible dans son journal.
       </p>
     </section>
+  );
+}
+
+/**
+ * ACTIVER le contrat — le geste qui ouvre l'accès de toute l'école.
+ *
+ * NE S'AFFICHE QUE SUR DÉCISION DU SERVEUR (`contract.canActivate`), jamais
+ * sur une comparaison de dates faite ici : `getEnrollmentOutlook` exécute la
+ * règle même qu'exécutera la mutation, sur le même document et le même
+ * instant. Un bouton calculé sur l'horloge du navigateur — figée au montage de
+ * l'écran — apparaîtrait un jour trop tôt ou manquerait un jour de trop, sur
+ * le seul geste qui ouvre l'accès d'une école.
+ *
+ * DIT CE QU'IL FAIT, ET QU'IL EST SANS RETOUR. Ce n'est pas une formalité
+ * administrative : au clic, tous les élèves inscrits de cette école obtiennent
+ * l'application, jusqu'à la fin du contrat. Et rien ne DÉSACTIVE un contrat —
+ * aucune mutation ne fait redescendre un statut. Couper une école est une
+ * décision commerciale, avec la question du montant déjà facturé, et elle
+ * appartient à la facturation. Un administrateur doit le savoir avant de
+ * cliquer, pas après.
+ *
+ * PAS DE VOLET DE CONFIRMATION EN DEUX TEMPS, à la différence de la libération
+ * d'un siège : celle-ci se déclenche depuis une ligne d'élève compacte, où
+ * l'avertissement n'a pas la place de tenir, d'où le volet qui l'ouvre. Ici
+ * l'avertissement EST le bloc, et le bouton se trouve dessous — la conséquence
+ * se lit juste au-dessus du clic, ce que le volet de la libération cherche
+ * précisément à obtenir.
+ *
+ * Aucun aperçu à calculer ici, à la différence de l'avenant : l'activation
+ * n'engage pas un franc de plus. Le contrat est déjà signé, son total est déjà
+ * celui qu'il est ; ce bouton ne fait qu'ouvrir ce qui a été vendu.
+ */
+function ContractActivation({
+  schoolId,
+  contract,
+}: {
+  schoolId: Doc<"schools">["_id"];
+  contract: ContractSummary;
+}) {
+  const activateSubscription = useMutation(api.schools.activateSubscription);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Pas d'état « activé » à conserver : le verdict est réactif, donc la carte
+  // repasse d'elle-même en « Actif » et ce bloc disparaît. Une bannière de
+  // succès survivrait à l'acte qu'elle annonce.
+  const handleActivate = async () => {
+    setIsSubmitting(true);
+    setError(null);
+    try {
+      await activateSubscription({ schoolId });
+    } catch (err) {
+      setError(messageOf(err, "Erreur lors de l'activation du contrat"));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+      {error && (
+        <div className="mb-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          {error}
+        </div>
+      )}
+
+      <div className="flex gap-2 text-xs text-amber-900">
+        <Unlock className="mt-0.5 h-4 w-4 shrink-0" />
+        <span>
+          Ce contrat a commencé et attend d&apos;être activé : les élèves
+          inscrits n&apos;ont pas encore l&apos;accès. L&apos;activer{" "}
+          <strong>
+            ouvre immédiatement l&apos;application à TOUS les élèves inscrits de
+            cette école
+          </strong>
+          , jusqu&apos;au {formatDay(contract.endsAt)}.
+          <strong className="mt-1 block">
+            Le geste est SANS RETOUR : rien ne sait désactiver un contrat.
+            N&apos;activez qu&apos;une fois l&apos;accord confirmé.
+          </strong>
+        </span>
+      </div>
+
+      <button
+        type="button"
+        onClick={handleActivate}
+        disabled={isSubmitting}
+        className="mt-3 inline-flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-50 transition-colors"
+      >
+        {isSubmitting ? (
+          <Loader2 className="h-4 w-4 animate-spin" />
+        ) : (
+          <Unlock className="h-4 w-4" />
+        )}
+        Activer ce contrat
+      </button>
+    </div>
   );
 }
 
@@ -874,9 +993,10 @@ function SeatAmendmentForm({
             devant, ces sièges se facturent au PLEIN tarif, sans prorata.
             <strong className="mt-1 block">
               Et ils n&apos;ouvriront pas d&apos;eux-mêmes le{" "}
-              {formatDay(contract.startsAt)} : rien ne sait encore faire passer
-              un contrat en actif. Ce contrat restera une réservation sans accès
-              tant que la facturation n&apos;existe pas.
+              {formatDay(contract.startsAt)}
+              {contract.status === "pending_payment"
+                ? " : ce contrat devra être ACTIVÉ ce jour-là, par le bouton qui apparaîtra alors sur cette fiche. Sans ce geste, il reste une réservation sans accès."
+                : " : ce contrat n'est pas « en attente de paiement », et l'activation ne part que de ce statut. En l'état, rien ne pourra lui ouvrir l'accès."}
             </strong>
           </span>
         </div>

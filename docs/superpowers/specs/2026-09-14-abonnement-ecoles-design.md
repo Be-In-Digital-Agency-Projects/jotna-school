@@ -264,9 +264,10 @@ contrat long et actif, et **couper une école qui a payé**.
 
 L'invariant est maintenu à l'écriture : `recordSubscription` refuse toute
 période croisant un contrat existant, et c'est la seule mutation qui crée une
-période. `amendSeats` (§7.6) modifie une ligne existante, mais **ne touche ni
-`startsAt` ni `endsAt`** : il ne peut donc pas créer de chevauchement, puisqu'il
-ne déplace aucune borne. Le contrôle est **exact en une lecture** —
+période. Les deux mutations qui modifient une ligne existante — `amendSeats`
+(§7.6) et `activateSubscription` (§8.4 bis) — **ne touchent ni `startsAt` ni
+`endsAt`** : elles ne peuvent donc pas créer de chevauchement, puisqu'elles ne
+déplacent aucune borne. Le contrôle est **exact en une lecture** —
 le candidat est la ligne de plus grand `startsAt` parmi celles qui commencent
 avant la fin proposée, et il y a conflit si et seulement si son `endsAt` dépasse
 le début proposé. Une fenêtre de lecture bornée ne prouverait rien : n'importe
@@ -275,9 +276,11 @@ quel nombre de lignes intercalées en évincerait le vrai conflit.
 **Corollaire : `cancelled` n'est pas enregistrable.** Une première version
 exemptait les contrats résiliés du contrôle de chevauchement, au motif qu'une
 période résiliée doit pouvoir être recontractée. Le motif ne tient pas : aucune
-mutation ne sait résilier un contrat existant — le seul `patch` sur
-`subscriptions` est celui d'`amendSeats` (§7.6), qui **n'écrit jamais
-`status`** — donc une ligne ne peut jamais *devenir* résiliée. L'exemption ne
+mutation ne sait résilier un contrat existant — les deux `patch` sur
+`subscriptions` sont celui d'`amendSeats` (§7.6), qui **n'écrit jamais
+`status`**, et celui d'`activateSubscription` (§8.4 bis), qui **n'écrit que
+`status` et une seule valeur**, `active` — donc une ligne ne peut jamais
+*devenir* résiliée. L'exemption ne
 s'appliquait qu'aux lignes saisies résiliées d'emblée, et celles-là
 empoisonnaient la sélection : enregistrées avant le
 contrat annuel et datées après lui, elles gagnaient la sélection et coupaient
@@ -756,9 +759,11 @@ et **jamais `status`, jamais `startsAt`, jamais `endsAt`** :
 
 - les dates ne bougeant pas, la disjointness de §4.5 est **inchangée** : aucun
   chevauchement ne peut naître d'un avenant ;
-- le statut ne bougeant pas, **aucune ligne ne peut *devenir* `cancelled`** —
-  la propriété dont dépendent le refus de `cancelled` à la saisie (§4.5) et le
-  raisonnement de §8.5.
+- le statut ne bougeant pas **ici**, et ne bougeant ailleurs que d'une seule
+  façon (`activateSubscription`, §8.4 bis : `pending_payment` → `active`),
+  **aucune ligne ne peut *devenir* `cancelled` ni `past_due`** — la propriété
+  dont dépendent le refus de `cancelled` à la saisie (§4.5) et le raisonnement
+  de §8.5.
 
 **Le prix est proratisé sur la période restante** :
 
@@ -875,6 +880,74 @@ PayDunya POST → route dans convex/http.ts → httpAction
 | `expired` | non | `now >= endsAt` |
 | `cancelled` | non | résiliation |
 
+Tant que l'encaissement n'existe pas, **une seule de ces transitions est
+écrite** : celle de §8.4 bis, posée à la main par un administrateur. Les autres
+attendent le plan 3.
+
+### 8.4 bis Activation manuelle — l'unique transition de statut
+
+`recordSubscription` refuse d'enregistrer `active` un contrat qui n'a pas
+commencé (§4.5) : `decideAccess` ne lit jamais `startsAt`, donc la ligne
+ouvrirait l'accès le jour de sa saisie, pour une année que l'école n'a pas
+commencé à payer. Elle conseille donc d'enregistrer le contrat en
+`pending_payment` — **encore faut-il que quelque chose sache l'activer le jour
+venu.** Rien ne le savait : aucune mutation n'écrivait `status`, et
+réenregistrer le contrat en `active` était refusé pour chevauchement avec
+lui-même. Une école qui signait son année en juillet n'avait **jamais** l'accès
+de l'année qu'elle avait payée.
+
+`schools.activateSubscription` ferme ce trou, et **son étroitesse est ce qui
+l'autorise à exister** — c'est le premier `patch` du dépôt sur
+`subscriptions.status`, et le refus de `cancelled` (§4.5) comme le raisonnement
+de §8.5 reposaient sur l'absence d'un tel `patch` :
+
+| | |
+|---|---|
+| Statut de départ | `pending_payment`, **et lui seul** |
+| Statut d'arrivée | `active`, **littéral dans le code**, jamais un argument |
+| Période | le contrat doit avoir commencé et ne pas être fini : `startsAt <= now < endsAt` |
+| Champs écrits | **`status` seul.** Ni les dates, ni les sièges, ni les montants |
+
+Les deux raisonnements survivent mot pour mot : aucune ligne ne peut devenir
+`cancelled` ni `past_due`, et les dates ne bougeant pas, la disjointness de
+§4.5 est intacte.
+
+**Pas `draft`.** « Brouillon » veut dire non conclu, et activer ouvre
+l'application à toute une école sans que rien ne sache la refermer ; « en
+attente de paiement » atteste au moins qu'un accord existe. Et parce qu'un
+brouillon ne pourrait plus avancer, **`recordSubscription` ne l'accepte plus à
+la saisie** : une ligne immobile occuperait pourtant sa période, et le vrai
+contrat de ces dates serait refusé pour chevauchement — l'école n'aurait plus
+jamais d'accès sur cette année-là. Les deux décisions vont ensemble, et donnent
+l'invariante suivante : **tout contrat enregistrable peut avancer**
+(`pending_payment` s'active, `active` est déjà en vigueur). `draft` reste une
+valeur du schéma — un flux de devis en créera peut-être — et `decideAccess`
+garde sa branche, désormais inatteignable par la saisie.
+
+**Quel contrat — celui qui couvre `now`**, rendu par
+`access.currentSchoolSubscription`, le même helper que le paywall, le plafond
+de sièges et l'avenant. Aucune seconde lecture : deux sélections divergentes
+activeraient un autre contrat que celui dont l'écran montre les dates. S'il ne
+couvre pas `now`, il n'y a rien à activer.
+
+**La règle est pure et testée** (`convex/subscriptionRules.ts`,
+`decideActivation`), suivant §9 : le wrapper Convex lit le document et délègue.
+L'écran lit la **même** fonction par `getEnrollmentOutlook.contract
+.canActivate`, donc le bouton s'affiche exactement quand la mutation accepte —
+jamais sur une comparaison de dates faite dans le navigateur, dont l'horloge
+est figée au montage.
+
+**La trace** — `subscriptionActivations` (`convex/schema.ts`), même farine que
+`schoolMembershipEvents` et `subscriptionAmendments` : contrat, école, statut
+d'avant, auteur copié et jamais relu pour autoriser, instant de l'acte.
+Activer ouvre l'accès d'une école entière ; l'acte ne doit pas être anonyme, et
+le `patch` écrase ce qu'il y avait.
+
+**Rien ne DÉSACTIVE un contrat**, et c'est assumé : aucune mutation ne fait
+redescendre un statut. Couper une école est une décision commerciale, avec la
+question du montant déjà facturé, et elle appartient à la facturation (§10).
+L'écran le dit **avant** le clic.
+
 ### 8.5 Délai de grâce — décision commerciale
 
 Quand la tranche 2 a trois jours de retard, on ne coupe pas 400 enfants.
@@ -921,11 +994,16 @@ qu'un intendant est en retard est cruel et commercialement suicidaire.
 > la garantit, jamais parce qu'elle « devrait suffire ».
 >
 > Sans effet aujourd'hui : `recordSubscription` refuse `past_due` à la saisie
-> (§4.5), c'est le seul écrivain du `status` — l'autre écrivain de la table,
-> `amendSeats` (§7.6), ne touche qu'aux sièges et au montant — et **rien
-> n'écrit jamais d'`installments`** : le statut est donc inatteignable et
-> l'ancre toujours absente. La branche décide de ce qui arrivera au plan 3, pas
-> de ce qui arrive maintenant.
+> (§4.5), et aucun des deux `patch` de la table ne peut le poser — `amendSeats`
+> (§7.6) ne touche qu'aux sièges et au montant, `activateSubscription`
+> (§8.4 bis) n'écrit qu'`active` — et **rien n'écrit jamais d'`installments`** :
+> le statut est donc inatteignable et l'ancre toujours absente. La branche
+> décide de ce qui arrivera au plan 3, pas de ce qui arrive maintenant.
+>
+> L'arrivée d'une activation manuelle (§8.4 bis) ne l'entame pas : une personne
+> écrit désormais `status`, mais une seule valeur, `active`. Le raisonnement
+> ci-dessus tient **mot pour mot** — `past_due` reste posé par une machine, et
+> ce sera la même qui marquera la tranche.
 
 ### 8.5 bis Message adulte — promesse non tenue par le plan 1/3
 
@@ -992,6 +1070,14 @@ multiplication par un prix unitaire ne rend. C'est le seul endroit du dépôt o�
 l'avenant est testable : le reste vit dans une mutation, et le repo n'a pas
 `convex-test`.
 
+**Activation (`convex/__tests__/subscriptionRules.test.ts`)** — la transition
+de §8.4 bis, prise par les deux bouts : le seul statut de départ accepté (les
+cinq autres refusés, chacun avec son motif), les deux bornes de période
+(refusée avant `startsAt`, acceptée dès `startsAt`, refusée dès `endsAt`), et
+le statut rendu à l'acceptation, que la trace recopie. C'est l'étroitesse
+elle-même qui est testée : elle est ce qui autorise la mutation à exister, et
+le reste vit dans une mutation que le repo n'a pas de quoi appeler.
+
 **Import en masse (`convex/__tests__/schoolImport.test.ts`)** — refus quand le
 lot dépasse les sièges disponibles (et vérification qu'aucune ligne n'a été
 créée), reprise après interruption sans doublon, compteur `activeCount` exact
@@ -1033,6 +1119,19 @@ contenu.
   raison d'origine (le sort du montant déjà facturé appartient à la
   facturation) : **réduire** les sièges d'un contrat en cours, en déplacer les
   dates, et le résilier.
+- **DÉSACTIVER un contrat activé.** Corollaire du précédent, et à lire avec
+  §8.4 bis : une activation manuelle existe désormais, mais rien ne fait
+  redescendre un statut. Refermer l'accès d'une école est une décision
+  commerciale — que devient le montant déjà facturé ? — et elle appartient au
+  plan de facturation, avec la résiliation. L'écran d'école prévient donc, en
+  toutes lettres, que le geste est sans retour.
+- **Corriger une ligne d'abonnement saisie par erreur.** Rien ne supprime ni ne
+  redate une ligne `subscriptions`. Un contrat enregistré sur de mauvaises
+  dates tient donc sa période contre tout autre contrat (§4.5), et la seule
+  correction possible aujourd'hui porte sur les sièges, à la hausse (§7.6).
+  §8.4 bis a supprimé le cas le plus grave — la ligne qui ne pouvait même pas
+  avancer — en retirant `draft` de la saisie ; le reste attend la même décision
+  de facturation que la résiliation.
 
 ---
 
@@ -1073,4 +1172,5 @@ Chaque étape est livrable et testable séparément.
 | Fourchette de scolarité privée élémentaire au Sénégal | §7.3 | Connaissance marché du propriétaire du projet |
 | ~~Le tarif par siège et le plancher~~ | §7.1 | **Tranchés : 5 000 FCFA par élève et par année scolaire**, plat, provisoire (« pour le moment »), et **plancher ramené à 30 sièges** — soit 150 000 FCFA de contrat minimum, le seuil voulu à l'origine. |
 | ~~`past_due` sans échéance impayée identifiable~~ | **§8.5** | **Tranché : refus.** C'était la seule branche de `decideAccess` à échouer en ouvert. Une grâce sans ancre n'est pas une grâce. (Référence corrigée : l'arbitrage était en §8.5, pas en §8.5 bis, qui traite du message adulte.) |
-| **Une école peut-elle grossir en cours d'année ?** | §10 | **Arbitrage ouvert.** Aujourd'hui non, par l'invariant de §4.5. |
+| ~~**Une école peut-elle grossir en cours d'année ?**~~ | §10 | **Tranché : oui**, par l'avenant ÉTROIT de §7.6 — sièges à la hausse, au prorata, sans toucher au statut ni aux dates, donc sans rien coûter à l'invariant de §4.5. |
+| ~~Qui active un contrat signé à l'avance ?~~ | **§8.4 bis** | **Tranché : un administrateur**, par une transition unique `pending_payment` → `active` sur un contrat commencé et non fini. Et `draft` sort de la saisie : une ligne que rien ne peut faire avancer bloquerait sa période pour toujours. |

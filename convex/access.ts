@@ -45,13 +45,16 @@ import {
  * de cette requête. Le contrat le plus récemment commencé est celui en vigueur
  * si `now < endsAt` ; s'il est échu, aucun contrat plus ancien ne peut couvrir
  * `now`, parce que les contrats d'une école ne se CHEVAUCHENT PAS. Cet
- * invariant n'est pas un pari : la table est partie de vide et n'a que DEUX
+ * invariant n'est pas un pari : la table est partie de vide et n'a que TROIS
  * écrivains, dont un seul crée des périodes. `schools.recordSubscription`
  * insère, et refuse tout contrat dont la période en croise une autre.
  * `schools.amendSeats` fait grossir un contrat DÉJÀ SIGNÉ — celui en vigueur,
  * ou à défaut le prochain à commencer — sièges et montant, et ne touche NI
- * `startsAt` NI `endsAt` : il ne peut donc pas créer de chevauchement,
- * puisqu'il ne déplace aucune borne de période. Qu'il puisse viser un contrat
+ * `startsAt` NI `endsAt`. `schools.activateSubscription` n'écrit QUE `status`,
+ * et une seule valeur : `active`, depuis `pending_payment`, sur un contrat qui
+ * a commencé et n'est pas fini. Aucun des deux `patch` ne peut donc créer de
+ * chevauchement, puisqu'aucun ne déplace une borne de période. Que l'avenant
+ * puisse viser un contrat
  * À VENIR n'y change rien, et ne change rien non plus à CETTE lecture : elle
  * ignore les contrats non commencés, sauf quand il n'en existe aucun d'autre.
  * Qui relâchera cette étroitesse devra revenir ici — la lecture redeviendrait
@@ -67,9 +70,11 @@ import {
  * rendu à un enfant, c'est un droit REFUSÉ à une école qui paie.
  * `recordSubscription` ferme les deux bouts : il refuse les chevauchements
  * sans regarder le statut, et refuse d'écrire `cancelled` — aucune mutation ne
- * sait aujourd'hui faire passer un contrat existant à « résilié », l'avenant
- * de sièges d'`amendSeats` compris, qui n'écrit jamais le statut. Aucune
- * période résiliée n'attend donc d'être recontractée.
+ * sait aujourd'hui faire passer un contrat existant à « résilié ». Les deux
+ * `patch` de la table le garantissent : l'avenant de sièges d'`amendSeats`
+ * n'écrit jamais le statut, et `activateSubscription` n'en écrit qu'UNE
+ * valeur, `active`. Aucune période résiliée n'attend donc d'être
+ * recontractée.
  *
  * POUR LE PLAN DE FACTURATION : le jour où la résiliation existera (un `patch`
  * du STATUT vers `cancelled`), un contrat résilié devra pouvoir être croisé

@@ -314,15 +314,36 @@ payé » de « tu as quitté cette école ».
 
 ### 5.5 Le verrou sur l'argent
 
-Le contrôle est ajouté **à l'intérieur de `aiGateway.generate`**, seul point de
-passage de tout appel IA payant. Conséquence : une fonction future qui
-oublierait la vérification ne peut pas dépenser d'argent. Les quatre fonctions
-coûteuses passent toutes par cette porte : `paliers.getBucket`,
-`paliers.regenerateFailedExercises`, `explainMistake.explainExercise`,
-`attemptsExplain.generateExplanation`.
+Le contrôle est ajouté **à l'intérieur de `aiGateway.generate`**. Une fonction
+future qui passerait par le gateway en oubliant son propre contrôle ne pourra
+donc pas dépenser d'argent.
 
-C'est une ceinture *en plus* des bretelles : chaque fonction garde son propre
-contrôle en entrée.
+**Correction importante, établie à l'implémentation.** Une version antérieure de
+cette section affirmait que `generate` était le point de passage unique de tout
+appel IA payant. **C'est faux.** Trois modules appellent l'API OpenAI
+directement, sans passer par le gateway :
+
+| Module | Usage |
+|---|---|
+| `convex/attemptsVerify.ts` | vérification des réponses courtes |
+| `convex/attemptsExplain.ts` | `generateExplanation` |
+| `convex/pdfUploadsExtract.ts` | extraction PDF, côté administration |
+
+Seuls trois sites d'appel passent réellement par `generate` :
+`explainMistake.ts` et `paliers/index.ts` (deux fois).
+
+**Et aucun des trois modules contournants n'écrit dans `aiUsage`** — vérifié,
+zéro occurrence de `recordUsage` dans les trois. Leur dépense échappe donc au
+suivi de coût, au plafond `aiMonthlyBudgetUsd`, au quota `dailyMoreLimitPerKid`
+et au verrou de droits. Voir §7.4, qui s'appuyait sur la prémisse inverse.
+
+Conséquence pour le paywall : le verrou du gateway est une ceinture partielle.
+Le contrôle posé dans chaque fonction reste la protection principale, et pour
+`attemptsExplain.generateExplanation` il est la **seule** protection.
+
+Ramener ces trois modules derrière le gateway est un chantier à part entière,
+hors du périmètre de ce plan, mais il conditionne la fiabilité des chiffres de
+coût comme des plafonds de dépense.
 
 ### 5.6 Réserve : le directeur n'est jamais bloqué
 
@@ -551,6 +572,20 @@ pas à couvrir un coût par élève.
 **Mesure à lancer avant de figer la grille** : agréger `aiUsage.costUsd` par
 `month` et `purpose`, diviser par le nombre d'élèves actifs distincts sur la
 période. Le champ existe déjà, les index `by_month` et `by_user_month` aussi.
+
+**Avertissement — ce chiffre sous-estimera le coût réel.** Comme établi en §5.5,
+`convex/attemptsVerify.ts`, `convex/attemptsExplain.ts` et
+`convex/pdfUploadsExtract.ts` appellent OpenAI directement et n'écrivent rien
+dans `aiUsage`. La vérification des réponses courtes, qui tourne à chaque
+soumission d'un exercice à réponse libre, est dans ce lot — ce n'est pas un
+chemin marginal.
+
+**Ne pas fixer le tarif sur ce seul agrégat.** Deux façons de fermer l'écart,
+dans l'ordre de fiabilité : instrumenter les trois modules pour qu'ils écrivent
+dans `aiUsage` (ou passent par le gateway), ce qui est de toute façon
+souhaitable ; ou, en attendant, recouper l'agrégat avec la facture OpenAI réelle
+de la même période, l'écart entre les deux donnant la mesure de ce qui échappe
+au suivi.
 
 ---
 

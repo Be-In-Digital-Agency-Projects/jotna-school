@@ -465,10 +465,12 @@ export default function ExercisePlayer({
         </div>
       )}
 
-      {/* Paywall (spec §5.8) : attempts.submit lève ACCESS_DENIED:<reason>
-          quand l'école n'a plus d'accès valide. Même copy que AccessGate et
-          que la variante SceneAlert "access-blocked" de session/page.tsx —
-          jamais le code brut ni la raison. */}
+      {/* Paywall (spec §5.8) : attempts.submit lève une ConvexError de
+          données { code: "ACCESS_DENIED", reason } quand l'école n'a plus
+          d'accès valide — reconnue par isAccessDenied(), jamais par le
+          message, que Convex occulte hors développement. Même copy que
+          AccessGate et que la variante SceneAlert "access-blocked" de
+          session/page.tsx — jamais le code brut ni la raison. */}
       <StudentAlertDialog
         open={accessBlocked}
         onOpenChange={(open) => {

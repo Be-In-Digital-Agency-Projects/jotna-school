@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { callerIsAdmin } from "./access";
+import { decideAccess, type AccessReason } from "./accessRules";
 
 /**
  * Administration des écoles : écoles, personnel, classes, inscriptions.
@@ -13,7 +14,8 @@ import { callerIsAdmin } from "./access";
  * importer l'une depuis l'autre pour ces vérifications croisées.
  *
  * TOUT ici est réservé à l'`admin` (`callerIsAdmin`). Les requêtes ne lèvent
- * jamais et rendent `[]` ou `null` ; les mutations lèvent
+ * jamais et rendent leur valeur vide — `[]`, `null`, ou `{ items: [] }` pour
+ * les deux listes qui signalent leur troncature ; les mutations lèvent
  * `new Error("Rôle non autorisé")` — pas de `ConvexError`, que le client
  * réserve au refus de paywall (`accessRules.ts`).
  *
@@ -35,6 +37,17 @@ const STAFF_PER_PROFILE_LIMIT = 20;
 const CLASSES_LIMIT = 50;
 
 /**
+ * Classes lues pour UN professeur — il en enseigne quelques-unes.
+ *
+ * Même valeur que `TEACHER_CLASSES_LIMIT` dans `access.ts`, délibérément :
+ * `removeStaff` doit vider exactement l'ensemble de classes que
+ * `studentIdsTaughtBy` énumère pour ouvrir la vue d'un enseignant. Une borne
+ * plus basse ici laisserait une classe affectée — donc un accès — hors de
+ * portée du retrait.
+ */
+const CLASSES_PER_TEACHER_LIMIT = 20;
+
+/**
  * Élèves lus par classe.
  *
  * Même valeur que `CLASS_STUDENTS_LIMIT` dans `access.ts`, délibérément : le
@@ -51,11 +64,32 @@ const CLASS_STUDENTS_LIMIT = 60;
  * seul) et le schéma est hors de portée de cette tâche : le filtrage par rôle
  * se fait donc en mémoire, sur une tranche bornée. `students.listStudents` lit
  * déjà cette table avec `.take(1000)` ; 500 suffit ici et coûte moitié moins.
+ *
+ * Un balayage rend les documents les PLUS ANCIENS : passé cette borne, les
+ * comptes récemment ouverts — ceux, précisément, qu'on vient de créer pour les
+ * rattacher — sortent de la fenêtre. Les deux listes rendent donc `truncated`,
+ * et l'écran l'affiche : l'administrateur doit savoir que la liste est
+ * partielle plutôt que de conclure qu'un profil n'existe pas. Le vrai
+ * correctif est un index `by_role`, qui relève d'une tâche de schéma.
  */
 const PROFILE_SCAN_LIMIT = 500;
 
-/** Candidats rendus au plus, pour un menu déroulant qui reste utilisable. */
+/**
+ * Candidats rendus au plus, pour un menu déroulant qui reste utilisable.
+ *
+ * Atteindre cette borne-ci tronque aussi la liste : `truncated` couvre les
+ * deux troncatures, l'écran n'a pas à les distinguer.
+ */
 const CANDIDATES_LIMIT = 100;
+
+/**
+ * Tranches lues pour dater l'impayé le plus ancien.
+ *
+ * Même valeur que la lecture équivalente de `access.loadAccessInput`, qui
+ * répond à la même question : un abonnement se règle en trois tranches
+ * (`convex/schema.ts`), douze couvre largement.
+ */
+const OVERDUE_INSTALLMENTS_LIMIT = 12;
 
 /**
  * Niveaux, dans l'ordre scolaire — recopié de `classEnum`
@@ -164,6 +198,13 @@ export const listStaff = query({
   },
 });
 
+/** Une ligne de `listStaffCandidates` — `role` tel que `schoolStaff` l'accepte. */
+type StaffCandidate = {
+  _id: Id<"profiles">;
+  name: string;
+  role: Doc<"schoolStaff">["staffRole"];
+};
+
 /**
  * Les profils rattachables au personnel de cette école.
  *
@@ -174,11 +215,18 @@ export const listStaff = query({
  * Rôles retenus : `professeur` et `directeur`, les deux valeurs que
  * `schoolStaff.staffRole` accepte. Les profils déjà membres actifs sont
  * retirés — les proposer mènerait droit à un doublon.
+ *
+ * Rend `{ items, truncated }` et non un simple tableau : voir
+ * `PROFILE_SCAN_LIMIT`. `truncated` dit « il PEUT manquer des profils ici »,
+ * jamais « il en manque » — on ne distingue pas, sans une lecture de plus, une
+ * table de 500 profils d'une table qui en compte davantage. Le doute penche du
+ * côté de l'avertissement : sur-avertir fait vérifier, sous-avertir fait
+ * conclure à tort qu'un profil n'existe pas.
  */
 export const listStaffCandidates = query({
   args: { schoolId: v.id("schools") },
   handler: async (ctx, args) => {
-    if (!(await callerIsAdmin(ctx))) return [];
+    if (!(await callerIsAdmin(ctx))) return { items: [], truncated: false };
 
     const rows = await ctx.db
       .query("schoolStaff")
@@ -190,18 +238,31 @@ export const listStaffCandidates = query({
 
     const profiles = await ctx.db.query("profiles").take(PROFILE_SCAN_LIMIT);
 
-    return profiles
-      .filter(
-        (profile) =>
-          (profile.role === "professeur" || profile.role === "directeur") &&
-          !alreadyStaff.has(profile._id),
-      )
-      .slice(0, CANDIDATES_LIMIT)
-      .map((profile) => ({
+    // Le balayage a-t-il buté sur sa borne ? Alors des profils plus récents
+    // existent peut-être au-delà, et cette liste n'est pas la réponse
+    // complète à « qui puis-je rattacher ? ».
+    let truncated = profiles.length === PROFILE_SCAN_LIMIT;
+
+    const items: StaffCandidate[] = [];
+    for (const profile of profiles) {
+      if (profile.role !== "professeur" && profile.role !== "directeur") {
+        continue;
+      }
+      if (alreadyStaff.has(profile._id)) continue;
+      // Après les deux filtres : on ne signale la coupe que si un candidat
+      // RÉEL a été laissé de côté, pas sur la simple longueur du balayage.
+      if (items.length >= CANDIDATES_LIMIT) {
+        truncated = true;
+        break;
+      }
+      items.push({
         _id: profile._id,
         name: profile.name,
         role: profile.role,
-      }));
+      });
+    }
+
+    return { items, truncated };
   },
 });
 
@@ -277,6 +338,13 @@ export const listClassStudents = query({
   },
 });
 
+/** Une ligne de `listEnrollableStudents`. */
+type EnrollableStudent = {
+  _id: Id<"profiles">;
+  name: string;
+  class: Doc<"profiles">["class"] | null;
+};
+
 /**
  * Les élèves SANS inscription active — les seuls qu'on puisse inscrire.
  *
@@ -288,23 +356,33 @@ export const listClassStudents = query({
  *
  * Lecture par `by_student_status` puis `.first()` : exactement celle que
  * `access.ts` fait pour résoudre le droit d'accès d'un élève.
+ *
+ * Rend `{ items, truncated }` pour la même raison que `listStaffCandidates` :
+ * un écran qui affiche « Aucun élève sans inscription » alors qu'il n'a
+ * regardé qu'une fenêtre ment à l'administrateur.
  */
 export const listEnrollableStudents = query({
   args: {},
   handler: async (ctx) => {
-    if (!(await callerIsAdmin(ctx))) return [];
+    if (!(await callerIsAdmin(ctx))) return { items: [], truncated: false };
 
     const profiles = await ctx.db.query("profiles").take(PROFILE_SCAN_LIMIT);
 
-    const enrollable: Array<{
-      _id: Id<"profiles">;
-      name: string;
-      class: Doc<"profiles">["class"] | null;
-    }> = [];
+    let truncated = profiles.length === PROFILE_SCAN_LIMIT;
+
+    const items: EnrollableStudent[] = [];
 
     for (const profile of profiles) {
-      if (enrollable.length >= CANDIDATES_LIMIT) break;
       if (profile.role !== "student") continue;
+      // La coupe se teste après le filtre de rôle mais AVANT la lecture de
+      // l'inscription : inutile de payer une lecture pour un candidat qu'on
+      // ne rendra pas. Le prix de cet ordre est un `truncated` légèrement
+      // pessimiste — un élève déjà inscrit le déclenche sans avoir été omis.
+      // Avertir de trop est le bon sens du signal.
+      if (items.length >= CANDIDATES_LIMIT) {
+        truncated = true;
+        break;
+      }
 
       const active = await ctx.db
         .query("schoolMemberships")
@@ -314,14 +392,98 @@ export const listEnrollableStudents = query({
         .first();
       if (active) continue;
 
-      enrollable.push({
+      items.push({
         _id: profile._id,
         name: profile.name,
         class: profile.class ?? null,
       });
     }
 
-    return enrollable.sort((a, b) => a.name.localeCompare(b.name));
+    return {
+      items: items.sort((a, b) => a.name.localeCompare(b.name)),
+      truncated,
+    };
+  },
+});
+
+/** Ce que `getEnrollmentOutlook` rend — `reason` absente quand l'accès s'ouvre. */
+type EnrollmentOutlook = {
+  opensAccess: boolean;
+  reason: AccessReason | null;
+};
+
+/**
+ * Ce qu'une inscription dans CETTE école ouvre vraiment, aujourd'hui.
+ *
+ * L'écran d'inscription affirmait qu'inscrire un élève « lui ouvre l'accès à
+ * l'application ». C'est faux : l'inscription est NÉCESSAIRE à l'accès, jamais
+ * suffisante. `decideAccess` juge ensuite l'abonnement de l'école, et aucune
+ * fonction du dépôt n'insère à ce jour de ligne `subscriptions` — l'élève
+ * inscrit tombait donc sur le paywall pour 100 % des inscriptions que ce code
+ * peut produire, après qu'un administrateur eut prévenu la famille.
+ *
+ * Le verdict n'est PAS recalculé ici. On construit l'entrée d'un élève
+ * hypothétique inscrit dans cette école et on appelle `decideAccess`, la
+ * fonction même qu'exécute le paywall. Réécrire la règle rouvrirait l'écart
+ * qu'on ferme : un écran qui promet ce que le paywall refuse. Les quatre
+ * refus qui précèdent l'abonnement (`not_authenticated`, `not_student`,
+ * `no_school`, `seat_released`) sont hors d'atteinte par construction — le
+ * verdict ne peut porter que sur l'abonnement.
+ *
+ * Lectures : le chemin de `access.loadAccessInput`, à l'identique —
+ * l'abonnement le plus récent par `by_owner_startsAt`, les tranches seulement
+ * en `past_due`. Une lecture de plus par école affichée, jamais par classe :
+ * l'écran hisse la requête au niveau de l'école.
+ *
+ * Ne lève pas : `null` pour tout appelant non-`admin` comme pour une école
+ * introuvable, et l'écran n'affiche alors rien plutôt qu'une promesse.
+ */
+export const getEnrollmentOutlook = query({
+  args: { schoolId: v.id("schools") },
+  handler: async (ctx, args): Promise<EnrollmentOutlook | null> => {
+    if (!(await callerIsAdmin(ctx))) return null;
+
+    const school = await ctx.db.get(args.schoolId);
+    if (!school) return null;
+
+    // Le plus récent, sans filtrer sur la couverture temporelle : c'est
+    // `decideAccess` qui juge l'expiration par `endsAt`. Filtrer ici rendrait
+    // « aucun abonnement » là où la vérité est « abonnement échu ».
+    const latest = await ctx.db
+      .query("subscriptions")
+      .withIndex("by_owner_startsAt", (q) =>
+        q.eq("ownerType", "school").eq("ownerId", args.schoolId),
+      )
+      .order("desc")
+      .first();
+
+    let oldestOverdueDueAt: number | null = null;
+    if (latest && latest.status === "past_due") {
+      const rows = await ctx.db
+        .query("installments")
+        .withIndex("by_subscription", (q) => q.eq("subscriptionId", latest._id))
+        .take(OVERDUE_INSTALLMENTS_LIMIT);
+      const dues = rows
+        .filter((row) => row.status === "overdue")
+        .map((row) => row.dueAt);
+      oldestOverdueDueAt = dues.length > 0 ? Math.min(...dues) : null;
+    }
+
+    const verdict = decideAccess({
+      now: Date.now(),
+      role: "student",
+      activeMembership: { schoolId: args.schoolId },
+      hasReleasedMembership: false,
+      subscription: latest
+        ? { status: latest.status, endsAt: latest.endsAt }
+        : null,
+      oldestOverdueDueAt,
+    });
+
+    return {
+      opensAccess: verdict.ok,
+      reason: verdict.ok ? null : verdict.reason,
+    };
   },
 });
 
@@ -432,9 +594,20 @@ export const addStaff = mutation({
  * ses classes garde l'accès aux dossiers de ses élèves. Retirer sans
  * désaffecter serait un retrait de façade.
  *
+ * Énumération par `by_teacher` : LES classes de ce professeur, et non une
+ * fenêtre sur celles de l'école. La distinction n'est pas théorique —
+ * `schoolClasses` n'a pas de champ année, rien ne supprime ni n'archive une
+ * classe, et `createClass` autorise 50 classes PAR NIVEAU, soit 300 par école.
+ * Bornée à 50 classes d'école, la boucle laissait la 51e garder son
+ * `teacherId` : `studentIdsTaughtBy` et la quatrième branche de
+ * `callerMayReadStudent` continuaient de servir les dossiers d'élèves à un
+ * membre retiré, et l'invariant se dégradait en silence à mesure que l'école
+ * grandissait. Bornée à ce qu'un professeur enseigne, la complétude ne dépend
+ * plus de la taille de l'école.
+ *
  * Bornée aux classes de CETTE école : un enseignant rattaché à deux écoles ne
- * perd que les classes de celle qu'il quitte, et l'index `by_school` fait ce
- * cadrage lui-même.
+ * perd que les classes de celle qu'il quitte. Le cadrage se fait par filtre,
+ * l'index portant désormais le professeur.
  */
 export const removeStaff = mutation({
   args: { staffId: v.id("schoolStaff") },
@@ -446,12 +619,12 @@ export const removeStaff = mutation({
 
     const classes = await ctx.db
       .query("schoolClasses")
-      .withIndex("by_school", (q) => q.eq("schoolId", staff.schoolId))
-      .take(CLASSES_LIMIT);
+      .withIndex("by_teacher", (q) => q.eq("teacherId", staff.profileId))
+      .take(CLASSES_PER_TEACHER_LIMIT);
 
     let unassigned = 0;
     for (const schoolClass of classes) {
-      if (schoolClass.teacherId !== staff.profileId) continue;
+      if (schoolClass.schoolId !== staff.schoolId) continue;
       // `undefined` sur un champ optionnel : Convex RETIRE le champ.
       await ctx.db.patch(schoolClass._id, { teacherId: undefined });
       unassigned += 1;
@@ -485,6 +658,18 @@ export const createClass = mutation({
     const label = args.label.trim();
     if (label.length === 0) throw new Error("Le libellé est obligatoire");
 
+    // CONNU — sans année au schéma, ce refus interdit la rentrée suivante.
+    //
+    // Refuser le triplet (école, niveau, libellé) en double est le bon
+    // raisonnement POUR UNE ANNÉE : deux « CM1 A » simultanés ne se
+    // distinguent sur aucun écran. Mais `schoolClasses` ne porte AUCUNE année
+    // (`convex/schema.ts`) et rien ne supprime ni n'archive une classe : le
+    // « CM1 A » de cette année bloque donc à jamais celui de la suivante.
+    //
+    // La cause est dans le schéma, hors de portée de cette tâche. Le correctif
+    // est un champ d'année (ou une archive) porté par l'index, PAS un
+    // assouplissement de ce contrôle — le relâcher rouvrirait les doublons
+    // simultanés, qui sont le vrai danger.
     const siblings = await ctx.db
       .query("schoolClasses")
       .withIndex("by_school_class", (q) =>

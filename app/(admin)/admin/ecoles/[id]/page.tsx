@@ -20,16 +20,28 @@ import {
 
 /** Les types viennent des fonctions Convex : aucune forme n'est recopiée. */
 type StaffRow = FunctionReturnType<typeof api.schools.listStaff>[number];
-type CandidateRow = FunctionReturnType<
-  typeof api.schools.listStaffCandidates
->[number];
 type ClassRow = FunctionReturnType<typeof api.schools.listClasses>[number];
-type EnrollableRow = FunctionReturnType<
-  typeof api.schools.listEnrollableStudents
->[number];
 type ClassStudentRow = FunctionReturnType<
   typeof api.schools.listClassStudents
 >[number];
+
+/**
+ * Les deux listes de candidats rendent `{ items, truncated }`, pas un tableau.
+ *
+ * Elles balaient `profiles` sur une tranche bornée, faute d'index par rôle
+ * (voir `convex/schools.ts`), et `truncated` dit que le balayage a buté sur sa
+ * borne. L'écran doit le RELAYER : sans lui, « Aucun profil disponible » se lit
+ * comme « ce profil n'existe pas » alors qu'il veut dire « je n'ai pas tout lu ».
+ */
+type CandidateList = FunctionReturnType<typeof api.schools.listStaffCandidates>;
+type EnrollableList = FunctionReturnType<
+  typeof api.schools.listEnrollableStudents
+>;
+
+type EnrollmentOutlook = FunctionReturnType<
+  typeof api.schools.getEnrollmentOutlook
+>;
+type OutlookReason = NonNullable<NonNullable<EnrollmentOutlook>["reason"]>;
 
 type ClassLevel = Doc<"schoolClasses">["class"];
 type StaffRole = Doc<"schoolStaff">["staffRole"];
@@ -43,8 +55,93 @@ const STAFF_ROLE_LABEL: Record<StaffRole, string> = {
   directeur: "Directeur",
 };
 
+/**
+ * Pourquoi l'inscription n'ouvrira pas l'accès, en clair.
+ *
+ * `Partial` et non `Record` complet : `decideAccess` connaît quatre refus de
+ * plus (`not_authenticated`, `not_student`, `no_school`, `seat_released`) que
+ * `getEnrollmentOutlook` ne peut pas produire — son entrée les exclut par
+ * construction. Les libeller serait écrire une copie que personne ne lira. Le
+ * repli couvre ceux-là et tout refus ajouté plus tard : la phrase reste vraie
+ * même quand elle cesse d'être précise.
+ */
+const OUTLOOK_REASON: Partial<Record<OutlookReason, string>> = {
+  no_subscription: "cette école n'a aucun abonnement",
+  pending_payment: "l'abonnement de cette école attend son paiement",
+  past_due: "l'abonnement de cette école a un impayé hors délai de grâce",
+  expired: "l'abonnement de cette école est arrivé à échéance",
+  cancelled: "l'abonnement de cette école est résilié",
+};
+
+const OUTLOOK_REASON_FALLBACK = "l'abonnement de cette école ne le couvre pas";
+
 function messageOf(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
+}
+
+/**
+ * Dit qu'une liste est TRONQUÉE, au lieu de laisser conclure à l'absence.
+ *
+ * Un balayage rend les documents les plus ANCIENS : les comptes qu'on vient
+ * d'ouvrir pour les rattacher sont précisément ceux qui manquent. Sans cette
+ * ligne, l'écran dit « aucun profil » là où la vérité est « aucun profil dans
+ * ce que j'ai lu ».
+ */
+function PartialListNotice({ subject }: { subject: string }) {
+  return (
+    <p className="mt-1.5 flex gap-1.5 text-xs text-amber-700">
+      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+      <span>
+        Liste partielle : tous les profils n&apos;ont pas pu être parcourus.{" "}
+        {subject} récemment créé peut manquer ici sans être absent de la
+        plateforme.
+      </span>
+    </p>
+  );
+}
+
+/**
+ * Ce que l'inscription ouvre — ou n'ouvre pas — dans cette école.
+ *
+ * L'inscription est NÉCESSAIRE à l'accès, jamais suffisante : `decideAccess`
+ * juge ensuite l'abonnement de l'école. Le verdict affiché ici est exactement
+ * celui que le paywall rendra, puisque `getEnrollmentOutlook` appelle cette
+ * fonction-là — l'écran ne peut donc pas promettre ce que le paywall refusera.
+ *
+ * Rien tant que le verdict est inconnu : le silence vaut mieux qu'une promesse
+ * par défaut.
+ */
+function EnrollmentOutlookNotice({
+  outlook,
+}: {
+  outlook: EnrollmentOutlook | undefined;
+}) {
+  if (outlook === undefined || outlook === null) return null;
+
+  if (outlook.opensAccess) {
+    return (
+      <p className="mt-2 text-xs text-emerald-700">
+        L&apos;abonnement de cette école couvre l&apos;élève : son accès à
+        l&apos;application s&apos;ouvre dès l&apos;inscription.
+      </p>
+    );
+  }
+
+  const why = outlook.reason
+    ? (OUTLOOK_REASON[outlook.reason] ?? OUTLOOK_REASON_FALLBACK)
+    : OUTLOOK_REASON_FALLBACK;
+
+  return (
+    <p className="mt-2 flex gap-2 rounded-lg bg-amber-50 p-3 text-xs text-amber-800">
+      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+      <span>
+        L&apos;inscription n&apos;ouvrira PAS l&apos;accès : {why}.
+        L&apos;élève sera bien rattaché à cette école, mais il verra le paywall
+        tant que l&apos;abonnement n&apos;est pas en règle. Ne prévenez pas
+        encore la famille.
+      </span>
+    </p>
+  );
 }
 
 export default function SchoolDetailPage({
@@ -91,6 +188,11 @@ function SchoolDetail({ school }: { school: Doc<"schools"> }) {
   });
   const classes = useQuery(api.schools.listClasses, { schoolId: school._id });
   const enrollable = useQuery(api.schools.listEnrollableStudents);
+  // Le verdict porte sur l'ÉCOLE, pas sur la classe : une seule souscription
+  // ici, descendue aux cartes, plutôt qu'une par carte affichée.
+  const outlook = useQuery(api.schools.getEnrollmentOutlook, {
+    schoolId: school._id,
+  });
 
   return (
     <div>
@@ -127,6 +229,7 @@ function SchoolDetail({ school }: { school: Doc<"schools"> }) {
         classes={classes}
         teachers={(staff ?? []).filter((row) => row.staffRole === "professeur")}
         enrollable={enrollable}
+        outlook={outlook}
       />
     </div>
   );
@@ -144,7 +247,7 @@ function StaffSection({
 }: {
   schoolId: Doc<"schools">["_id"];
   staff: StaffRow[] | undefined;
-  candidates: CandidateRow[] | undefined;
+  candidates: CandidateList | undefined;
 }) {
   const addStaff = useMutation(api.schools.addStaff);
   const removeStaff = useMutation(api.schools.removeStaff);
@@ -155,9 +258,19 @@ function StaffSection({
   const [removeConfirm, setRemoveConfirm] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const pickable = (candidates ?? []).filter(
+  const pickable = (candidates?.items ?? []).filter(
     (candidate) => candidate.role === staffRole,
   );
+
+  // « Aucun profil disponible » n'est vrai que si le balayage a tout vu.
+  const placeholder =
+    candidates === undefined
+      ? "Chargement..."
+      : pickable.length > 0
+        ? "Choisir un profil"
+        : candidates.truncated
+          ? "Aucun profil dans la partie parcourue"
+          : "Aucun profil disponible";
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -238,19 +351,16 @@ function StaffSection({
             onChange={(e) => setProfileId(e.target.value)}
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:outline-none"
           >
-            <option value="">
-              {candidates === undefined
-                ? "Chargement..."
-                : pickable.length === 0
-                  ? "Aucun profil disponible"
-                  : "Choisir un profil"}
-            </option>
+            <option value="">{placeholder}</option>
             {pickable.map((candidate) => (
               <option key={candidate._id} value={candidate._id}>
                 {candidate.name}
               </option>
             ))}
           </select>
+          {candidates?.truncated && (
+            <PartialListNotice subject="Un professeur ou un directeur" />
+          )}
         </div>
         <button
           type="submit"
@@ -343,11 +453,13 @@ function ClassesSection({
   classes,
   teachers,
   enrollable,
+  outlook,
 }: {
   schoolId: Doc<"schools">["_id"];
   classes: ClassRow[] | undefined;
   teachers: StaffRow[];
-  enrollable: EnrollableRow[] | undefined;
+  enrollable: EnrollableList | undefined;
+  outlook: EnrollmentOutlook | undefined;
 }) {
   const createClass = useMutation(api.schools.createClass);
 
@@ -450,6 +562,7 @@ function ClassesSection({
               schoolClass={schoolClass}
               teachers={teachers}
               enrollable={enrollable}
+              outlook={outlook}
             />
           ))}
         </div>
@@ -462,10 +575,12 @@ function ClassCard({
   schoolClass,
   teachers,
   enrollable,
+  outlook,
 }: {
   schoolClass: ClassRow;
   teachers: StaffRow[];
-  enrollable: EnrollableRow[] | undefined;
+  enrollable: EnrollableList | undefined;
+  outlook: EnrollmentOutlook | undefined;
 }) {
   const students = useQuery(api.schools.listClassStudents, {
     schoolClassId: schoolClass._id,
@@ -481,14 +596,26 @@ function ClassCard({
 
   // Le menu du professeur est piloté par la donnée serveur, sans état local :
   // pas de copie à resynchroniser après l'écriture.
+  //
+  // La valeur vide est l'option « Aucun professeur », et c'est le SEUL chemin
+  // qui désaffecte. Une valeur non vide qui ne se résout pas est un échec de
+  // résolution, pas une désaffectation : on refuse, comme `handleAdd` et
+  // `handleEnroll`, plutôt que d'écrire un retrait que personne n'a demandé.
   const handleAssign = async (value: string) => {
     setError(null);
-    try {
+
+    let teacherId: StaffRow["profileId"] | undefined;
+    if (value !== "") {
       const picked = teachers.find((row) => row.profileId === value);
-      await assignTeacher({
-        schoolClassId: schoolClass._id,
-        teacherId: picked?.profileId,
-      });
+      if (!picked) {
+        setError("Choisissez un professeur dans la liste");
+        return;
+      }
+      teacherId = picked.profileId;
+    }
+
+    try {
+      await assignTeacher({ schoolClassId: schoolClass._id, teacherId });
     } catch (err) {
       setError(messageOf(err, "Erreur lors de l'affectation"));
     }
@@ -496,7 +623,9 @@ function ClassCard({
 
   const handleEnroll = async (e: React.FormEvent) => {
     e.preventDefault();
-    const picked = (enrollable ?? []).find((row) => row._id === studentId);
+    const picked = (enrollable?.items ?? []).find(
+      (row) => row._id === studentId,
+    );
     if (!picked) {
       setError("Choisissez un élève dans la liste");
       return;
@@ -515,6 +644,16 @@ function ClassCard({
       setIsEnrolling(false);
     }
   };
+
+  // « Aucun élève sans inscription » n'est vrai que si le balayage a tout vu.
+  const studentPlaceholder =
+    enrollable === undefined
+      ? "Chargement..."
+      : enrollable.items.length > 0
+        ? "Choisir un élève"
+        : enrollable.truncated
+          ? "Aucun élève sans inscription dans la partie parcourue"
+          : "Aucun élève sans inscription";
 
   const handleRelease = async (row: ClassStudentRow) => {
     setError(null);
@@ -577,20 +716,15 @@ function ClassCard({
               onChange={(e) => setStudentId(e.target.value)}
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:outline-none"
             >
-              <option value="">
-                {enrollable === undefined
-                  ? "Chargement..."
-                  : enrollable.length === 0
-                    ? "Aucun élève sans inscription"
-                    : "Choisir un élève"}
-              </option>
-              {(enrollable ?? []).map((row) => (
+              <option value="">{studentPlaceholder}</option>
+              {(enrollable?.items ?? []).map((row) => (
                 <option key={row._id} value={row._id}>
                   {row.name}
                   {row.class ? ` (${row.class})` : ""}
                 </option>
               ))}
             </select>
+            {enrollable?.truncated && <PartialListNotice subject="Un élève" />}
           </div>
           <button
             type="submit"
@@ -606,11 +740,12 @@ function ClassCard({
           </button>
         </form>
         <p className="mt-2 text-xs text-gray-500">
-          Inscrire un élève le place sous l&apos;abonnement de cette école et
-          lui ouvre l&apos;accès à l&apos;application. Son niveau passe à{" "}
+          Inscrire un élève le rattache à cette école et le place sous son
+          abonnement, lorsqu&apos;elle en a un. Son niveau passe à{" "}
           {schoolClass.class}. Un élève ne peut être inscrit que dans une seule
           classe à la fois.
         </p>
+        <EnrollmentOutlookNotice outlook={outlook} />
       </div>
 
       <div className="mt-5 border-t border-gray-100 pt-4">

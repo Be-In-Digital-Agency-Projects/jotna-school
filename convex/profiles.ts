@@ -253,11 +253,17 @@ export const linkChildToParent = internalMutation({
   },
 });
 
-/** Create a studentGuardian relation between an existing student and guardian. */
+/**
+ * Rattache un élève existant au tuteur AUTHENTIFIÉ.
+ *
+ * `guardianId` n'est plus un argument : il se dérive de la session. La version
+ * précédente acceptait n'importe quel couple (élève, tuteur) sans aucun
+ * contrôle, ce qui permettait à n'importe qui de s'attribuer l'accès à la
+ * progression de n'importe quel élève.
+ */
 export const linkChild = mutation({
   args: {
     studentId: v.id("profiles"),
-    guardianId: v.id("profiles"),
     relation: v.union(
       v.literal("parent"),
       v.literal("tuteur"),
@@ -265,32 +271,52 @@ export const linkChild = mutation({
     ),
   },
   handler: async (ctx, args) => {
-    // Verify both profiles exist
-    const student = await ctx.db.get(args.studentId);
-    if (!student) {
-      throw new Error("Profil étudiant introuvable");
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Non authentifié");
     }
-    const guardian = await ctx.db.get(args.guardianId);
+
+    const guardian = await ctx.db
+      .query("profiles")
+      .withIndex("by_userId", (q) => q.eq("userId", userId))
+      .unique();
     if (!guardian) {
       throw new Error("Profil tuteur introuvable");
     }
 
-    // Check if relation already exists
+    // Un élève ne peut pas se rattacher lui-même un tuteur, et un tuteur ne
+    // peut pas se rattacher à lui-même.
+    if (guardian.role !== "parent" && guardian.role !== "professeur") {
+      throw new Error("Rôle non autorisé");
+    }
+    if (guardian._id === args.studentId) {
+      throw new Error("Lien invalide");
+    }
+
+    // La relation déclarée doit correspondre au rôle réel de l'appelant.
+    if (args.relation === "professeur" && guardian.role !== "professeur") {
+      throw new Error("Rôle non autorisé");
+    }
+    if (args.relation !== "professeur" && guardian.role !== "parent") {
+      throw new Error("Rôle non autorisé");
+    }
+
+    const student = await ctx.db.get(args.studentId);
+    if (!student || student.role !== "student") {
+      throw new Error("Profil étudiant introuvable");
+    }
+
     const existing = await ctx.db
       .query("studentGuardians")
-      .withIndex("by_guardianId", (q) => q.eq("guardianId", args.guardianId))
+      .withIndex("by_guardianId", (q) => q.eq("guardianId", guardian._id))
       .take(200);
-
-    const alreadyLinked = existing.find(
-      (link) => link.studentId === args.studentId,
-    );
-    if (alreadyLinked) {
-      throw new Error("Ce lien parent-enfant existe déjà");
+    if (existing.some((link) => link.studentId === args.studentId)) {
+      throw new Error("Ce lien existe déjà");
     }
 
     return await ctx.db.insert("studentGuardians", {
       studentId: args.studentId,
-      guardianId: args.guardianId,
+      guardianId: guardian._id,
       relation: args.relation,
     });
   },

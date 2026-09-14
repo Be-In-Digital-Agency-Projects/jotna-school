@@ -789,24 +789,38 @@ directeur. L'accès ne se ferme qu'au-delà.
 Une comptabilité d'école est lente, pas malveillante. Couper des enfants parce
 qu'un intendant est en retard est cruel et commercialement suicidaire.
 
-> **Trou de spec relevé par la revue finale de branche — à trancher.**
+> **Trou de spec relevé par la revue finale de branche — TRANCHÉ : refus.**
 > Cette section ancre la grâce sur le `dueAt` de la tranche échue la plus
-> ancienne, mais ne dit pas ce qu'il advient d'un abonnement `past_due` pour
-> lequel **aucune tranche échue n'est identifiable**. L'implémentation
-> (`convex/accessRules.ts`) accorde alors l'accès **sans limite de temps** :
-> c'est la seule branche de `decideAccess` qui échoue en ouvert, toutes les
-> autres échouant en fermé, et un test verrouille ce comportement.
+> ancienne, sans dire ce qu'il advient d'un `past_due` pour lequel **aucune
+> tranche échue n'est identifiable**. L'implémentation accordait alors l'accès
+> **sans limite de temps** : la seule branche de `decideAccess` à échouer en
+> ouvert, toutes les autres échouant en fermé.
 >
-> Ce n'est pas théorique pendant le plan 1/3 : les abonnements y sont insérés
-> à la main **sans aucune ligne `installments`**, et le cron qui bascule les
-> tranches en `overdue` n'arrive qu'au plan 3/3. Un `past_due` posé aujourd'hui
-> donne donc un accès illimité. « Pas d'ancre » ne devrait pas valoir
-> « grâce infinie ».
+> **Une grâce se compte à partir de quelque chose.** Sans ancre il n'y a pas de
+> date à laquelle la rattacher, et accorder l'accès n'était pas de la clémence
+> mais l'ABSENCE de règle. Un `past_due` sans ancre n'est pas un état
+> légitime : le statut est posé par une machine, et la machine qui le posera
+> est celle-là même qui marque la tranche impayée. C'est donc une incohérence
+> de données, et un paywall ne doit pas ouvrir sans limite sur des données
+> incohérentes. `decideAccess` refuse désormais, avec le motif `past_due`.
 >
-> Deux issues possibles, à arbitrer avec le client : refuser l'accès faute
-> d'ancre (cohérent avec le reste, mais coupe une école dont les données de
-> tranches seraient incomplètes), ou ancrer la grâce sur un champ de
-> l'abonnement lui-même — `startsAt`, ou un `pastDueSince` à ajouter.
+> L'autre issue envisagée — ancrer la grâce sur un champ de l'abonnement, un
+> `pastDueSince` à ajouter — a été écartée : **rien ne l'écrirait**. Ce chantier
+> a déjà retiré deux branches qui protégeaient des flux inatteignables
+> (l'exemption `cancelled` de §4.5, l'exemption `human_approved` du cache) ;
+> ajouter un champ que personne ne renseigne referait la même faute.
+>
+> **Invariante que le plan 3 doit tenir.** Le cron qui fera basculer un
+> abonnement en `past_due` doit, **dans la même transaction**, créer ou marquer
+> la tranche échue qui ancre la grâce. S'il pose le statut sans l'ancre, l'école
+> est coupée immédiatement au lieu de disposer de ses 21 jours. C'est le prix de
+> fermer ce trou, et il se paie là-bas.
+>
+> Sans effet aujourd'hui : `recordSubscription` refuse `past_due` à la saisie
+> (§4.5), c'est le seul écrivain de `subscriptions`, et **rien n'écrit jamais
+> d'`installments`** — le statut est donc inatteignable et l'ancre toujours
+> absente. La branche décide de ce qui arrivera au plan 3, pas de ce qui arrive
+> maintenant.
 
 ### 8.5 bis Message adulte — promesse non tenue par le plan 1/3
 
@@ -939,5 +953,5 @@ Chaque étape est livrable et testable séparément.
 | Coût IA réel par élève et par an | §7.4 | Agrégation `aiUsage.costUsd` sur la production |
 | Fourchette de scolarité privée élémentaire au Sénégal | §7.3 | Connaissance marché du propriétaire du projet |
 | ~~Le tarif par siège et le plancher~~ | §7.1 | **Tranchés : 5 000 FCFA par élève et par année scolaire**, plat, provisoire (« pour le moment »), et **plancher ramené à 30 sièges** — soit 150 000 FCFA de contrat minimum, le seuil voulu à l'origine. |
-| **`past_due` sans échéance impayée identifiable** | §8.5 bis | **Arbitrage ouvert.** La seule branche de `decideAccess` qui échoue en ouvert : accès illimité. Deux issues posées en §8.5 bis. |
+| ~~`past_due` sans échéance impayée identifiable~~ | **§8.5** | **Tranché : refus.** C'était la seule branche de `decideAccess` à échouer en ouvert. Une grâce sans ancre n'est pas une grâce. (Référence corrigée : l'arbitrage était en §8.5, pas en §8.5 bis, qui traite du message adulte.) |
 | **Une école peut-elle grossir en cours d'année ?** | §10 | **Arbitrage ouvert.** Aujourd'hui non, par l'invariant de §4.5. |

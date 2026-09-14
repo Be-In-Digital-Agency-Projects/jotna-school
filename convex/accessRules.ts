@@ -86,7 +86,29 @@ export function decideAccess(input: AccessInput): AccessState {
     case "past_due": {
       // Couper des enfants parce qu'un intendant est en retard est cruel et
       // commercialement suicidaire : on laisse 21 jours (spec §8.5).
-      if (input.oldestOverdueDueAt === null) return granted;
+      //
+      // Mais une grâce se compte À PARTIR DE QUELQUE CHOSE. Sans tranche échue
+      // identifiable, il n'y a pas de date à laquelle l'ancrer — et accorder
+      // l'accès quand même n'était pas de la clémence, c'était l'ABSENCE de
+      // règle : un `past_due` sans ancre ouvrait l'accès sans aucune limite de
+      // temps. C'était la seule branche de cette fonction à échouer en ouvert,
+      // toutes les autres échouant en fermé.
+      //
+      // Un `past_due` sans ancre n'est pas un état légitime, c'est une
+      // INCOHÉRENCE de nos données : le statut est posé par une machine, et
+      // celle qui le posera est la même qui marque la tranche impayée. Un
+      // paywall ne doit pas accorder un accès illimité sur des données
+      // incohérentes.
+      //
+      // INVARIANTE QUE LE PLAN 3 DOIT TENIR — le cron qui fera basculer un
+      // abonnement en `past_due` doit, DANS LA MÊME TRANSACTION, créer ou
+      // marquer la tranche échue qui ancre la grâce. S'il pose le statut sans
+      // l'ancre, cette branche coupera l'école immédiatement au lieu de lui
+      // laisser ses 21 jours. C'est le prix de fermer le trou, et il se paie
+      // là-bas, pas ici.
+      if (input.oldestOverdueDueAt === null) {
+        return { ok: false, reason: "past_due" };
+      }
       return input.now < input.oldestOverdueDueAt + PAST_DUE_GRACE_MS
         ? granted
         : { ok: false, reason: "past_due" };

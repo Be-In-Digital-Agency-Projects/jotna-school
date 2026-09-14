@@ -131,10 +131,37 @@ describe("decideAccess — délai de grâce past_due", () => {
     ).toEqual({ ok: false, reason: "past_due" });
   });
 
-  it("accorde l'accès si past_due sans tranche échue identifiée", () => {
+  it("REFUSE si past_due sans tranche échue identifiée", () => {
+    // Une grâce se compte à partir de quelque chose. Sans ancre il n'y a pas
+    // de date, et accorder l'accès n'était pas de la clémence mais l'absence
+    // de règle — un accès illimité, seule branche de `decideAccess` à échouer
+    // en ouvert. Un `past_due` sans ancre est une incohérence de données, pas
+    // un état légitime.
     expect(
-      decideAccess(base({ subscription: pastDue, oldestOverdueDueAt: null })).ok,
-    ).toBe(true);
+      decideAccess(base({ subscription: pastDue, oldestOverdueDueAt: null })),
+    ).toEqual({ ok: false, reason: "past_due" });
+  });
+
+  it("n'accorde JAMAIS d'accès sans borne de temps en past_due", () => {
+    // La propriété que le trou violait, énoncée directement : quelle que soit
+    // la date, un past_due non ancré refuse. Un test sur un seul instant ne
+    // distinguerait pas une grâce très longue d'une grâce infinie.
+    for (const now of [
+      NOW,
+      NOW + 30 * DAY,
+      NOW + 365 * DAY,
+      NOW + 10_000 * DAY,
+    ]) {
+      expect(
+        decideAccess(
+          base({
+            now,
+            subscription: { status: "past_due", endsAt: now + 100 * DAY },
+            oldestOverdueDueAt: null,
+          }),
+        ).ok,
+      ).toBe(false);
+    }
   });
 
   it("fait primer la fin d'année sur la grâce", () => {

@@ -28,6 +28,7 @@ import type * as explainMistake from "../explainMistake.js";
 import type * as http from "../http.js";
 import type * as linkRequests from "../linkRequests.js";
 import type * as linkRequestsEmail from "../linkRequestsEmail.js";
+import type * as linkRules from "../linkRules.js";
 import type * as migrations from "../migrations.js";
 import type * as palierAttempts from "../palierAttempts.js";
 import type * as paliers_index from "../paliers/index.js";
@@ -75,6 +76,7 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   linkRequests: typeof linkRequests;
   linkRequestsEmail: typeof linkRequestsEmail;
+  linkRules: typeof linkRules;
   migrations: typeof migrations;
   palierAttempts: typeof palierAttempts;
   "paliers/index": typeof paliers_index;

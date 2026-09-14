@@ -2,6 +2,7 @@ import { query, mutation, action, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { createAccount, getAuthUserId } from "@convex-dev/auth/server";
 import { internal } from "./_generated/api";
+import { decideLinkChild } from "./linkRules";
 
 // ---------------------------------------------------------------------------
 // Queries
@@ -254,14 +255,30 @@ export const linkChildToParent = internalMutation({
 });
 
 /**
- * Rattache un élève existant au tuteur AUTHENTIFIÉ.
+ * Rattache un élève existant au tuteur AUTHENTIFIÉ — INTERNE, aucun appelant.
  *
- * `guardianId` n'est plus un argument : il se dérive de la session. La version
- * précédente acceptait n'importe quel couple (élève, tuteur) sans aucun
- * contrôle, ce qui permettait à n'importe qui de s'attribuer l'accès à la
- * progression de n'importe quel élève.
+ * Cette mutation a quitté la surface publique, et n'y reviendra pas telle
+ * quelle. Dériver le tuteur de la session ne suffit pas : le rôle est
+ * auto-attribuable à l'inscription (`convex/auth.ts` lit `params.role` et
+ * accepte "parent"), si bien qu'un compte créé pour l'occasion pouvait
+ * rattacher n'importe quel `Id<"profiles">` d'élève et lire toute sa
+ * progression via l'espace parent. Les gardes ci-dessous contrôlent QUI
+ * appelle et QUELLE relation il déclare — jamais s'il a un droit sur CET
+ * élève-là. Ne restait comme obstacle que d'ignorer l'identifiant de la cible :
+ * de l'opacité, pas une autorisation.
+ *
+ * La pièce manquante est une preuve de ce droit — code de rattachement remis
+ * par l'école, invitation nominative — qui n'existe nulle part dans ce produit.
+ * Une vérification de lien préalable serait circulaire : c'est précisément
+ * `linkChild` qui crée le lien. Tant que cette preuve n'est pas conçue avec le
+ * parcours école, il n'existe pas de contrat public sûr, donc pas d'export
+ * public. Les gardes sont conservées : elles restent justes pour un appelant
+ * interne et documentent la règle voulue.
+ *
+ * La décision d'autorisation vit dans `convex/linkRules.ts`, pure et testée ;
+ * il ne reste ici que l'authentification, les lectures et l'écriture.
  */
-export const linkChild = mutation({
+export const linkChild = internalMutation({
   args: {
     studentId: v.id("profiles"),
     relation: v.union(
@@ -284,26 +301,20 @@ export const linkChild = mutation({
       throw new Error("Profil tuteur introuvable");
     }
 
-    // Un élève ne peut pas se rattacher lui-même un tuteur, et un tuteur ne
-    // peut pas se rattacher à lui-même.
-    if (guardian.role !== "parent" && guardian.role !== "professeur") {
-      throw new Error("Rôle non autorisé");
-    }
-    if (guardian._id === args.studentId) {
-      throw new Error("Lien invalide");
-    }
-
-    // La relation déclarée doit correspondre au rôle réel de l'appelant.
-    if (args.relation === "professeur" && guardian.role !== "professeur") {
-      throw new Error("Rôle non autorisé");
-    }
-    if (args.relation !== "professeur" && guardian.role !== "parent") {
-      throw new Error("Rôle non autorisé");
-    }
-
     const student = await ctx.db.get(args.studentId);
-    if (!student || student.role !== "student") {
-      throw new Error("Profil étudiant introuvable");
+    const decision = decideLinkChild({
+      guardianRole: guardian.role,
+      relation: args.relation,
+      targetRole: student?.role ?? null,
+    });
+    if (!decision.ok) {
+      // Un seul message pour tous les refus de rôle : l'appelant n'a pas à
+      // savoir laquelle des règles l'a arrêté.
+      throw new Error(
+        decision.reason === "target_not_student"
+          ? "Profil étudiant introuvable"
+          : "Rôle non autorisé",
+      );
     }
 
     const existing = await ctx.db

@@ -622,21 +622,40 @@ positionne typiquement entre 1 et 3 % de ce montant, soit 1 500 à
 Le coût marginal réel n'a pas pu être calculé : la session de design n'a pas
 accès à la base de production.
 
-**Structure du coût.** Les paliers sont mis en cache 7 jours par
-(matière, niveau, topic, index), et ce cache est partagé par tous les élèves de
-ce niveau, dans toutes les écoles :
+**Structure du coût.** Les paliers sont mis en cache **un trimestre** (90 jours,
+`PALIER_TTL_MS`) par (matière, niveau, topic, index), et ce cache est partagé par
+tous les élèves de ce niveau, dans toutes les écoles :
 
 > coût par élève = (coût fixe du contenu du niveau ÷ élèves sur ce niveau)
 >                  + variable par élève
 
 La variable par élève est bornée par construction :
-`settings.dailyMoreLimitPerKid` = 3, régénérations plafonnées à 3 par palier sur
-7 jours, le tout sous `settings.aiMonthlyBudgetUsd`. Et la génération est
-paresseuse : aucun cron ne pré-génère de contenu, donc rien ne se dépense de
-façon récurrente à vide. À noter tout de même : le champ
-`paliers.preGenerated` signale l'existence d'un script de pré-génération lancé
-à la main (« Decision 73 »), qui dépense lui à la demande de l'opérateur — à
-prendre en compte dans le calcul du plancher.
+`settings.dailyMoreLimitPerKid` = 3, régénérations plafonnées à 3 par palier et
+par élève sur 7 jours (`REGEN_WINDOW_MS`, à ne pas confondre avec la péremption
+du contenu ci-dessus). Et la génération est paresseuse : aucun cron ne
+pré-génère, donc un palier que personne ne demande ne coûte rien, même expiré.
+
+**Le plafond mensuel ne borne pas ce qu'il prétend borner.** Deux défauts, tous
+deux vérifiés :
+
+1. `aiGateway/db.ts:getMonthSpend` additionne la dépense du mois avec un
+   `.take(1000)`. Au-delà de mille appels IA dans le mois, la somme est
+   tronquée, la dépense est sous-estimée, et `aiMonthlyBudgetUsd` **cesse de
+   mordre**. À quelques centaines d'élèves, mille lignes se franchissent en
+   quelques jours.
+2. Les trois modules de §5.5 n'appellent pas la passerelle : ils sont donc hors
+   du plafond **et** hors de la mesure. `attemptsVerify` tourne à chaque réponse
+   libre, et `pdfUploadsExtract` utilise `gpt-4o`, environ 16 fois le prix du
+   mini.
+
+Le plafond doit être réparé avant de servir d'argument de rentabilité.
+
+**Correction — le script de pré-génération n'existe pas.** Une version
+antérieure de cette section déduisait du champ `paliers.preGenerated`
+(« Decision 73 ») l'existence d'un script lancé à la main, et demandait d'en
+tenir compte dans le plancher. Vérification faite : **rien ne pose jamais ce
+champ à `true`**, aucun script n'est présent dans le dépôt. Il n'y a rien à
+compter.
 
 **Conséquence stratégique** : la première école d'un niveau paie le contenu, la
 dixième n'ajoute presque rien. Le tarif doit viser à *remplir des niveaux*,

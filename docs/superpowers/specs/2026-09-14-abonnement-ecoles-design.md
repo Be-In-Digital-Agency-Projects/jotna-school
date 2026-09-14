@@ -352,7 +352,7 @@ plus se connecter **pour payer**. L'espace école et l'espace facturation
 restent accessibles en permanence, quel que soit le statut de l'abonnement.
 Seul le chemin d'apprentissage élève est protégé.
 
-### 5.7 Surface à instrumenter — 33 fonctions
+### 5.7 Surface à instrumenter — 34 fonctions
 
 | Fichier | Fonctions | n |
 |---|---|---|
@@ -367,6 +367,16 @@ Seul le chemin d'apprentissage élève est protégé.
 | `attemptsExplain.ts` | `generateExplanation` | 1 |
 | `explainMistake.ts` | `explainExercise` | 1 |
 | `streak.ts` | `setSoundEnabled` | 1 |
+| `attemptsVerify.ts` | `verifyShortAnswerWithAI` | 1 |
+
+**`attemptsVerify.verifyShortAnswerWithAI` a été ajoutée après coup.** Elle
+manquait au relevé initial : c'est une `action` **publique**, câblée au client
+(`components/exercises/ExercisePlayer.tsx`), qui appelle OpenAI **en direct**
+— donc hors du gateway et hors du verrou de §5.5. Sans contrôle, un élève sans
+droits valides pouvait déclencher une dépense IA par ce chemin. Elle se
+déclenche quand la vérification locale par comparaison de chaînes échoue, donc
+sur les réponses fausses ou formulées autrement — pas à chaque soumission,
+mais fréquemment dans une application d'entraînement.
 
 Les quatre actions (`getBucket`, `regenerateFailedExercises`,
 `explainExercise`, `generateExplanation`) n'ont pas de `ctx.db` : elles
@@ -705,7 +715,7 @@ après un import de plus d'un lot.
 montant divergent rejeté, jeton rejoué sans double crédit, tranche soldée
 faisant passer l'abonnement en `active`.
 
-**Paywall côté fonctions** — pour un échantillon représentatif des 33 fonctions
+**Paywall côté fonctions** — pour un échantillon représentatif des 34 fonctions
 (au moins une par fichier) : un élève sans accès valide ne peut ni lire ni
 écrire. Plus un test sur `aiGateway.generate` : aucun appel IA sans droit
 valide.
@@ -737,7 +747,7 @@ Chaque étape est livrable et testable séparément.
    du rôle. Aucun comportement modifié.
 2. **`convex/access.ts` et la dérivation** — avec ses tests, avant toute
    instrumentation. Une seule fonction protégée en démonstration.
-3. **Instrumentation des 33 fonctions + `aiGateway.generate`** — mécanique et
+3. **Instrumentation des 34 fonctions + `aiGateway.generate`** — mécanique et
    volumineux ; l'étape où un oubli est invisible.
 4. **Écrans de blocage** — `kidCopy` pour l'élève, vraie raison pour les
    adultes.

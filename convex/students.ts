@@ -494,12 +494,10 @@ export const getMyEarnedBadges = query({
       .query("profiles")
       .withIndex("by_userId", (q) => q.eq("userId", userId as string))
       .unique();
-    if (!profile) return [];
+    if (!profile || profile.role !== "student") return [];
 
-    // Paywall (spec §5.4) — même valeur de retour que le garde-fou
-    // ci-dessus. checkAccess renvoie aussi ok:false pour un profil non-élève
-    // (reason "not_student"), sans incidence ici : cette lecture n'a de sens
-    // que pour un élève.
+    // Paywall (spec §5.4) — même valeur de retour que le garde-fou de rôle
+    // ci-dessus.
     const access = await checkAccess(ctx, profile);
     if (!access.ok) return [];
 

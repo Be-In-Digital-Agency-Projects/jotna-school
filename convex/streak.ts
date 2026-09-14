@@ -205,7 +205,9 @@ export const setSoundEnabled = mutation({
       .query("profiles")
       .withIndex("by_userId", (q) => q.eq("userId", userId as string))
       .unique();
-    if (!profile) throw new Error("Profil introuvable");
+    if (!profile || profile.role !== "student") {
+      throw new Error("Profil élève introuvable");
+    }
 
     // Paywall (spec §5.4) — mutation : lève si l'accès n'est pas ouvert.
     await requireAccess(ctx, profile);

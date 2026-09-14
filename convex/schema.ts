@@ -40,6 +40,7 @@ export default defineSchema({
       v.literal("parent"),
       v.literal("student"),
       v.literal("professeur"),
+      v.literal("directeur"),
     ),
     name: v.string(),
     avatar: v.optional(v.string()),
@@ -47,6 +48,9 @@ export default defineSchema({
     // Parental consent for AI data processing (Loi 2008-12, Sénégal)
     aiDataConsentGranted: v.optional(v.boolean()),
     aiDataConsentGrantedAt: v.optional(v.number()),
+    // Niveau de l'élève. Absent jusqu'ici : getStudentSubjectMap listait les
+    // topics sans filtre de niveau, donc un élève voyait les six niveaux.
+    class: v.optional(classEnum),
   }).index("by_userId", ["userId"]),
 
   // ---------------------------------------------------------------------------
@@ -344,6 +348,7 @@ export default defineSchema({
       v.literal("failed"),
       v.literal("rejected_budget"),
       v.literal("rejected_quota"),
+      v.literal("rejected_access"),
     ),
     traceId: v.string(),
     metadata: v.optional(v.any()),
@@ -463,4 +468,169 @@ export default defineSchema({
   })
     .index("by_kid", ["kidId"])
     .index("by_parent_kid", ["parentId", "kidId"]),
+
+  // ===========================================================================
+  // ABONNEMENT ÉCOLES — spec docs/superpowers/specs/2026-09-14-abonnement-ecoles-design.md
+  // ===========================================================================
+
+  schools: defineTable({
+    name: v.string(),
+    city: v.optional(v.string()),
+    contactName: v.string(),
+    contactEmail: v.string(),
+    contactPhone: v.optional(v.string()),
+    ninea: v.optional(v.string()), // identifiant fiscal SN, requis sur la facture
+    status: v.union(
+      v.literal("prospect"),
+      v.literal("active"),
+      v.literal("suspended"),
+    ),
+    createdAt: v.number(),
+  }).index("by_status", ["status"]),
+
+  schoolStaff: defineTable({
+    schoolId: v.id("schools"),
+    profileId: v.id("profiles"),
+    staffRole: v.union(v.literal("directeur"), v.literal("professeur")),
+    status: v.union(v.literal("active"), v.literal("removed")),
+  })
+    .index("by_school", ["schoolId"])
+    .index("by_profile", ["profileId"]),
+
+  // Les classes réelles, pas les niveaux : une école a souvent CM1 A et CM1 B.
+  schoolClasses: defineTable({
+    schoolId: v.id("schools"),
+    class: classEnum,
+    label: v.string(), // "A", "B", "unique"
+    teacherId: v.optional(v.id("profiles")),
+  })
+    .index("by_school", ["schoolId"])
+    .index("by_school_class", ["schoolId", "class"]),
+
+  schoolMemberships: defineTable({
+    schoolId: v.id("schools"),
+    studentId: v.id("profiles"),
+    schoolClassId: v.id("schoolClasses"),
+    status: v.union(v.literal("active"), v.literal("released")),
+    enrolledAt: v.number(),
+    releasedAt: v.optional(v.number()),
+  })
+    .index("by_school_status", ["schoolId", "status"])
+    .index("by_student", ["studentId"])
+    .index("by_class_status", ["schoolClassId", "status"]),
+
+  // Compteur de sièges dans sa PROPRE table : l'import en masse ne doit pas
+  // entrer en contention d'écriture avec le document d'abonnement.
+  schoolSeatUsage: defineTable({
+    schoolId: v.id("schools"),
+    activeCount: v.number(),
+    updatedAt: v.number(),
+  }).index("by_school", ["schoolId"]),
+
+  subscriptions: defineTable({
+    // "parent" n'est pas implémenté en v1 : le champ existe pour ouvrir le B2C
+    // sans migration. Cohérence ownerType/ownerId garantie par le code, pas
+    // par le schéma (spec §4.3).
+    ownerType: v.union(v.literal("school"), v.literal("parent")),
+    ownerId: v.string(),
+    seatsPurchased: v.number(),
+    pricePerSeatFcfa: v.number(), // tarif effectif moyen, affichage seul
+    totalFcfa: v.number(), // fait foi pour la facturation
+    startsAt: v.number(),
+    endsAt: v.number(),
+    status: v.union(
+      v.literal("draft"),
+      v.literal("pending_payment"),
+      v.literal("active"),
+      v.literal("past_due"),
+      v.literal("expired"),
+      v.literal("cancelled"),
+    ),
+    createdAt: v.number(),
+  })
+    .index("by_owner", ["ownerType", "ownerId"])
+    .index("by_status", ["status"])
+    .index("by_endsAt", ["endsAt"]),
+
+  installments: defineTable({
+    subscriptionId: v.id("subscriptions"),
+    index: v.number(), // 1..3
+    amountFcfa: v.number(),
+    dueAt: v.number(),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("paid"),
+      v.literal("overdue"),
+      v.literal("failed"),
+    ),
+    paidAt: v.optional(v.number()),
+  })
+    .index("by_subscription", ["subscriptionId"])
+    .index("by_status_dueAt", ["status", "dueAt"]),
+
+  payments: defineTable({
+    subscriptionId: v.id("subscriptions"),
+    installmentId: v.optional(v.id("installments")),
+    provider: v.literal("paydunya"),
+    providerToken: v.string(), // clé d'idempotence du webhook
+    amountFcfa: v.number(),
+    status: v.union(
+      v.literal("initiated"),
+      v.literal("completed"),
+      v.literal("failed"),
+      v.literal("cancelled"),
+    ),
+    rawPayload: v.optional(v.any()), // audit et litige
+    createdAt: v.number(),
+    completedAt: v.optional(v.number()),
+  })
+    .index("by_providerToken", ["providerToken"])
+    .index("by_subscription", ["subscriptionId"]),
+
+  studentImportJobs: defineTable({
+    schoolId: v.id("schools"),
+    createdBy: v.id("profiles"),
+    totalRows: v.number(),
+    processedRows: v.number(),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("running"),
+      v.literal("completed"),
+      v.literal("partial"),
+      v.literal("failed"),
+    ),
+    startedAt: v.number(),
+    finishedAt: v.optional(v.number()),
+    errorMessage: v.optional(v.string()),
+  })
+    .index("by_school", ["schoolId"])
+    .index("by_status", ["status"]),
+
+  // Table enfant, pas un tableau sur le job : les guidelines interdisent les
+  // listes non bornées dans un document.
+  studentImportRows: defineTable({
+    jobId: v.id("studentImportJobs"),
+    schoolClassId: v.id("schoolClasses"),
+    name: v.string(),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("created"),
+      v.literal("skipped"),
+      v.literal("failed"),
+    ),
+    studentId: v.optional(v.id("profiles")), // rempli après création → idempotence
+    loginCode: v.optional(v.string()),
+    failureReason: v.optional(v.string()),
+  }).index("by_job_status", ["jobId", "status"]),
+
+  parentLinkCodes: defineTable({
+    studentId: v.id("profiles"),
+    schoolId: v.id("schools"),
+    code: v.string(),
+    expiresAt: v.number(),
+    redeemedBy: v.optional(v.id("profiles")),
+    redeemedAt: v.optional(v.number()),
+  })
+    .index("by_code", ["code"])
+    .index("by_student", ["studentId"]),
 });

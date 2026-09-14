@@ -33,7 +33,7 @@ export const getSubjectProgress = query({
     // Paywall (spec §5.4) — même raisonnement que getStudentProgress
     // ci-dessus : pas de profil résolu ici, donc blockedStudent(ctx) sur
     // l'appelant.
-    if (await blockedStudent(ctx)) return [];
+    if (await blockedStudent(ctx)) return null;
 
     // Get all topics for this subject
     const topics = await ctx.db

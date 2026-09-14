@@ -48,8 +48,17 @@ export default defineSchema({
     // Parental consent for AI data processing (Loi 2008-12, Sénégal)
     aiDataConsentGranted: v.optional(v.boolean()),
     aiDataConsentGrantedAt: v.optional(v.number()),
-    // Niveau de l'élève. Absent jusqu'ici : getStudentSubjectMap listait les
-    // topics sans filtre de niveau, donc un élève voyait les six niveaux.
+    // Niveau de l'élève.
+    //
+    // ATTENTION — ce champ N'EST ENCORE LU PAR AUCUNE lecture de contenu.
+    // `students.getStudentSubjectMap` charge tous les topics d'une matière par
+    // `by_subjectId`, sans filtre de niveau : un élève voit donc toujours les
+    // six niveaux, et l'ajout de ce champ n'y a rien changé. La session de
+    // palier tient son niveau de `topic.class`, pas d'ici.
+    //
+    // Seule écriture à ce jour : `schools.enrollStudent`, qui l'aligne sur la
+    // classe d'inscription. Le filtrage par niveau reste à faire — c'est la
+    // décision D10 de la spec, déclarée mais non réalisée.
     class: v.optional(classEnum),
   }).index("by_userId", ["userId"]),
 

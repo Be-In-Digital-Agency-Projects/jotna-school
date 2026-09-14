@@ -24,6 +24,7 @@ import {
   type StudentStreakState,
 } from "./students";
 import type { Doc, Id } from "./_generated/dataModel";
+import { requireAccess } from "./access";
 
 // ---------------------------------------------------------------------------
 // Date helpers — Africa/Dakar timezone (UTC+0, no DST).
@@ -205,6 +206,10 @@ export const setSoundEnabled = mutation({
       .withIndex("by_userId", (q) => q.eq("userId", userId as string))
       .unique();
     if (!profile) throw new Error("Profil introuvable");
+
+    // Paywall (spec §5.4) — mutation : lève si l'accès n'est pas ouvert.
+    await requireAccess(ctx, profile);
+
     const prefs = readStudentPreferences(profile);
     if (prefs.soundEnabled === args.enabled) return; // Idempotent
     const next: StudentPreferences = { ...prefs, soundEnabled: args.enabled };

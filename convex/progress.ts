@@ -1,5 +1,6 @@
 import { query } from "./_generated/server";
 import { v } from "convex/values";
+import { blockedStudent } from "./access";
 
 // ---------------------------------------------------------------------------
 // Queries
@@ -10,6 +11,12 @@ export const getStudentProgress = query({
     studentId: v.id("profiles"),
   },
   handler: async (ctx, args) => {
+    // Paywall (spec §5.4) — cette lecture prend `studentId` en argument et
+    // ne résout aucun profil. blockedStudent(ctx) résout le profil de
+    // L'APPELANT et ne bloque que s'il s'agit d'un élève sans droit valide —
+    // jamais un adulte, jamais un visiteur non authentifié.
+    if (await blockedStudent(ctx)) return [];
+
     return await ctx.db
       .query("studentTopicProgress")
       .withIndex("by_studentId", (q) => q.eq("studentId", args.studentId))
@@ -23,6 +30,11 @@ export const getSubjectProgress = query({
     subjectId: v.id("subjects"),
   },
   handler: async (ctx, args) => {
+    // Paywall (spec §5.4) — même raisonnement que getStudentProgress
+    // ci-dessus : pas de profil résolu ici, donc blockedStudent(ctx) sur
+    // l'appelant.
+    if (await blockedStudent(ctx)) return [];
+
     // Get all topics for this subject
     const topics = await ctx.db
       .query("topics")

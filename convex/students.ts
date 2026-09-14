@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { getConditionText, normalizeRarity } from "./badges";
+import { checkAccess, requireAccess } from "./access";
 
 // ---------------------------------------------------------------------------
 // Star approximation helper.
@@ -275,6 +276,11 @@ export const getMyStats = query({
       .unique();
     if (!profile || profile.role !== "student") return null;
 
+    // Paywall (spec §5.4) — même valeur de retour que le garde-fou de rôle
+    // ci-dessus : une requête ne lève jamais.
+    const access = await checkAccess(ctx, profile);
+    if (!access.ok) return null;
+
     const studentId = profile._id;
 
     const progress = await ctx.db
@@ -438,6 +444,10 @@ export const markLevelSeen = mutation({
     if (!profile || profile.role !== "student") {
       throw new Error("Profil élève introuvable");
     }
+
+    // Paywall (spec §5.4) — mutation : lève si l'accès n'est pas ouvert.
+    await requireAccess(ctx, profile);
+
     const prefs = readStudentPreferences(profile);
     const current = prefs.lastSeenLevel ?? 1;
     if (args.level <= current) return; // Idempotent + monotonic.
@@ -461,6 +471,12 @@ export const getMySoundEnabled = query({
       .withIndex("by_userId", (q) => q.eq("userId", userId as string))
       .unique();
     if (!profile || profile.role !== "student") return null;
+
+    // Paywall (spec §5.4) — même valeur de retour que le garde-fou de rôle
+    // ci-dessus.
+    const access = await checkAccess(ctx, profile);
+    if (!access.ok) return null;
+
     const prefs = readStudentPreferences(profile);
     return { soundEnabled: prefs.soundEnabled === true };
   },
@@ -479,6 +495,14 @@ export const getMyEarnedBadges = query({
       .withIndex("by_userId", (q) => q.eq("userId", userId as string))
       .unique();
     if (!profile) return [];
+
+    // Paywall (spec §5.4) — même valeur de retour que le garde-fou
+    // ci-dessus. checkAccess renvoie aussi ok:false pour un profil non-élève
+    // (reason "not_student"), sans incidence ici : cette lecture n'a de sens
+    // que pour un élève.
+    const access = await checkAccess(ctx, profile);
+    if (!access.ok) return [];
+
     const earned = await ctx.db
       .query("earnedBadges")
       .withIndex("by_studentId", (q) => q.eq("studentId", profile._id))
@@ -589,6 +613,11 @@ export const getStudentSubjectMap = query({
       .withIndex("by_userId", (q) => q.eq("userId", userId as string))
       .unique();
     if (!profile || profile.role !== "student") return null;
+
+    // Paywall (spec §5.4) — même valeur de retour que le garde-fou de rôle
+    // ci-dessus.
+    const access = await checkAccess(ctx, profile);
+    if (!access.ok) return null;
 
     const studentId = profile._id;
 

@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { internal } from "./_generated/api";
 import { readStudentPreferences, type StudentPreferences } from "./students";
+import { blockedStudent, requireAccess } from "./access";
 
 // ---------------------------------------------------------------------------
 // D10 — Rarity tier normalization. The schema currently widens
@@ -55,6 +56,11 @@ export function getConditionText(condition: string): string {
 export const list = query({
   args: {},
   handler: async (ctx) => {
+    // Paywall (spec §5.4) — lecture partagée avec l'administration et les
+    // professeurs : blockedStudent(ctx) ne bloque qu'un élève sans droit
+    // valide, jamais un adulte ni un visiteur non authentifié.
+    if (await blockedStudent(ctx)) return [];
+
     const rows = await ctx.db.query("badges").take(100);
     return rows.map((b) => ({
       ...b,
@@ -67,6 +73,11 @@ export const list = query({
 export const getById = query({
   args: { id: v.id("badges") },
   handler: async (ctx, args) => {
+    // Paywall (spec §5.4) — lecture partagée avec l'administration et les
+    // professeurs : blockedStudent(ctx) ne bloque qu'un élève sans droit
+    // valide, jamais un adulte ni un visiteur non authentifié.
+    if (await blockedStudent(ctx)) return null;
+
     return await ctx.db.get(args.id);
   },
 });
@@ -74,6 +85,12 @@ export const getById = query({
 export const listEarnedByStudent = query({
   args: { studentId: v.id("profiles") },
   handler: async (ctx, args) => {
+    // Paywall (spec §5.4) — cette lecture prend `studentId` en argument et
+    // ne résout aucun profil ; elle est aussi partagée avec l'administration
+    // et les professeurs. blockedStudent(ctx) résout le profil de
+    // L'APPELANT et ne bloque que s'il s'agit d'un élève sans droit valide.
+    if (await blockedStudent(ctx)) return [];
+
     const earned = await ctx.db
       .query("earnedBadges")
       .withIndex("by_studentId", (q) => q.eq("studentId", args.studentId))
@@ -191,6 +208,10 @@ export const markBadgesSeen = mutation({
     if (!profile || profile.role !== "student") {
       throw new Error("Profil élève introuvable");
     }
+
+    // Paywall (spec §5.4) — mutation : lève si l'accès n'est pas ouvert.
+    await requireAccess(ctx, profile);
+
     if (args.badgeIds.length === 0) return;
 
     const prefs = readStudentPreferences(profile);

@@ -28,6 +28,29 @@ export const verifyShortAnswerWithAI = action({
       throw new Error("Non authentifié");
     }
 
+    // Paywall (spec §5.4) — cette action appelle OpenAI directement, sans
+    // passer par aiGateway.generate : il n'y a donc pas de verrou de tâche 4
+    // en aval ici. On contrôle le droit de L'APPELANT (pas un identifiant
+    // reçu en argument) avant toute lecture de contexte et tout appel IA.
+    // Même motif que attemptsExplain.generateExplanation : résoudre le
+    // profil de l'appelant via la requête interne existante, puis
+    // interroger getAccessStateForProfile (tâche 3). Une action n'a pas de
+    // ctx.db.
+    const callerProfile = await ctx.runQuery(
+      internal.paliers.index.getProfileByUserId,
+      { userId },
+    );
+    if (!callerProfile) {
+      throw new Error("Profil introuvable");
+    }
+    const access = await ctx.runQuery(
+      internal.access.getAccessStateForProfile,
+      { profileId: callerProfile._id },
+    );
+    if (!access.ok) {
+      throw new Error(`ACCESS_DENIED:${access.reason}`);
+    }
+
     type AttemptContext = {
       submittedAnswer: string;
       exercise: {

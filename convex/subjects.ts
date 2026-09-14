@@ -1,9 +1,15 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
+import { blockedStudent } from "./access";
 
 export const list = query({
   args: {},
   handler: async (ctx) => {
+    // Paywall (spec §5.4) — lecture partagée avec l'administration et les
+    // professeurs : blockedStudent(ctx) ne bloque qu'un élève sans droit
+    // valide, jamais un adulte ni un visiteur non authentifié.
+    if (await blockedStudent(ctx)) return [];
+
     const subjects = await ctx.db.query("subjects").take(50);
     return subjects.sort((a, b) => a.order - b.order);
   },
@@ -12,6 +18,11 @@ export const list = query({
 export const getById = query({
   args: { id: v.id("subjects") },
   handler: async (ctx, args) => {
+    // Paywall (spec §5.4) — lecture partagée avec l'administration et les
+    // professeurs : blockedStudent(ctx) ne bloque qu'un élève sans droit
+    // valide, jamais un adulte ni un visiteur non authentifié.
+    if (await blockedStudent(ctx)) return null;
+
     return await ctx.db.get(args.id);
   },
 });

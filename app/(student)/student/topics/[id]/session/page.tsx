@@ -56,6 +56,7 @@ type PalierResult = {
 
 type SceneAlert =
   | { type: "regen-error"; message: string }
+  | { type: "access-blocked" }
   | { type: "parent-notified" }
   | { type: "quit-confirm" };
 
@@ -66,6 +67,14 @@ type AttemptProgress = {
   failedAttemptsThisExo: number;
   hintsUsedThisExo: number;
 };
+
+// Posé par requireAccess() côté serveur (convex/access.ts) sur getBucket,
+// startPalierAttempt, verifyAttempt, requestHint, submitPalier et
+// regenerateFailedExercises quand l'école n'a plus d'accès valide (spec
+// §5.8). Ce code brut — et la raison qui l'accompagne, parfois liée à
+// l'argent (ex. "no_subscription", "past_due") — ne doit jamais atteindre
+// l'élève tel quel : on le remplace toujours par kidMessages.accessNotOpen.
+const ACCESS_DENIED_PREFIX = "ACCESS_DENIED:";
 
 export default function TopicSessionPage({
   params,
@@ -202,7 +211,9 @@ function PalierSession({ topicId, palierIndex }: { topicId: string; palierIndex:
         let msg = err instanceof Error ? err.message : String(err ?? "Erreur inconnue");
         const match = msg.match(/Uncaught Error:\s*(.+?)(?:\n|$)/);
         if (match) msg = match[1].trim();
-        setBootstrapError(msg);
+        setBootstrapError(
+          msg.includes(ACCESS_DENIED_PREFIX) ? kidMessages.accessNotOpen : msg,
+        );
       } finally {
         setBootstrapping(false);
       }
@@ -339,7 +350,11 @@ function PalierSession({ topicId, palierIndex }: { topicId: string; palierIndex:
       setLocalFailedAttemptsThisExo(0);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Erreur";
-      setSceneAlert({ type: "regen-error", message: msg });
+      if (msg.includes(ACCESS_DENIED_PREFIX)) {
+        setSceneAlert({ type: "access-blocked" });
+      } else {
+        setSceneAlert({ type: "regen-error", message: msg });
+      }
     } finally {
       setRegenerating(false);
     }
@@ -794,6 +809,23 @@ function SceneAlertDialog({
         label="Petit blocage"
         title="On réessaie dans un instant"
         description={alert.message}
+        primaryLabel="J'ai compris"
+        onPrimary={onClose}
+      />
+    );
+  }
+
+  if (alert?.type === "access-blocked") {
+    return (
+      <StudentAlertDialog
+        open
+        onOpenChange={(open) => {
+          if (!open) onClose();
+        }}
+        tone="info"
+        label="Petit blocage"
+        title="Message pour toi"
+        description={kidMessages.accessNotOpen}
         primaryLabel="J'ai compris"
         onPrimary={onClose}
       />

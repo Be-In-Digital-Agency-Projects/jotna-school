@@ -9,8 +9,8 @@ import {
 
 /** Le barème en vigueur : 5 000 FCFA par élève et par année scolaire. */
 const SEAT_PRICE = 5_000;
-/** Plancher plein : 50 × 5 000. */
-const FLOOR_TOTAL = 50 * SEAT_PRICE;
+/** Plancher plein : 30 × 5 000 = 150 000 FCFA. */
+const FLOOR_TOTAL = 30 * SEAT_PRICE;
 
 /**
  * Barème DÉGRESSIF de démonstration — celui de la spec §7.1 avant la décision
@@ -94,27 +94,41 @@ describe("quoteSubscription — le tarif en vigueur, 5 000 FCFA par élève", ()
   });
 });
 
-describe("quoteSubscription — le plancher de 50 sièges", () => {
-  it("facture 50 sièges à qui en demande moins", () => {
-    for (const requested of [1, 30, 49, 50]) {
+describe("quoteSubscription — le plancher de 30 sièges", () => {
+  it("facture 30 sièges à qui en demande moins", () => {
+    for (const requested of [1, 15, 29, 30]) {
       expect(quoteSubscription(requested)).toEqual<SubscriptionQuote>({
-        seatsBilled: 50,
+        seatsBilled: 30,
         totalFcfa: FLOOR_TOTAL,
         pricePerSeatFcfa: SEAT_PRICE,
       });
     }
   });
 
-  it("OUVRE les sièges qu'il facture : 51 demandés, 51 facturés", () => {
-    expect(quoteSubscription(51)).toEqual<SubscriptionQuote>({
-      seatsBilled: 51,
-      totalFcfa: 51 * SEAT_PRICE,
+  it("OUVRE les sièges qu'il facture : 31 demandés, 31 facturés", () => {
+    expect(quoteSubscription(31)).toEqual<SubscriptionQuote>({
+      seatsBilled: 31,
+      totalFcfa: 31 * SEAT_PRICE,
       pricePerSeatFcfa: SEAT_PRICE,
     });
   });
 
-  it("rend le plancher de la constante, pas un 50 recopié", () => {
+  it("lit le plancher DU BARÈME, pas un nombre recopié", () => {
+    // Les deux barèmes ont maintenant des planchers DIFFÉRENTS — 30 en
+    // vigueur, 50 pour la démonstration dégressive. Un 30 ou un 50 écrit en
+    // dur dans le moteur ferait donc tomber l'une des deux assertions. Tant
+    // qu'ils valaient tous deux 50, aucun test ne pouvait le prouver.
     expect(quoteSubscription(1).seatsBilled).toBe(PRICING_SCALE.seatFloor);
+    expect(quoteWithScale(1, DEGRESSIVE_FIXTURE).seatsBilled).toBe(
+      DEGRESSIVE_FIXTURE.seatFloor,
+    );
+  });
+
+  it("rend le minimum d'origine : 30 × 5 000 = 150 000 FCFA", () => {
+    // Le plancher valait 50 quand le premier palier valait 3 000 FCFA, soit
+    // 150 000 FCFA de contrat minimum. Le passage au tarif plat l'avait porté
+    // à 250 000 sans décision ; 30 sièges rétablissent le seuil voulu.
+    expect(quoteSubscription(1).totalFcfa).toBe(150_000);
   });
 });
 

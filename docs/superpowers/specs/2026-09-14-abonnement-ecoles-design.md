@@ -586,15 +586,16 @@ le même prix par élève que la première.
 | 250 élèves | 1 250 000 FCFA | 5 000 |
 | 500 élèves | 2 500 000 FCFA | 5 000 |
 
-**Plancher : 50 sièges facturés minimum** (250 000 FCFA/an). Une école de 12
+**Plancher : 30 sièges facturés minimum** (150 000 FCFA/an). Une école de 12
 élèves rapporte moins que le temps consacré à l'accompagner.
 
-**Conséquence à connaître du plancher.** Il a été calibré quand le premier
-palier valait 3 000 FCFA, où 50 sièges faisaient 150 000 FCFA. Au tarif plat,
-le même plancher porte le contrat minimum à **250 000 FCFA, soit +67 %**. Si son
-but était d'écarter les écoles trop petites pour amortir l'accompagnement, il le
-remplit désormais à 30 sièges ; le maintenir à 50 relève d'un choix commercial,
-pas du calcul d'origine. À trancher si de petites écoles se présentent.
+**Pourquoi 30 et non 50.** Le plancher a été posé à 50 quand le premier palier
+valait 3 000 FCFA : le contrat minimum valait alors 150 000 FCFA. Le passage au
+tarif plat de 5 000 l'aurait porté à 250 000 FCFA — **+67 % sans décision**, par
+simple effet de bord. Le plancher a donc été ramené à 30, ce qui rétablit
+exactement le seuil voulu à l'origine. Ce qui est calibré, c'est le **revenu
+minimum** qui justifie l'accompagnement d'une école, pas le nombre de sièges :
+si le tarif change encore, c'est le nombre de sièges qu'il faut recalculer.
 
 **Grille antérieure, non retenue** — trois tranches dégressives cumulatives
 (3 000 / 2 400 / 1 800 FCFA aux bornes 100 et 300). Elle reste la référence si
@@ -706,12 +707,12 @@ souhaitable ; ou, en attendant, recouper l'agrégat avec la facture OpenAI réel
 de la même période, l'écart entre les deux donnant la mesure de ce qui échappe
 au suivi.
 
-### 7.5 Le plancher de 50 sièges ouvre des sièges, il ne facture pas seulement
+### 7.5 Le plancher ouvre des sièges, il ne facture pas seulement
 
-§7.1 pose « 50 sièges facturés minimum » sans dire ce que l'école reçoit. **Elle
-reçoit 50 sièges.** `quoteSubscription` rend un nombre de sièges facturés égal à
-`max(demandé, 50)`, et c'est ce nombre qui est enregistré dans `seatsPurchased`
-puis plafonné à l'inscription.
+§7.1 pose un minimum facturé sans dire ce que l'école reçoit. **Elle reçoit
+autant de sièges qu'elle en paie.** `quoteSubscription` rend un nombre de sièges
+facturés égal à `max(demandé, seatFloor)`, et c'est ce nombre qui est enregistré
+dans `seatsPurchased` puis plafonné à l'inscription.
 
 L'autre lecture — facturer 50, n'en ouvrir que 30 — ferait payer un droit qu'on
 ne rend pas, et donnerait un `pricePerSeatFcfa` de 5 000 pour une école du plus
@@ -858,7 +859,7 @@ au-delà (accès **fermé**), annulé. Plus : le directeur d'une école expirée
 atteint toujours l'espace facturation.
 
 **Tarification (`convex/__tests__/pricing.test.ts`)** — les trois exemples
-chiffrés de la section 7.2, le plancher de 50 sièges, et une **propriété de
+chiffrés de la section 7.2, le plancher de sièges, et une **propriété de
 monotonie** : pour tout n, `total(n + 1) > total(n)`. C'est ce test qui empêche
 la régression non monotone décrite en 7.2.
 
@@ -937,6 +938,6 @@ Chaque étape est livrable et testable séparément.
 | API PayDunya : facture, webhook, signature, plafonds | §8.7 | Documentation officielle PayDunya |
 | Coût IA réel par élève et par an | §7.4 | Agrégation `aiUsage.costUsd` sur la production |
 | Fourchette de scolarité privée élémentaire au Sénégal | §7.3 | Connaissance marché du propriétaire du projet |
-| ~~Le tarif par siège~~ | §7.1 | **Tranché : 5 000 FCFA par élève et par année scolaire**, plat, provisoire (« pour le moment »). Reste ouvert : le **plancher de 50 sièges**, qui porte désormais le contrat minimum à 250 000 FCFA au lieu de 150 000. |
+| ~~Le tarif par siège et le plancher~~ | §7.1 | **Tranchés : 5 000 FCFA par élève et par année scolaire**, plat, provisoire (« pour le moment »), et **plancher ramené à 30 sièges** — soit 150 000 FCFA de contrat minimum, le seuil voulu à l'origine. |
 | **`past_due` sans échéance impayée identifiable** | §8.5 bis | **Arbitrage ouvert.** La seule branche de `decideAccess` qui échoue en ouvert : accès illimité. Deux issues posées en §8.5 bis. |
 | **Une école peut-elle grossir en cours d'année ?** | §10 | **Arbitrage ouvert.** Aujourd'hui non, par l'invariant de §4.5. |

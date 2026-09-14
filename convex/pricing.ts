@@ -49,7 +49,7 @@ export interface PricingScale {
  * pendant qu'il dort.
  */
 export const PRICING_SCALE: PricingScale = {
-  seatFloor: 50,
+  seatFloor: 30,
   tiers: [{ upToSeat: Number.POSITIVE_INFINITY, pricePerSeatFcfa: 5000 }],
 };
 /** Ce que coûte un contrat, et sur combien de sièges il porte vraiment. */
@@ -74,10 +74,11 @@ export interface SubscriptionQuote {
 /**
  * Les sièges FACTURÉS pour un nombre de sièges demandé.
  *
- * Le plancher OUVRE les sièges qu'il facture : une école qui paie 50 sièges en
- * reçoit 50. La spec §7.1 dit « 50 sièges facturés minimum » sans trancher, et
- * l'autre lecture — facturer 50, n'en ouvrir que 30 — ferait payer un droit
- * qu'on ne donne pas, et rendrait un tarif moyen de 5 000 FCFA pour une école
+ * Le plancher OUVRE les sièges qu'il facture : une école qui paie le plancher
+ * en reçoit autant. La spec §7.1 pose un minimum facturé sans trancher ce que
+ * l'école reçoit, et l'autre lecture — facturer le plancher, n'en ouvrir que
+ * l'effectif réel — ferait payer un droit qu'on ne donne pas, et rendrait un
+ * tarif moyen supérieur au tarif affiché pour une école
  * du palier le moins cher : un prix par élève qui AUGMENTE quand l'effectif
  * baisse.
  *

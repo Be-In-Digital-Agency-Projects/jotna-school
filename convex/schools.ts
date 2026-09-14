@@ -827,11 +827,11 @@ export const createSchool = mutation({
  * d'autorisation reçus en argument que ce module refuse partout ailleurs.
  *
  * CE QUI EST ÉCRIT DANS `seatsPurchased`, ce sont les sièges FACTURÉS, pas le
- * nombre brut reçu : un contrat de 30 sièges s'enregistre à 50, parce que
- * l'école en paie 50 (plancher, spec §7.1) et qu'une école qui paie 50 sièges
- * en reçoit 50. Le plafond d'`enrollStudent` lit ce champ : il doit lire le
- * nombre payé, sans quoi l'école paierait des sièges qu'elle ne pourrait pas
- * occuper.
+ * nombre brut reçu : une demande sous le plancher de `PRICING_SCALE` s'y
+ * remonte, parce que l'école paie le plancher (spec §7.1) et qu'une école qui
+ * paie des sièges les reçoit. Le plafond d'`enrollStudent` lit ce champ : il
+ * doit lire le nombre payé, sans quoi l'école paierait des sièges qu'elle ne
+ * pourrait pas occuper.
  *
  * SIX REFUS, et la raison de chacun :
  *

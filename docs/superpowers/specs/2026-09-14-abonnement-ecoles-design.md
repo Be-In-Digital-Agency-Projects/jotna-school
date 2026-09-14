@@ -416,20 +416,29 @@ repo n'exige que ce soit un email. `profile()` écrit cette valeur dans
 (pas de boîte mail). C'est le professeur ou le directeur qui réinitialise depuis
 la console école — comportement souhaitable pour un enfant de cet âge.
 
-**À vérifier à l'implémentation** (non vérifiable dans la session de design :
-`node_modules` non installé, accès à la documentation Convex Auth bloqué par la
-politique réseau) :
+**Vérifié dans la source du provider installé** (`@convex-dev/auth` 0.0.91,
+`src/providers/Password.ts`) :
 
-1. Le provider `Password` installé valide-t-il le format email de
-   `params.email` ?
-2. Une seconde instance `Password({ id: "eleve", reset: undefined })` est-elle
-   la séparation la plus propre entre adultes (email + réinitialisation) et
-   élèves (code, sans réinitialisation) ?
+1. **Aucune validation du format email.** `defaultProfile` se contente de
+   `email: params.email as string`, et le repo surcharge de toute façon
+   `profile()`. La valeur part telle quelle dans `account: { id: email, secret }`.
+   Un code `CM1A-4821` est donc un identifiant de connexion valide, et
+   **l'adresse de synthèse de repli est inutile** — l'élève tape son code, point.
 
-**Repli si le format email est imposé** : une adresse de synthèse
-`cm1a-4821@eleve.jotna.sn`, jamais montrée à l'enfant — l'interface n'affiche
-que le code et ajoute le domaine en silence. Le parcours fonctionne dans les
-deux cas ; ce point ne bloque pas le design.
+2. **La piste « seconde instance `Password({ id: "eleve" })` » ne marche pas**,
+   et il faut l'abandonner. `Password()` retourne
+   `ConvexCredentials({ id: "password", … })` avec cet identifiant **codé en
+   dur** ; `config.id` n'alimente que le champ `provider` de l'enregistrement
+   du compte, pas l'identifiant de connexion. Deux instances entreraient donc
+   en collision sur le même `signIn("password", …)`.
+
+**Conception retenue en conséquence** : **un seul** provider `Password`. Le
+`profile()` existant distingue déjà les rôles ; il distinguera aussi les élèves
+à la forme de leur identifiant. La réinitialisation reste configurée
+globalement sur `ResendOTPPasswordReset` : pour un élève dont l'identifiant est
+un code sans boîte mail, elle échouera naturellement — c'est le comportement
+voulu, la réinitialisation passant par une mutation réservée au professeur ou
+au directeur.
 
 ### 6.3 Rattachement du parent par code
 
@@ -716,7 +725,7 @@ Chaque étape est livrable et testable séparément.
 
 | Point | Où | Comment |
 |---|---|---|
-| Le provider `Password` valide-t-il le format email ? | §6.2 | Lire `node_modules/@convex-dev/auth` après `npm install` |
+| ~~Le provider `Password` valide-t-il le format email ?~~ | §6.2 | **Résolu** : non, aucune validation. Et la piste des deux providers est écartée, l'identifiant de connexion étant codé en dur. |
 | API PayDunya : facture, webhook, signature, plafonds | §8.7 | Documentation officielle PayDunya |
 | Coût IA réel par élève et par an | §7.4 | Agrégation `aiUsage.costUsd` sur la production |
 | Fourchette de scolarité privée élémentaire au Sénégal | §7.3 | Connaissance marché du propriétaire du projet |

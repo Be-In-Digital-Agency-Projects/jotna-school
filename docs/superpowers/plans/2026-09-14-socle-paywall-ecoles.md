@@ -11,7 +11,7 @@
 
 **Architecture:** Le droit d'accès est **dérivé à chaque appel** depuis la chaîne élève → inscription → école → abonnement, jamais stocké ni mis en cache. Toute la décision vit dans une fonction **pure** (`convex/accessRules.ts`) que des wrappers Convex minces (`convex/access.ts`) alimentent en documents déjà lus — le même découpage que `aiGateway/budget.ts` (pur) et `aiGateway/db.ts` (I/O). Un verrou est posé dans `aiGateway.generate`, point de passage unique de toute dépense IA, pour qu'une fonction future qui oublierait le contrôle ne puisse pas dépenser d'argent.
 
-**Tech Stack:** Next.js 16.2.4, React 19.2.4, Convex 1.35.1, `@convex-dev/auth` 0.0.91, TypeScript 5, Vitest 4.1.4 (`environment: "jsdom"`), Tailwind 4.
+**Tech Stack:** Next.js 16.2.4, React 19.2.4, Convex 1.35.1, `@convex-dev/auth` 0.0.91, TypeScript 5, Vitest 4.1.4 (`environment: "jsdom"`), Tailwind 4. **Gestionnaire de paquets : pnpm** — la CI fait `pnpm install --frozen-lockfile` ; `npm install` échoue sur ce dépôt.
 
 **Spec:** `docs/superpowers/specs/2026-09-14-abonnement-ecoles-design.md`
 
@@ -56,6 +56,11 @@ tâches ci-dessous.
   L'identité se dérive côté serveur (guidelines Convex ; spec §6.5).
 - **Nommage des index : convention du repo** (`by_school_status`), pas
   `by_school_and_status` des guidelines (spec §4.4).
+- **pnpm, jamais npm.** Le dépôt a un `pnpm-lock.yaml` et la CI fait
+  `pnpm install --frozen-lockfile`. `npm install` y échoue
+  (`Cannot read properties of null (reading 'edgesOut')`).
+- **Base de référence avant modification : 282 tests dans 16 fichiers,
+  typecheck propre.** Toute tâche doit laisser ce compte au moins intact.
 - Convex peut importer depuis `lib/` par chemin relatif : `import { kidMessages } from "../lib/kidCopy";`
   (précédent : `convex/reportsEmail.ts`).
 
@@ -326,11 +331,11 @@ journaliser son refus.
 - [ ] **Step 4: Vérifier que le typage et la construction passent**
 
 ```bash
-npm install
-npx tsc --noEmit
+pnpm install --frozen-lockfile
+pnpm tsc --noEmit
 ```
 
-Attendu : aucune erreur. Si `npx tsc --noEmit` signale `classEnum` non défini
+Attendu : aucune erreur. Si `pnpm tsc --noEmit` signale `classEnum` non défini
 dans le bloc école, c'est que le bloc a été inséré avant la déclaration de
 `classEnum` — la remonter n'est pas nécessaire, `classEnum` est déclaré en tête
 de fichier, hors de `defineSchema`.
@@ -338,7 +343,7 @@ de fichier, hors de `defineSchema`.
 - [ ] **Step 5: Vérifier l'absence de régression sur les tests existants**
 
 ```bash
-npx vitest run
+pnpm test --run
 ```
 
 Attendu : la suite existante passe comme avant cette tâche. Aucun test nouveau
@@ -539,7 +544,7 @@ describe("decideAccess — délai de grâce past_due", () => {
 - [ ] **Step 2: Lancer le test pour vérifier qu'il échoue**
 
 ```bash
-npx vitest run convex/__tests__/accessRules.test.ts
+pnpm test --run convex/__tests__/accessRules.test.ts
 ```
 
 Attendu : ÉCHEC — `Failed to resolve import "../accessRules"`, le fichier
@@ -662,7 +667,7 @@ export function decideAccess(input: AccessInput): AccessState {
 - [ ] **Step 4: Lancer le test pour vérifier qu'il passe**
 
 ```bash
-npx vitest run convex/__tests__/accessRules.test.ts
+pnpm test --run convex/__tests__/accessRules.test.ts
 ```
 
 Attendu : SUCCÈS, 15 tests passants.
@@ -880,7 +885,7 @@ export const getAccessStateForProfile = internalQuery({
 - [ ] **Step 2: Vérifier le typage**
 
 ```bash
-npx tsc --noEmit
+pnpm tsc --noEmit
 ```
 
 Attendu : aucune erreur. Si `by_owner` est refusé sur la chaîne
@@ -890,7 +895,7 @@ est bien déclaré dans cet ordre : `["ownerType", "ownerId"]`.
 - [ ] **Step 3: Vérifier l'absence de régression**
 
 ```bash
-npx vitest run
+pnpm test --run
 ```
 
 Attendu : toute la suite passe, y compris les 15 tests de la tâche 2. Aucun test
@@ -995,7 +1000,7 @@ et celui de la mutation doivent concorder.
 - [ ] **Step 4: Vérifier le typage**
 
 ```bash
-npx tsc --noEmit
+pnpm tsc --noEmit
 ```
 
 Attendu : aucune erreur. Une erreur sur `status: "rejected_access"` signifie que
@@ -1004,7 +1009,7 @@ l'étape 3 n'a pas été faite.
 - [ ] **Step 5: Vérifier l'absence de régression**
 
 ```bash
-npx vitest run
+pnpm test --run
 ```
 
 Attendu : toute la suite passe. `convex/__tests__/budget.test.ts` et
@@ -1141,7 +1146,7 @@ la spec §5.8 laisse les chemins de lecture adultes ouverts.
 - [ ] **Step 6: Vérifier le typage et la non-régression**
 
 ```bash
-npx tsc --noEmit && npx vitest run
+pnpm tsc --noEmit && pnpm test --run
 ```
 
 Attendu : aucune erreur de typage, toute la suite passe. Les tests existants de
@@ -1222,7 +1227,7 @@ Appliquer le même bloc dans `convex/explainMistake.ts`, mêmes conditions.
 - [ ] **Step 3: Vérifier le typage et la non-régression**
 
 ```bash
-npx tsc --noEmit && npx vitest run
+pnpm tsc --noEmit && pnpm test --run
 ```
 
 Attendu : aucune erreur, toute la suite passe.
@@ -1341,7 +1346,7 @@ d'élève : `checkAccess` avec la valeur vide existante.
 - [ ] **Step 4: Vérifier le typage et la non-régression**
 
 ```bash
-npx tsc --noEmit && npx vitest run
+pnpm tsc --noEmit && pnpm test --run
 ```
 
 Attendu : aucune erreur, toute la suite passe. Les tests
@@ -1529,7 +1534,7 @@ import { AccessGate } from "@/components/AccessGate";
 - [ ] **Step 5: Vérifier le typage et la construction**
 
 ```bash
-npx tsc --noEmit && npm run build
+pnpm tsc --noEmit && pnpm build
 ```
 
 Attendu : aucune erreur. Si `@/convex/accessRules` n'est pas résolu, vérifier
@@ -1539,7 +1544,7 @@ racine du projet.
 - [ ] **Step 6: Vérifier l'absence de régression**
 
 ```bash
-npx vitest run
+pnpm test --run
 ```
 
 Attendu : toute la suite passe.
@@ -1667,7 +1672,7 @@ test à jour : l'argument n'existe plus.
 - [ ] **Step 3: Vérifier le typage et la non-régression**
 
 ```bash
-npx tsc --noEmit && npx vitest run
+pnpm tsc --noEmit && pnpm test --run
 ```
 
 Attendu : aucune erreur, toute la suite passe. `convex/__tests__/profiles.test.ts`
@@ -1701,7 +1706,7 @@ identifiant d'utilisateur en argument pour autoriser."
 - [ ] **Toute la suite passe**
 
 ```bash
-npx tsc --noEmit && npx vitest run && npm run build && npm run lint
+pnpm tsc --noEmit && pnpm test --run && pnpm build && pnpm lint
 ```
 
 - [ ] **Les 33 fonctions de la spec §5.7 sont couvertes**
@@ -1746,7 +1751,7 @@ Attendu : au moins deux correspondances.
 
 - [ ] **Contrôle manuel de bout en bout**
 
-Avec `npx convex dev` puis `npm run dev` :
+Avec `pnpm convex dev` puis `pnpm dev` :
 
 1. Insérer à la main, via le tableau de bord Convex, une `schools`, une
    `schoolClasses`, une `schoolMemberships` active pour un élève de test, et une

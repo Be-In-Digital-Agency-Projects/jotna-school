@@ -232,6 +232,59 @@ Les guidelines Convex recommandent `by_field1_and_field2`. Le repo utilise
 déjà `by_subjectId_class`, `by_user_palier`, `by_month_status`. **On suit la
 convention du repo** (`by_school_status`) pour rester homogène avec l'existant.
 
+### 4.5 Invariant : les contrats d'une école sont disjoints
+
+**Deux contrats d'une même école ne se chevauchent jamais.** Ce n'est pas une
+convenance de modélisation : c'est ce qui rend correcte la lecture qui décide de
+l'accès de chaque enfant.
+
+Le paywall (`convex/access.ts`) et le plafond de sièges (`convex/schools.ts`)
+désignent le contrat en vigueur par **une seule lecture de document** — le plus
+grand `startsAt` parmi les contrats déjà commencés, sur `by_owner_startsAt` :
+
+```ts
+.withIndex("by_owner_startsAt", (q) =>
+  q.eq("ownerType", "school").eq("ownerId", schoolId).lte("startsAt", now))
+.order("desc")
+.first()
+```
+
+Sous disjointness, ce document est **le** contrat qui couvre `now` s'il en
+existe un, et le dernier contrat échu sinon — ce qui donne `expired` plutôt que
+`no_subscription` pour une école qui a laissé son contrat s'éteindre. Sans
+disjointness, la lecture peut retenir un contrat court et échu niché dans un
+contrat long et actif, et **couper une école qui a payé**.
+
+L'invariant est maintenu à l'écriture : `recordSubscription` refuse toute
+période croisant un contrat existant. Le contrôle est **exact en une lecture** —
+le candidat est la ligne de plus grand `startsAt` parmi celles qui commencent
+avant la fin proposée, et il y a conflit si et seulement si son `endsAt` dépasse
+le début proposé. Une fenêtre de lecture bornée ne prouverait rien : n'importe
+quel nombre de lignes intercalées en évincerait le vrai conflit.
+
+**Corollaire : `cancelled` n'est pas enregistrable.** Une première version
+exemptait les contrats résiliés du contrôle de chevauchement, au motif qu'une
+période résiliée doit pouvoir être recontractée. Le motif ne tient pas : aucune
+mutation ne sait résilier un contrat existant — il n'y a **aucun `patch` sur
+`subscriptions`**, seulement un `insert` — donc une ligne ne peut jamais
+*devenir* résiliée. L'exemption ne s'appliquait qu'aux lignes saisies résiliées
+d'emblée, et celles-là empoisonnaient la sélection : enregistrées avant le
+contrat annuel et datées après lui, elles gagnaient la sélection et coupaient
+l'école, sans borne — la ligne résiliée continue de gagner jusqu'à ce qu'un
+contrat au début encore plus tardif soit enregistré.
+
+**Ce que la facturation devra faire.** Le jour où une vraie résiliation existera
+(un `patch` du statut vers `cancelled`), l'invariant change de nature : il ne
+portera plus que sur les contrats non résiliés. Deux choses devront suivre
+**ensemble**, l'une sans l'autre rouvrant le défaut :
+
+1. la **sélection** devra ignorer les contrats résiliés ;
+2. le **contrôle de chevauchement** aura besoin d'un index portant `status` pour
+   rester exact — `by_owner_startsAt` ne le porte pas, donc aucune lecture
+   bornée par cet index ne distingue un conflit réel d'une ligne résiliée.
+
+---
+
 ---
 
 ## 5. Couche de droits d'accès
@@ -607,6 +660,24 @@ souhaitable ; ou, en attendant, recouper l'agrégat avec la facture OpenAI réel
 de la même période, l'écart entre les deux donnant la mesure de ce qui échappe
 au suivi.
 
+### 7.5 Le plancher de 50 sièges ouvre des sièges, il ne facture pas seulement
+
+§7.1 pose « 50 sièges facturés minimum » sans dire ce que l'école reçoit. **Elle
+reçoit 50 sièges.** `quoteSubscription` rend un nombre de sièges facturés égal à
+`max(demandé, 50)`, et c'est ce nombre qui est enregistré dans `seatsPurchased`
+puis plafonné à l'inscription.
+
+L'autre lecture — facturer 50, n'en ouvrir que 30 — ferait payer un droit qu'on
+ne rend pas, et donnerait un `pricePerSeatFcfa` de 5 000 pour une école du plus
+petit palier : un tarif moyen qui **augmente** quand l'école rapetisse, soit
+exactement la non-monotonie que §7.2 existe pour interdire.
+
+La grille vit dans `convex/pricing.ts`, module pur sans aucun import, testé sur
+les trois exemples de §7.2, les bornes de palier, le plancher, et la monotonie
+prouvée par balayage de 0 à 420 sièges — pas par trois points choisis.
+
+---
+
 ---
 
 ## 8. Encaissement — PayDunya
@@ -775,6 +846,13 @@ contenu.
 - Remboursement et avoir sur siège libéré en cours d'année.
 - Ouverture du contenu au-delà de CE2/CM1 : indépendant de ce chantier, la
   génération accepte déjà les six niveaux.
+- **Amender un contrat en cours.** Une école qui veut plus de sièges en février
+  ne peut pas en obtenir avant la fin du contrat courant : l'invariant de §4.5
+  refuse tout contrat chevauchant, et aucune mutation ne modifie une ligne
+  existante. Ce n'est pas un oubli — amender un contrat en cours, c'est décider
+  du sort du montant déjà facturé, donc de la facturation. **C'est une limite de
+  produit, pas une limite technique** : si les écoles doivent pouvoir grossir en
+  cours d'année, il faut la lever avant la mise en service.
 
 ---
 
@@ -813,3 +891,6 @@ Chaque étape est livrable et testable séparément.
 | API PayDunya : facture, webhook, signature, plafonds | §8.7 | Documentation officielle PayDunya |
 | Coût IA réel par élève et par an | §7.4 | Agrégation `aiUsage.costUsd` sur la production |
 | Fourchette de scolarité privée élémentaire au Sénégal | §7.3 | Connaissance marché du propriétaire du projet |
+| **Le tarif 3 000 / 2 400 / 1 800 FCFA et le plancher de 50 sièges** | §7.1 | **Jamais confirmés.** La structure (cumulative, monotone) est décidée ; les valeurs sont des hypothèses, isolées dans une seule constante de `convex/pricing.ts`. |
+| **`past_due` sans échéance impayée identifiable** | §8.5 bis | **Arbitrage ouvert.** La seule branche de `decideAccess` qui échoue en ouvert : accès illimité. Deux issues posées en §8.5 bis. |
+| **Une école peut-elle grossir en cours d'année ?** | §10 | **Arbitrage ouvert.** Aujourd'hui non, par l'invariant de §4.5. |

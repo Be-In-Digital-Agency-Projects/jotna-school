@@ -703,6 +703,7 @@ past_due dont endsAt est passé rend expired, pas past_due."
   - `async function checkAccess(ctx: QueryCtx | MutationCtx, profile: Doc<"profiles"> | null): Promise<AccessState>` — pour les requêtes, ne lève jamais
   - `async function requireAccess(ctx: QueryCtx | MutationCtx, profile: Doc<"profiles"> | null): Promise<{ schoolId: string; endsAt: number }>` — pour les mutations, lève
   - `const getAccessState = query({ args: {} })` → `AccessState` — pour l'UI
+  - `async function blockedStudent(ctx: QueryCtx): Promise<boolean>` — vrai seulement si l'appelant est un élève SANS droit valide ; faux pour tout adulte et pour un visiteur non authentifié
   - `const getAccessStateForProfile = internalQuery({ args: { profileId: v.id("profiles") } })` → `AccessState` — pour les actions
 
 - [ ] **Step 1: Écrire l'implémentation**
@@ -827,12 +828,43 @@ export async function loadAccessInput(
   };
 }
 
+/** Résout le profil de la session courante. */
+async function currentProfile(
+  ctx: QueryCtx | MutationCtx,
+): Promise<Doc<"profiles"> | null> {
+  const userId = await getAuthUserId(ctx);
+  if (!userId) return null;
+  return await ctx.db
+    .query("profiles")
+    .withIndex("by_userId", (q) => q.eq("userId", userId as string))
+    .unique();
+}
+
 /** Pour les REQUÊTES : retourne un statut, ne lève jamais (spec §5.4). */
 export async function checkAccess(
   ctx: QueryCtx | MutationCtx,
   profile: Doc<"profiles"> | null,
 ): Promise<AccessState> {
   return decideAccess(await loadAccessInput(ctx, profile));
+}
+
+/**
+ * Vrai seulement si l'appelant est un ÉLÈVE sans droit valide.
+ *
+ * Destiné aux lectures partagées (subjects, topics, badges) qui servent aussi
+ * l'administration et les professeurs : eux ne doivent jamais être bloqués
+ * (spec §5.6 et §5.8). Un visiteur non authentifié renvoie false — c'est le
+ * garde-fou propre à chaque fonction qui s'en occupe, pas le paywall.
+ *
+ * Exporté ici plutôt que recopié dans chaque fichier : trois copies
+ * verbatim de la même logique d'autorisation, c'est trois endroits où la
+ * corriger.
+ */
+export async function blockedStudent(ctx: QueryCtx): Promise<boolean> {
+  const profile = await currentProfile(ctx);
+  if (!profile || profile.role !== "student") return false;
+  const access = await checkAccess(ctx, profile);
+  return !access.ok;
 }
 
 /** Pour les MUTATIONS et ACTIONS : lève si l'accès n'est pas ouvert. */
@@ -845,18 +877,6 @@ export async function requireAccess(
     throw new Error(`ACCESS_DENIED:${state.reason}`);
   }
   return { schoolId: state.schoolId, endsAt: state.endsAt };
-}
-
-/** Résout le profil de la session courante. */
-async function currentProfile(
-  ctx: QueryCtx | MutationCtx,
-): Promise<Doc<"profiles"> | null> {
-  const userId = await getAuthUserId(ctx);
-  if (!userId) return null;
-  return await ctx.db
-    .query("profiles")
-    .withIndex("by_userId", (q) => q.eq("userId", userId as string))
-    .unique();
 }
 
 /** Consommée par l'UI pour afficher le bon écran de blocage. */
@@ -1106,6 +1126,11 @@ appel au gateway :
     }
 ```
 
+Si l'action ne résout pas de `profileId` aujourd'hui, l'ajouter en s'appuyant
+sur le motif déjà employé dans ce fichier : `getAuthUserId(ctx)` puis une
+requête interne qui lit `profiles` par `by_userId`. Ne **pas** accepter de
+`profileId` en argument public — les guidelines l'interdisent pour autoriser.
+
 - [ ] **Step 4: Instrumenter les six fonctions de `palierAttempts.ts`**
 
 Ajouter en tête de `convex/palierAttempts.ts` :
@@ -1256,7 +1281,7 @@ après coup — le verrou de aiGateway.generate reste le dernier recours."
 - Modify: `convex/streak.ts` (`setSoundEnabled`)
 
 **Interfaces:**
-- Consumes de la tâche 3 : `checkAccess(ctx, profile)` et `requireAccess(ctx, profile)`.
+- Consumes de la tâche 3 : `checkAccess(ctx, profile)`, `requireAccess(ctx, profile)` et `blockedStudent(ctx)`.
 - Produces : ces 17 fonctions refusent tout élève sans droit valide.
 
 Attention particulière sur `subjects.ts`, `topics.ts` et `badges.ts` : leurs
@@ -1302,32 +1327,15 @@ emplacement.
 
 Pour `subjects.list`, `subjects.getById`, `topics.listAll`, `topics.listBySubject`,
 `topics.getById`, `badges.list`, `badges.getById`, `badges.listEarnedByStudent` :
-n'appliquer le contrôle que si l'appelant est un élève. Ajouter dans chaque
-fichier concerné :
+n'appliquer le contrôle que si l'appelant est un élève. `blockedStudent` est
+**déjà exporté par `convex/access.ts`** (tâche 3) — l'importer, ne pas le
+recopier :
 
 ```ts
-import { getAuthUserId } from "@convex-dev/auth/server";
-import { checkAccess } from "./access";
-
-/**
- * Ne bloque que les élèves : ces lectures servent aussi l'administration et
- * les professeurs, que la spec laisse passer (§5.8).
- */
-async function blockedStudent(ctx: QueryCtx): Promise<boolean> {
-  const userId = await getAuthUserId(ctx);
-  if (!userId) return false;
-  const profile = await ctx.db
-    .query("profiles")
-    .withIndex("by_userId", (q) => q.eq("userId", userId as string))
-    .unique();
-  if (!profile || profile.role !== "student") return false;
-  const access = await checkAccess(ctx, profile);
-  return !access.ok;
-}
+import { blockedStudent } from "./access";
 ```
 
-Importer `type QueryCtx` depuis `./_generated/server` dans chaque fichier où ce
-helper est ajouté. Puis, au début de chaque handler concerné :
+Puis, au début de chaque handler concerné :
 
 ```ts
     if (await blockedStudent(ctx)) return null;   // ou [] selon la fonction

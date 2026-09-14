@@ -1,4 +1,4 @@
-import { query, mutation } from "./_generated/server";
+import { query, mutation, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { blockedStudent, callerHasProfile, callerIsAdmin } from "./access";
 
@@ -46,11 +46,15 @@ export const getById = query({
 // ---------------------------------------------------------------------------
 // Mutations — garde de RÔLE, pas garde de paywall.
 //
-// Les quatre écritures ci-dessous créent, modifient et suppriment le
-// curriculum lui-même. Elles n'ont rien à voir avec le droit d'accès d'un
-// élève : `blockedStudent` et `requireAccess` jugent un abonnement, pas la
-// qualité de l'appelant. `admin` seul — leurs appelants sont les écrans
-// `app/(admin)/admin/subjects/*`, et `seedDefaults` n'en a aucun.
+// Les écritures ci-dessous créent, modifient et suppriment le curriculum
+// lui-même. Elles n'ont rien à voir avec le droit d'accès d'un élève :
+// `blockedStudent` et `requireAccess` jugent un abonnement, pas la qualité de
+// l'appelant. `admin` seul pour `create`, `update` et `remove` — leurs
+// appelants sont les écrans `app/(admin)/admin/subjects/*`.
+//
+// `seedDefaults` fait exception et n'est PAS gardée ici : elle est interne,
+// donc hors de l'API publique, et un ensemencement n'a pas d'appelant porteur
+// de session à qui demander un rôle. Voir son commentaire.
 //
 // Une mutation peut lever, et le garde est la toute première instruction :
 // rien n'est lu avant d'avoir établi le rôle. Un seul message pour tous les
@@ -105,19 +109,25 @@ export const update = mutation({
 });
 
 /**
- * Seed default subjects (CE2-CM2 curriculum, francophone context).
- * Idempotent: skips subjects that already exist by name.
+ * Sème les matières par défaut (curriculum CE2-CM2, contexte francophone).
+ * Idempotent : ignore les matières déjà présentes, par nom.
  *
- * Réservée à un `admin` : elle n'avait aucun appelant et acceptait n'importe
- * qui, jeton de session compris — huit insertions dans `subjects` offertes au
- * réseau public. Un `pnpx convex run subjects:seedDefaults` n'a pas de
- * session, donc plus de lancement manuel anonyme : il faut une session admin.
+ * INTERNE. Elle était publique et n'exigeait rien — huit insertions dans
+ * `subjects` offertes au réseau public, sans le moindre compte. Un garde de
+ * rôle ne convenait pas non plus : un ensemencement n'a pas d'appelant porteur
+ * de session, donc exiger un profil `admin` l'aurait rendue inutilisable par
+ * les chemins mêmes qui la justifient.
+ *
+ * Conséquence assumée : elle n'a aujourd'hui AUCUN appelant, et une fonction
+ * interne ne s'appelle que depuis une autre fonction Convex (`internal.…`).
+ * Tant que personne ne la câble — un cron d'amorçage, une action
+ * d'administration — elle ne s'exécute pas. C'est voulu : mieux vaut un
+ * ensemencement à rebrancher explicitement qu'un ensemencement que n'importe
+ * qui déclenche.
  */
-export const seedDefaults = mutation({
+export const seedDefaults = internalMutation({
   args: {},
   handler: async (ctx) => {
-    if (!(await callerIsAdmin(ctx))) throw new Error("Rôle non autorisé");
-
     const defaults = [
       { name: "Mathématiques", icon: "Calculator", color: "#4f46e5", order: 1 },
       { name: "Français", icon: "Book", color: "#db2777", order: 2 },

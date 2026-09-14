@@ -585,6 +585,68 @@ async function readSeatState(
   };
 }
 
+/**
+ * Le contrat qu'un AVENANT ferait grossir : celui EN VIGUEUR, ou à défaut le
+ * PROCHAIN à commencer.
+ *
+ * POURQUOI PAS SIMPLEMENT CELUI DU PAYWALL. `currentSchoolSubscription` rend
+ * le contrat le plus récemment COMMENCÉ — donc un contrat ÉCHU quand l'école
+ * n'en a plus en cours, ce qui est exactement ce qu'il faut pour dire
+ * `expired` plutôt que `no_subscription` à un enfant, et ce qu'il ne faut
+ * surtout pas changer. Mais l'école qui a signé son année suivante pendant
+ * l'été — ce que `recordSubscription` encourage — se retrouvait dans un
+ * cul-de-sac : `schools.amendSeats` refusait pour échéance et conseillait un
+ * contrat NEUF, que `recordSubscription` refuse à son tour puisqu'il
+ * chevaucherait celui qu'elle vient de signer. Un contrat échu ne décide plus
+ * rien, ni l'accès ni le plafond ; c'est le contrat À VENIR qui décidera, et
+ * c'est donc lui qu'il faut agrandir.
+ *
+ * LA LECTURE EST EXACTE ET BORNÉE PAR L'INDEX. `by_owner_startsAt` porte
+ * `startsAt` en dernière position : `gt("startsAt", now)` en ordre CROISSANT
+ * rend la ligne de plus PETIT `startsAt` strictement supérieur à `now` — UN
+ * document, quel que soit l'historique de contrats de l'école. Que ce document
+ * soit LE prochain contrat — celui que le paywall retiendra dès son premier
+ * jour — tient à la disjointness de §4.5 : aucun contrat ne le chevauche, et
+ * aucun ne s'intercale entre `now` et son début, faute de quoi il commencerait
+ * avant lui et serait celui-ci.
+ *
+ * LES DEUX BRANCHES NE SE RECOUVRENT NI NE LAISSENT DE TROU. La première ne
+ * retient `current` que s'il COUVRE `now` (`startsAt <= now < endsAt`) ; la
+ * seconde ne lit que `startsAt > now`. Aucun contrat amendable n'est écarté :
+ * sous disjointness, un contrat commencé qui n'est pas `current` s'est achevé
+ * avant le début de `current`, donc avant `now` — il est échu lui aussi.
+ *
+ * NE REND JAMAIS UN CONTRAT ÉCHU : la première branche exige `now < endsAt`,
+ * la seconde `now < startsAt < endsAt`. C'est ce qui garde la borne BASSE de
+ * `pricing.remainingPeriodShare` dans son rôle de seconde ligne. La borne
+ * HAUTE, elle, devient un chemin de production : un contrat à venir vaut une
+ * part de 1, et l'école paie ses sièges au plein tarif d'une période qu'elle a
+ * tout entière devant elle.
+ *
+ * Prend le contrat du paywall DÉJÀ LU, comme `readSeatState` prend ses sièges
+ * plutôt que le document : ses deux appelants l'ont lu pour leur propre
+ * compte, et une seconde lecture ici, sur une autre horloge, pourrait désigner
+ * un autre contrat que celui dont l'écran montre les chiffres.
+ */
+async function amendableSubscription(
+  ctx: QueryCtx | MutationCtx,
+  schoolId: Id<"schools">,
+  current: Doc<"subscriptions"> | null,
+  now: number,
+): Promise<Doc<"subscriptions"> | null> {
+  if (current !== null && current.startsAt <= now && now < current.endsAt) {
+    return current;
+  }
+
+  return await ctx.db
+    .query("subscriptions")
+    .withIndex("by_owner_startsAt", (q) =>
+      q.eq("ownerType", "school").eq("ownerId", schoolId).gt("startsAt", now),
+    )
+    .order("asc")
+    .first();
+}
+
 /** Accord du pluriel : les refus de ce module sont lus par un adulte. */
 function pluralCount(n: number, singular: string, plural: string): string {
   return `${n} ${n === 1 ? singular : plural}`;
@@ -619,15 +681,56 @@ type ContractSummary = {
 };
 
 /**
+ * Le contrat qu'un AVENANT ferait grossir, tel que l'écran doit le montrer.
+ *
+ * DISTINCT de `ContractSummary`, et pas par goût du type : ce n'est pas
+ * toujours le même document. Quand le contrat du paywall est ÉCHU et qu'un
+ * contrat à venir est déjà signé, la fiche montre le premier — c'est lui qui
+ * dit pourquoi les élèves n'ont pas l'accès — pendant que l'avenant porte sur
+ * le second. Un seul champ pour les deux ferait afficher les chiffres de l'un
+ * sous le formulaire qui engage l'autre.
+ *
+ * PORTE SES PROPRES SIÈGES, là où `ContractSummary` s'en abstient. Le nombre
+ * de `SeatState.purchased` est celui du contrat du PAYWALL, normalisé par
+ * `contractSeats` pour le PLAFOND ; celui-ci est la valeur BRUTE de la ligne
+ * visée, celle-là même que `schools.amendSeats` passe à
+ * `pricing.quoteSeatAmendment`. L'aperçu part donc du nombre exact dont la
+ * facture est tirée, sans normalisation intercalée qui pourrait l'en écarter.
+ * Deux usages, deux conventions — et aucun écart possible entre elles sur ce
+ * qu'écrivent `recordSubscription` et `amendSeats`, qui n'écrivent que des
+ * entiers.
+ */
+type AmendableContract = {
+  startsAt: number;
+  endsAt: number;
+  status: Doc<"subscriptions">["status"];
+  /** Fait foi pour la facturation (spec §7.2), et sert de base au prorata. */
+  totalFcfa: number;
+  /** Sièges que CE contrat ouvre, bruts — voir ci-dessus. */
+  seatsPurchased: number;
+  /**
+   * Faux quand ce contrat n'a pas encore commencé. L'écran doit alors dire que
+   * l'avenant n'ouvrira les sièges qu'à `startsAt` : le plafond d'inscription
+   * lit le contrat du paywall, donc l'ancien tant que celui-ci n'a pas démarré.
+   * Décidé ici plutôt que recalculé sur l'horloge du navigateur, figée au
+   * montage de l'écran, qui répondrait autrement que le serveur au jour près
+   * de l'entrée en vigueur.
+   */
+  hasStarted: boolean;
+};
+
+/**
  * Ce que `getEnrollmentOutlook` rend — `reason` absente quand l'accès
  * s'ouvre, `seats` et `contract` absentes quand l'école n'a aucun abonnement,
- * donc aucun plafond.
+ * donc aucun plafond, et `amendable` absente quand aucun contrat n'est en
+ * vigueur ni à venir : il n'y a alors rien à agrandir.
  */
 type EnrollmentOutlook = {
   opensAccess: boolean;
   reason: AccessReason | null;
   seats: SeatState | null;
   contract: ContractSummary | null;
+  amendable: AmendableContract | null;
 };
 
 /**
@@ -665,11 +768,22 @@ type EnrollmentOutlook = {
  * celui sur lequel le verdict porte — l'incohérence même contre laquelle
  * `currentSchoolSubscription` existe.
  *
+ * Rend ENFIN le contrat AMENDABLE (`amendable`), pour la même raison portée à
+ * l'argent : l'écran calcule l'aperçu d'un avenant, `schools.amendSeats` le
+ * facture, et les deux doivent viser le MÊME document. Sinon l'administrateur
+ * validerait un montant qu'il n'a pas vu — un aperçu trompeur, pire que le
+ * message trompeur qu'il remplace. Une requête séparée les laisserait diverger
+ * entre deux enregistrements ; ici, une seule transaction et un seul `now`
+ * choisissent le contrat pour les deux. Ce n'est PAS toujours `contract` :
+ * voir `amendableSubscription`.
+ *
  * Lectures : le chemin de `access.loadAccessInput`, à l'identique —
  * l'abonnement que `currentSchoolSubscription` tient pour courant, les
  * tranches seulement en `past_due` — plus le décompte des sièges, borné par le
  * contrat. Une lecture de plus par école affichée, jamais par classe : l'écran
- * hisse la requête au niveau de l'école.
+ * hisse la requête au niveau de l'école. Le contrat amendable n'en coûte une
+ * de plus que lorsque celui du paywall ne couvre pas `now` : tant qu'un
+ * contrat court, c'est le même document, déjà lu.
  *
  * Ne lève pas : `null` pour tout appelant non-`admin` comme pour une école
  * introuvable, et l'écran n'affiche alors rien plutôt qu'une promesse.
@@ -711,6 +825,13 @@ export const getEnrollmentOutlook = query({
       oldestOverdueDueAt,
     });
 
+    const amendable = await amendableSubscription(
+      ctx,
+      args.schoolId,
+      current,
+      now,
+    );
+
     return {
       opensAccess: verdict.ok,
       reason: verdict.ok ? null : verdict.reason,
@@ -726,6 +847,16 @@ export const getEnrollmentOutlook = query({
             status: current.status,
             totalFcfa: current.totalFcfa,
             pricePerSeatFcfa: current.pricePerSeatFcfa,
+          }
+        : null,
+      amendable: amendable
+        ? {
+            startsAt: amendable.startsAt,
+            endsAt: amendable.endsAt,
+            status: amendable.status,
+            totalFcfa: amendable.totalFcfa,
+            seatsPurchased: amendable.seatsPurchased,
+            hasStarted: amendable.startsAt <= now,
           }
         : null,
     };
@@ -809,6 +940,15 @@ export const listMembershipEvents = query({
  * contrat en vigueur donnerait à lire une somme qui n'est pas la sienne. Ils
  * ne sont pas perdus pour autant — `subscriptionAmendments` ne supprime rien,
  * et la ligne garde son `subscriptionId`.
+ *
+ * SUIT DONC LA FICHE, ET NON LE FORMULAIRE D'AVENANT. Les deux visent le même
+ * contrat tant qu'il en court un ; quand celui du paywall est échu, l'avenant
+ * porte sur le contrat À VENIR (`amendableSubscription`) et ce journal reste
+ * sur celui que la fiche affiche au-dessus de lui — un journal qui sauterait
+ * d'un contrat à l'autre sous un encart qui n'en nomme qu'un se lirait de
+ * travers. Les avenants d'un contrat à venir se lisent dès qu'il commence,
+ * sans qu'aucune ligne soit perdue entre-temps ; l'écran, lui, montre déjà les
+ * sièges et le total du contrat visé dans le formulaire.
  *
  * Requête SÉPARÉE de `getEnrollmentOutlook` plutôt qu'un champ de plus dans sa
  * réponse : ce verdict-là est lu à chaque ouverture de fiche d'école et sa
@@ -978,7 +1118,8 @@ export const createSchool = mutation({
  * le contrat sous les élèves qu'il couvre.
  *
  * LE SEUL `PATCH` DE LA TABLE est celui d'`amendSeats`, juste en dessous, et
- * il est ÉTROIT par construction : il fait grossir un contrat en cours —
+ * il est ÉTROIT par construction : il fait grossir un contrat déjà signé —
+ * celui en vigueur, ou à défaut le prochain à commencer —
  * `seatsPurchased`, `totalFcfa` et le tarif moyen d'affichage qui s'en déduit
  * — sans jamais toucher au statut ni aux dates. Les deux propriétés dont ce
  * refus-ci dépend restent donc entières : une période n'est jamais déplacée,
@@ -1191,7 +1332,7 @@ export const recordSubscription = mutation({
 });
 
 /**
- * AVENANT — ajouter des sièges au contrat EN COURS, au prorata.
+ * AVENANT — ajouter des sièges à un contrat déjà signé, au prorata.
  *
  * Une école qui recrute vingt élèves en février ne pouvait rien faire :
  * `recordSubscription` refuse tout contrat chevauchant, et rien n'amendait un
@@ -1206,8 +1347,17 @@ export const recordSubscription = mutation({
  * propriété-là qui rend exacte la lecture en UN document dont dépend l'accès
  * de chaque enfant.
  *
+ * QUEL CONTRAT — celui en VIGUEUR, ou à défaut le PROCHAIN à commencer
+ * (`amendableSubscription`). Une école qui a signé son année suivante pendant
+ * l'été — ce que `recordSubscription` encourage — n'avait aucun moyen de
+ * l'agrandir : son contrat du paywall était échu, l'avenant refusait pour
+ * échéance, et le contrat NEUF que ce refus conseillait chevauchait celui
+ * qu'elle venait de signer. L'écran vise le MÊME contrat, que
+ * `getEnrollmentOutlook` expose sous `amendable` : le montant montré avant
+ * validation est celui que cette mutation facture.
+ *
  * CE QUI EST ÉCRIT, ET RIEN D'AUTRE — un `patch` de trois champs sur la ligne
- * du contrat courant :
+ * du contrat VISÉ :
  *
  *   - `seatsPurchased`, à la hausse seulement ;
  *   - `totalFcfa`, l'ancien PLUS le prorata — il reste ce qui fait foi pour la
@@ -1251,12 +1401,14 @@ export const recordSubscription = mutation({
  *   - sièges : entier strictement positif, comme `recordSubscription` — et
  *     c'est le nombre TOTAL visé, jamais le nombre ajouté ; la mutation et
  *     l'écran comptent dans la même unité ;
- *   - aucun contrat courant, ou un contrat ÉCHU : il n'y a rien à amender.
+ *   - aucun contrat À AMENDER : ni contrat en vigueur, ni contrat à venir.
  *     Agrandir un contrat terminé n'ouvrirait aucun accès — `decideAccess`
  *     juge l'expiration par `endsAt` — coûterait zéro franc, la période
  *     restante étant nulle, et réécrirait les sièges d'une année révolue :
  *     le contrat cesserait de dire ce qui avait été vendu pour cette
- *     année-là. C'est un contrat NEUF qu'il faut ;
+ *     année-là. C'est un contrat NEUF qu'il faut, et le refus peut enfin le
+ *     dire sans mentir : plus rien ne court ni ne commence, donc rien ne
+ *     chevauche la période à venir et `recordSubscription` l'acceptera ;
  *   - une BAISSE de sièges, ou une demande qui n'ajoute rien. Réduire en cours
  *     d'année pose la question du remboursement du montant déjà facturé, qui
  *     appartient à la facturation (§10) — et un avenant qui saurait réduire
@@ -1273,6 +1425,12 @@ export const recordSubscription = mutation({
  * `enrollStudent` et l'écran d'école recommandent (« augmentez le nombre de
  * sièges de l'abonnement »), et une garde d'effectif refuserait ici le seul
  * geste qui répare.
+ *
+ * ET QUAND LE CONTRAT VISÉ N'A PAS ENCORE COMMENCÉ, l'avenant ne touche à rien
+ * de tout cela : le plafond lit le contrat du PAYWALL, donc ni `used` ni le
+ * `purchased` qui plafonne aujourd'hui ne bougent. Les sièges achetés
+ * n'ouvriront qu'à la date de début du contrat amendé, et l'écran le dit —
+ * sans quoi un administrateur attendrait des places le jour même.
  *
  * DEUX AVENANTS CONCURRENTS ne peuvent pas se perdre. Une mutation Convex est
  * une transaction sérialisable : les deux lisent la même ligne, l'une commite,
@@ -1315,18 +1473,47 @@ export const amendSeats = mutation({
     // prix d'un autre, et le dater d'un troisième.
     const now = Date.now();
 
-    // Le contrat du PAYWALL lui-même, jamais une seconde lecture qui lui
-    // ressemblerait : amender un autre contrat que celui qui décide de l'accès
-    // et du plafond ajouterait des sièges là où personne ne les regarde.
+    // LE CONTRAT VISÉ — celui EN VIGUEUR, ou à défaut le PROCHAIN à commencer.
+    //
+    // Ce commentaire disait qu'amender un autre contrat que celui du paywall
+    // « ajouterait des sièges là où personne ne les regarde ». Le raisonnement
+    // vaut pour un contrat EN VIGUEUR : celui-là décide de l'accès et du
+    // plafond, et lui seul. Il cesse de valoir quand le contrat du paywall est
+    // ÉCHU — il ne décide alors plus rien, et c'est le contrat À VENIR qui
+    // décidera. Refuser au motif de l'échéance envoyait dans un MUR l'école
+    // qui avait signé son année suivante pendant l'été : le contrat NEUF que
+    // le refus conseille, `recordSubscription` le refuse à son tour, puisqu'il
+    // chevaucherait celui qu'elle vient de signer.
+    //
+    // L'ÉCRAN VISE LE MÊME CONTRAT : `getEnrollmentOutlook` l'expose sous
+    // `amendable`, par cette même `amendableSubscription`, et l'aperçu du
+    // formulaire se calcule dessus. Deux sélections divergentes remplaceraient
+    // un message trompeur par un MONTANT trompeur — un administrateur qui
+    // valide une somme qu'il n'a pas vue.
     const current = await currentSchoolSubscription(ctx, args.schoolId, now);
-    if (!current) {
-      throw new Error(
-        "Cette école n'a aucun contrat à amender : un avenant agrandit un " +
-          "contrat existant, il n'en crée pas. Enregistrez d'abord un contrat.",
-      );
-    }
+    const target = await amendableSubscription(
+      ctx,
+      args.schoolId,
+      current,
+      now,
+    );
 
-    if (now >= current.endsAt) {
+    if (target === null) {
+      // `current` nul signifie qu'aucune ligne n'existe pour cette école : le
+      // repli de `currentSchoolSubscription` rend un contrat dès qu'il en
+      // existe un, commencé ou non.
+      if (current === null) {
+        throw new Error(
+          "Cette école n'a aucun contrat à amender : un avenant agrandit un " +
+            "contrat existant, il n'en crée pas. Enregistrez d'abord un contrat.",
+        );
+      }
+
+      // Sinon `current` est le dernier contrat COMMENCÉ et il est échu — sans
+      // quoi il serait la cible — et aucun contrat ne commence après `now`.
+      // Le message d'origine devient donc VRAI : rien ne court ni ne
+      // commencera, donc rien ne chevauche la période à venir, et
+      // `recordSubscription` acceptera le contrat neuf qu'il conseille.
       throw new Error(
         `Le dernier contrat de cette école s'est achevé le ` +
           `${formatDay(current.endsAt)} : il n'y a plus rien à amender. ` +
@@ -1338,12 +1525,12 @@ export const amendSeats = mutation({
     }
 
     const amendment = quoteSeatAmendment({
-      currentSeats: current.seatsPurchased,
-      currentTotalFcfa: current.totalFcfa,
+      currentSeats: target.seatsPurchased,
+      currentTotalFcfa: target.totalFcfa,
       newSeats: args.seatsPurchased,
       now,
-      startsAt: current.startsAt,
-      endsAt: current.endsAt,
+      startsAt: target.startsAt,
+      endsAt: target.endsAt,
     });
 
     // `seatsAdded` et non une comparaison des nombres bruts : le plancher de
@@ -1352,7 +1539,7 @@ export const amendSeats = mutation({
     // demanderait moins verrait sa demande remontée à ce qu'elle a déjà — pas
     // une hausse, et sûrement pas une baisse silencieuse.
     if (amendment.seatsAdded <= 0) {
-      const held = pluralCount(current.seatsPurchased, "siège", "sièges");
+      const held = pluralCount(target.seatsPurchased, "siège", "sièges");
       throw new Error(
         `Un avenant ne fait qu'AJOUTER des sièges : ce contrat en ouvre déjà ` +
           `${held}, et vous en demandez ${args.seatsPurchased} au total — il ` +
@@ -1367,16 +1554,16 @@ export const amendSeats = mutation({
     // LE `PATCH` — trois champs, et aucun autre. Ni `status`, ni `startsAt`,
     // ni `endsAt` : voir l'en-tête, c'est ce qui préserve la disjointness de
     // §4.5 et la propriété « aucune ligne ne devient `cancelled` ».
-    await ctx.db.patch(current._id, {
+    await ctx.db.patch(target._id, {
       seatsPurchased: amendment.seatsBilled,
       totalFcfa: amendment.totalFcfa,
       pricePerSeatFcfa: amendment.pricePerSeatFcfa,
     });
 
     await ctx.db.insert("subscriptionAmendments", {
-      subscriptionId: current._id,
+      subscriptionId: target._id,
       schoolId: args.schoolId,
-      seatsBefore: current.seatsPurchased,
+      seatsBefore: target.seatsPurchased,
       seatsAfter: amendment.seatsBilled,
       amountFcfa: amendment.amountFcfa,
       actorProfileId: actor._id,

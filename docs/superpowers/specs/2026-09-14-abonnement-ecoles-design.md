@@ -742,7 +742,7 @@ un second contrat de février à juillet — est exactement ce que **§4.5
 interdit** : un contrat court niché dans un contrat long gagne la sélection du
 paywall, puis expire, et coupe une école qui a payé.
 
-`schools.amendSeats` **modifie le contrat en cours** plutôt que d'en créer un
+`schools.amendSeats` **modifie un contrat déjà signé** plutôt que d'en créer un
 second, et sa sûreté tient tout entière à son étroitesse. Il écrit trois
 champs :
 
@@ -771,14 +771,38 @@ montant = arrondi(delta × part)
 Le delta passe par `quote` **des deux côtés** et non par une multiplication : le
 coût marginal de vingt sièges dépend de la tranche où ils tombent, et une
 multiplication redeviendrait fausse au retour d'un barème dégressif, exactement
-comme en §7.2. La borne à 1 n'est pas décorative : sur un contrat qui n'a pas
-encore commencé, `now < startsAt` donnerait une part supérieure à 1 et
-surfacturerait. La borne à 0 interdit l'avoir silencieux sur un contrat échu.
+comme en §7.2. La borne à 1 n'est pas décorative, et ce n'est plus une seconde
+ligne : amender le prochain contrat à commencer est un chemin de production, et
+sans elle `now < startsAt` donnerait une part supérieure à 1 et surfacturerait.
+Bornée, l'école paie le plein tarif d'une période qu'elle a tout entière
+devant. La borne à 0 interdit l'avoir silencieux sur un contrat échu — celle-là
+reste une seconde ligne, la sélection ne rendant jamais un contrat échu.
+
+**Quel contrat — celui EN VIGUEUR, ou à défaut le PROCHAIN à commencer**
+(`amendableSubscription`). Amender le contrat que retient le paywall est juste
+tant qu'il court : c'est lui qui décide de l'accès et du plafond. Échu, il ne
+décide plus rien, et refuser à ce titre enfermait l'école qui avait signé son
+année suivante pendant l'été — ce que `recordSubscription` encourage : le
+contrat neuf que le refus conseillait, `recordSubscription` le refuse à son
+tour, puisqu'il chevaucherait celui qu'elle venait de signer. La lecture du
+contrat à venir est exacte et bornée par `by_owner_startsAt` — `gt("startsAt",
+now)`, ordre croissant, **un document** — et c'est la disjointness de §4.5 qui
+fait de ce document *le* prochain contrat. Un contrat échu n'est jamais rendu :
+la première branche exige `now < endsAt`, la seconde `now < startsAt < endsAt`.
+
+**L'écran vise le même contrat.** `getEnrollmentOutlook` l'expose sous
+`amendable` — ses sièges, son total, ses dates — et l'aperçu du formulaire s'y
+calcule. Deux sélections divergentes remplaceraient un message trompeur par un
+**montant** trompeur, ce qui est pire : l'administrateur validerait une somme
+qu'il n'a pas vue. Quand le contrat visé n'a pas commencé, l'écran dit que
+l'avenant **n'ouvrira les sièges qu'à sa date de début** : le plafond
+d'inscription lit le contrat du paywall, donc le précédent jusque-là.
 
 **Refus** — réservé à l'`admin`, comme tout le module : une baisse de sièges
-(le remboursement appartient à la facturation), l'absence de contrat courant ou
-un contrat échu (c'est un contrat neuf qu'il faut, l'agrandir n'ouvrirait aucun
-accès et réécrirait une année révolue), et les entrées absurdes.
+(le remboursement appartient à la facturation), l'absence de tout contrat à
+amender — ni en vigueur, ni à venir (c'est un contrat neuf qu'il faut, et rien
+ne le chevauche plus, donc `recordSubscription` l'acceptera) — et les entrées
+absurdes.
 
 **Pas de garde d'effectif**, et c'est vérifié plutôt que supposé : un avenant
 n'augmente que `seatsPurchased`, `used` ne bouge pas, donc `used <= purchased`
@@ -1002,9 +1026,10 @@ contenu.
   tenait l'amendement pour une limite de produit assumée : l'invariant de §4.5
   refuse tout contrat chevauchant, et aucune mutation ne modifiait une ligne
   existante. La limite a été levée avant la mise en service, sous la forme
-  **étroite** qui ne coûte rien à §4.5 : `schools.amendSeats` fait grossir le
-  contrat en cours — sièges, montant au prorata de la période restante — **sans
-  jamais toucher au statut ni aux dates**. Reste hors périmètre, et pour la
+  **étroite** qui ne coûte rien à §4.5 : `schools.amendSeats` fait grossir un
+  contrat déjà signé — celui en vigueur, ou à défaut le prochain à commencer ;
+  sièges, montant au prorata de la période restante — **sans jamais toucher au
+  statut ni aux dates**. Reste hors périmètre, et pour la
   raison d'origine (le sort du montant déjà facturé appartient à la
   facturation) : **réduire** les sièges d'un contrat en cours, en déplacer les
   dates, et le résilier.

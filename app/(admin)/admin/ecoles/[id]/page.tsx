@@ -19,6 +19,7 @@ import Link from "next/link";
 import {
   ArrowLeft,
   ArrowLeftRight,
+  CalendarClock,
   History,
   Loader2,
   Plus,
@@ -75,6 +76,18 @@ type SeatState = NonNullable<NonNullable<EnrollmentOutlook>["seats"]>;
 
 /** Le contrat courant, tel que le paywall le retient. */
 type ContractSummary = NonNullable<NonNullable<EnrollmentOutlook>["contract"]>;
+
+/**
+ * Le contrat qu'un avenant ferait grossir, DÉSIGNÉ PAR LE SERVEUR.
+ *
+ * Distinct de `ContractSummary` parce que ce n'est pas toujours le même
+ * document : quand le contrat du paywall est échu et qu'un contrat à venir est
+ * déjà signé, la fiche montre le premier et l'avenant porte sur le second.
+ * L'écran ne refait jamais ce choix — il l'affiche.
+ */
+type AmendableContract = NonNullable<
+  NonNullable<EnrollmentOutlook>["amendable"]
+>;
 
 type ClassLevel = Doc<"schoolClasses">["class"];
 type StaffRole = Doc<"schoolStaff">["staffRole"];
@@ -435,6 +448,9 @@ function SubscriptionSection({
   const resolved = outlook === undefined ? null : outlook;
   const contract: ContractSummary | null = resolved?.contract ?? null;
   const seatState = resolved?.seats ?? null;
+  // Le contrat que la mutation amendera, désigné par le serveur : l'écran ne
+  // le choisit pas, il le reçoit. Voir `SeatAmendmentForm`.
+  const amendable: AmendableContract | null = resolved?.amendable ?? null;
 
   // Un entier strictement positif, ou rien : les mêmes conditions que la
   // mutation, pour que l'aperçu se taise exactement là où elle refuserait.
@@ -557,22 +573,23 @@ function SubscriptionSection({
         </div>
       )}
 
-      {/* L'avenant ne s'offre que sur un contrat qui court encore : la
-          mutation refuse d'agrandir un contrat échu, qui n'ouvrirait aucun
-          accès et réécrirait les sièges d'une année révolue. Proposer un
-          formulaire pour se faire refuser ensuite ferait travailler pour
-          rien — c'est un contrat NEUF qu'il faut, et le formulaire du dessous
-          est déjà là pour ça. */}
-      {contract !== null && seatState !== null && now < contract.endsAt && (
-        <SeatAmendmentForm
-          schoolId={schoolId}
-          contract={contract}
-          seats={seatState}
-          now={now}
-        />
-      )}
-
+      {/* Le journal suit la FICHE ci-dessus, et il est placé contre elle : ce
+          sont les avenants du contrat que le paywall retient, pas ceux du
+          contrat visé par le formulaire quand les deux diffèrent. */}
       {contract !== null && <SeatAmendmentHistory schoolId={schoolId} />}
+
+      {/* L'avenant s'offre dès que le SERVEUR a un contrat à amender : celui
+          en vigueur, ou à défaut le prochain à commencer. L'écran ne refait
+          pas ce choix — il le reçoit, avec les sièges, le total et les dates
+          du contrat visé, pour que le montant affiché soit celui que la
+          mutation facturera. Rien à amender, rien à proposer : l'école n'a
+          alors ni contrat en cours ni contrat signé pour la suite, et c'est un
+          contrat NEUF qu'il lui faut — le formulaire du dessous est là pour
+          ça, et `recordSubscription` l'acceptera, puisque plus rien ne
+          chevauche. */}
+      {amendable !== null && (
+        <SeatAmendmentForm schoolId={schoolId} contract={amendable} now={now} />
+      )}
 
       {activeBeforeStart && (
         <div className="mb-3 flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
@@ -714,17 +731,17 @@ function SubscriptionSection({
         n&apos;a qu&apos;un contrat en vigueur à la fois, faute de quoi ni son
         accès ni son nombre de sièges ne seraient décidables. Tant que le
         nouveau n&apos;a pas commencé, c&apos;est l&apos;ancien qui décide de
-        l&apos;accès des élèves. Pour agrandir l&apos;école EN COURS de
-        période, c&apos;est l&apos;avenant ci-dessus : il ajoute des sièges au
-        contrat en vigueur sans jamais en déplacer les dates, et chaque ajout
-        reste lisible dans son journal.
+        l&apos;accès des élèves. Pour agrandir l&apos;école, c&apos;est
+        l&apos;avenant ci-dessus : il ajoute des sièges au contrat en vigueur —
+        ou, si aucun ne court, au prochain à commencer — sans jamais en
+        déplacer les dates, et chaque ajout reste lisible dans son journal.
       </p>
     </section>
   );
 }
 
 /**
- * L'AVENANT — ajouter des sièges au contrat en cours, montant visible AVANT
+ * L'AVENANT — ajouter des sièges au contrat VISÉ, montant visible AVANT
  * validation.
  *
  * Un administrateur doit voir ce qu&apos;il engage : le montant est proratisé
@@ -736,21 +753,31 @@ function SubscriptionSection({
  * refait le calcul pour son propre compte, sur sa propre horloge — l&apos;écart
  * de quelques minutes entre les deux ne déplace pas un franc à cette échelle.
  *
- * LES SIÈGES VIENNENT DE `seats.purchased`, seul nombre de sièges de la
- * réponse : `ContractSummary` n&apos;en porte pas, délibérément, pour que deux
- * nombres de sièges ne finissent pas par diverger dans le même écran.
+ * LE CONTRAT VIENT DU SERVEUR, et c&apos;est tout l&apos;enjeu. Ce formulaire
+ * ne choisit rien : il montre le contrat que `getEnrollmentOutlook` désigne
+ * comme amendable, celui-là même que `schools.amendSeats` amendera. Ce
+ * n&apos;est PAS toujours le contrat de la fiche au-dessus — quand celui du
+ * paywall est échu et qu&apos;un contrat à venir est déjà signé, la fiche
+ * montre l&apos;échu, qui explique le paywall des élèves, pendant que
+ * l&apos;avenant porte sur le suivant. Calculer l&apos;aperçu sur les chiffres
+ * de la fiche ferait valider un montant qui n&apos;est pas celui de la
+ * facture : un aperçu trompeur, pire que le message trompeur qu&apos;il
+ * remplace.
  *
- * Ne s&apos;affiche que sur un contrat qui court encore — voir l&apos;appel.
+ * LES SIÈGES VIENNENT DU CONTRAT VISÉ (`contract.seatsPurchased`) et non de
+ * `SeatState.purchased`, qui compte ceux du contrat du PAYWALL : les deux
+ * coïncident tant qu&apos;un contrat court, et divergent précisément dans le
+ * cas que ce formulaire existe désormais pour servir.
+ *
+ * Ne s&apos;affiche que si le serveur a désigné un contrat — voir l&apos;appel.
  */
 function SeatAmendmentForm({
   schoolId,
   contract,
-  seats,
   now,
 }: {
   schoolId: Doc<"schools">["_id"];
-  contract: ContractSummary;
-  seats: SeatState;
+  contract: AmendableContract;
   now: number;
 }) {
   const amendSeats = useMutation(api.schools.amendSeats);
@@ -765,11 +792,13 @@ function SeatAmendmentForm({
   const asked = Number(target);
   const askedSeats = Number.isInteger(asked) && asked > 0 ? asked : null;
 
+  // Les MÊMES entrées que la mutation, champ pour champ : les sièges, le total
+  // et les dates du contrat VISÉ, et rien qui vienne d'ailleurs.
   const amendment =
     askedSeats === null
       ? null
       : quoteSeatAmendment({
-          currentSeats: seats.purchased,
+          currentSeats: contract.seatsPurchased,
           currentTotalFcfa: contract.totalFcfa,
           newSeats: askedSeats,
           now,
@@ -818,12 +847,32 @@ function SeatAmendmentForm({
         </h3>
       </div>
       <p className="mb-3 text-xs text-gray-500">
-        L&apos;école recrute en cours d&apos;année ? Ajoutez des sièges au
-        contrat en vigueur — ses dates ne bougent pas, et vous ne payez que la
-        période qui reste à courir. Un second contrat sur la même période
-        rendrait l&apos;accès des élèves indécidable : c&apos;est pourquoi il
-        n&apos;y en a qu&apos;un.
+        L&apos;école recrute ? Ajoutez des sièges au contrat lui-même — ses
+        dates ne bougent pas, et vous ne payez que la période qui reste à
+        courir. Un second contrat sur la même période rendrait l&apos;accès des
+        élèves indécidable : c&apos;est pourquoi il n&apos;y en a qu&apos;un.
       </p>
+
+      {/* Le contrat visé n'a pas commencé : l'avenant l'agrandit quand même —
+          c'est lui qui décidera — mais il n'ouvre AUCUNE place aujourd'hui,
+          puisque le plafond d'inscription lit le contrat du paywall. Ne pas le
+          dire laisserait attendre des sièges le jour même. */}
+      {!contract.hasStarted && (
+        <div className="mb-3 flex gap-2 rounded-lg border border-sky-200 bg-sky-50 p-3 text-xs text-sky-900">
+          <CalendarClock className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            Ce contrat n&apos;a pas encore commencé : il court du{" "}
+            {formatDay(contract.startsAt)} au {formatDay(contract.endsAt)}, et
+            c&apos;est LUI que l&apos;avenant agrandira. Les sièges ajoutés
+            n&apos;ouvriront qu&apos;au {formatDay(contract.startsAt)} — le
+            plafond d&apos;inscription lit le contrat qui décide de
+            l&apos;accès aujourd&apos;hui, donc le précédent tant que celui-ci
+            n&apos;a pas démarré. Aucune place ne se libère dès maintenant. La
+            période étant tout entière devant, ces sièges se facturent au PLEIN
+            tarif, sans prorata.
+          </span>
+        </div>
+      )}
 
       {error && (
         <div className="mb-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
@@ -844,12 +893,12 @@ function SeatAmendmentForm({
           </label>
           <input
             type="number"
-            min={seats.purchased + 1}
+            min={contract.seatsPurchased + 1}
             step={1}
             value={target}
             onChange={(e) => setTarget(e.target.value)}
             required
-            placeholder={`plus de ${seats.purchased}`}
+            placeholder={`plus de ${contract.seatsPurchased}`}
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:outline-none"
           />
         </div>
@@ -870,10 +919,10 @@ function SeatAmendmentForm({
       <div className="mt-3 border-t border-gray-100 pt-3">
         {amendment === null ? (
           <p className="text-xs text-gray-500">
-            Ce contrat ouvre aujourd&apos;hui{" "}
-            {plural(seats.purchased, "siège", "sièges")}. Saisissez le nouveau
-            TOTAL visé — pas le nombre à ajouter — et le montant au prorata
-            s&apos;affichera ici.
+            Ce contrat ouvre{" "}
+            {plural(contract.seatsPurchased, "siège", "sièges")}. Saisissez le
+            nouveau TOTAL visé — pas le nombre à ajouter — et le montant au
+            prorata s&apos;affichera ici.
           </p>
         ) : !adds ? (
           // Le refus que le serveur opposera, annoncé ici plutôt que subi
@@ -882,11 +931,11 @@ function SeatAmendmentForm({
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
             <span>
               L&apos;avenant sera REFUSÉ : ce contrat ouvre déjà{" "}
-              {plural(seats.purchased, "siège", "sièges")}, et un avenant ne
-              fait qu&apos;en AJOUTER. Réduire en cours de période pose la
-              question du remboursement, qui appartient à la facturation :
-              libérez le siège des élèves concernés, ou enregistrez un contrat
-              au nombre voulu à la fin de celui-ci.
+              {plural(contract.seatsPurchased, "siège", "sièges")}, et un
+              avenant ne fait qu&apos;en AJOUTER. Réduire en cours de période
+              pose la question du remboursement, qui appartient à la
+              facturation : libérez le siège des élèves concernés, ou
+              enregistrez un contrat au nombre voulu à la fin de celui-ci.
             </span>
           </p>
         ) : (
@@ -896,7 +945,7 @@ function SeatAmendmentForm({
                 {formatFcfa(amendment.amountFcfa)}
               </span>{" "}
               pour {plural(amendment.seatsAdded, "siège ajouté", "sièges ajoutés")}{" "}
-              — {seats.purchased} → {amendment.seatsBilled} sièges.
+              — {contract.seatsPurchased} → {amendment.seatsBilled} sièges.
             </p>
             <p className="mt-1 text-xs text-gray-500">
               Prorata : {Math.round(amendment.remainingShare * 100)} % de la
@@ -931,12 +980,21 @@ function SeatAmendmentForm({
 }
 
 /**
- * Le journal des avenants du contrat en cours.
+ * Le journal des avenants du contrat que la FICHE affiche.
  *
  * Un avenant MODIFIE la ligne du contrat : `seatsPurchased` et `totalFcfa` y
  * sont écrasés. Sans ce journal, plus rien ne dirait ce qui avait été signé,
  * ni qui a engagé l&apos;école pour ce montant — c&apos;est la même raison qui
  * fait exister le journal d&apos;inscription d&apos;un élève.
+ *
+ * Le contrat retenu est celui du paywall (`listSeatAmendments`), donc celui de
+ * l&apos;encart juste au-dessus, et non celui du formulaire d&apos;avenant
+ * quand les deux diffèrent : c&apos;est pourquoi il se place ici, contre la
+ * fiche. Un journal qui sauterait d&apos;un contrat à l&apos;autre sous un
+ * encart qui n&apos;en nomme qu&apos;un se lirait de travers. Les avenants
+ * d&apos;un contrat à venir ne se perdent pas — ils s&apos;affichent dès
+ * qu&apos;il commence — et le formulaire montre déjà, lui, les sièges et le
+ * total du contrat qu&apos;il vise.
  *
  * Rien à afficher, rien d&apos;affiché : une école sans avenant ne porte pas
  * un encart vide. Les noms sont déjà résolus par le serveur.

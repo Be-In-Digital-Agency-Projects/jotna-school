@@ -669,10 +669,11 @@ export default defineSchema({
   //
   // POURQUOI IL EXISTE. `schools.amendSeats` est la seule écriture du dépôt qui
   // MODIFIE une ligne `subscriptions` : elle augmente `seatsPurchased` et
-  // `totalFcfa` d'un contrat en cours. Un `patch` écrase — sans ce journal,
-  // plus rien ne dirait ce qui avait été signé, ni ce que l'école doit
-  // vraiment payer en plus de son contrat d'origine. Le contrat lui-même ne
-  // porte plus que l'état COURANT ; l'histoire vit ici.
+  // `totalFcfa` d'un contrat déjà signé — celui en vigueur, ou à défaut le
+  // prochain à commencer. Un `patch` écrase — sans ce journal, plus rien ne
+  // dirait ce qui avait été signé, ni ce que l'école doit vraiment payer en
+  // plus de son contrat d'origine. Le contrat lui-même ne porte plus que
+  // l'état COURANT ; l'histoire vit ici.
   //
   // Mêmes principes que `schoolMembershipEvents`, et pour la même raison — un
   // acte qui engage de l'argent et ouvre des accès ne doit pas être anonyme :

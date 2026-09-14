@@ -415,6 +415,33 @@ describe("quoteSeatAmendment — le prorata sur le tarif en vigueur", () => {
     expect(amendment.totalFcfa).toBe(600_000);
   });
 
+  it("ne proratise JAMAIS un contrat qui n'a pas encore commencé", () => {
+    // La borne à 1 a changé de statut : elle n'est plus une seconde ligne.
+    // `schools.amendSeats` amende le PROCHAIN contrat à commencer quand aucun
+    // ne court — le cas de l'école qui a signé son année suivante pendant
+    // l'été — et ce chemin passe donc ici en production. À TOUT instant avant
+    // le début, la veille comme un an avant, l'ajout se facture au delta
+    // PLEIN : jamais plus, ce qui surfacturerait, jamais moins, ce qui
+    // offrirait une remise à qui achète en avance.
+    for (const day of [-365, -180, -30, -1, 0]) {
+      const amendment = quoteSeatAmendment({
+        ...HUNDRED_SEATS,
+        newSeats: 137,
+        now: dayOfTerm(day),
+        startsAt: TERM_START,
+        endsAt: TERM_END,
+      });
+
+      expect(amendment.remainingShare).toBe(1);
+      expect(amendment.seatsAdded).toBe(37);
+      expect(amendment.fullTermDeltaFcfa).toBe(185_000); // 37 × 5 000
+      expect(amendment.amountFcfa).toBe(amendment.fullTermDeltaFcfa);
+      expect(amendment.totalFcfa).toBe(
+        HUNDRED_SEATS.currentTotalFcfa + amendment.fullTermDeltaFcfa,
+      );
+    }
+  });
+
   it("n'ouvre AUCUN avoir sur un contrat échu", () => {
     // La borne basse : une part négative retrancherait du total déjà facturé.
     // `schools.amendSeats` refuse d'amender un contrat échu — ceci est la

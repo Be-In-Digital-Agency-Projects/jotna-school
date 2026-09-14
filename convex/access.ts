@@ -48,13 +48,16 @@ import {
  * invariant n'est pas un pari : la table est partie de vide et n'a que DEUX
  * écrivains, dont un seul crée des périodes. `schools.recordSubscription`
  * insère, et refuse tout contrat dont la période en croise une autre.
- * `schools.amendSeats` fait grossir un contrat en cours — sièges et montant —
- * et ne touche NI `startsAt` NI `endsAt` : il ne peut donc pas créer de
- * chevauchement, puisqu'il ne déplace aucune borne de période. Qui le
- * relâchera devra revenir ici —
- * la lecture redeviendrait fausse pour une école dont un contrat COURT
- * chevaucherait un long : le court, plus récemment commencé, gagnerait puis
- * expirerait, coupant une école que le long couvre encore.
+ * `schools.amendSeats` fait grossir un contrat DÉJÀ SIGNÉ — celui en vigueur,
+ * ou à défaut le prochain à commencer — sièges et montant, et ne touche NI
+ * `startsAt` NI `endsAt` : il ne peut donc pas créer de chevauchement,
+ * puisqu'il ne déplace aucune borne de période. Qu'il puisse viser un contrat
+ * À VENIR n'y change rien, et ne change rien non plus à CETTE lecture : elle
+ * ignore les contrats non commencés, sauf quand il n'en existe aucun d'autre.
+ * Qui relâchera cette étroitesse devra revenir ici — la lecture redeviendrait
+ * fausse pour une école dont un contrat COURT chevaucherait un long : le
+ * court, plus récemment commencé, gagnerait puis expirerait, coupant une école
+ * que le long couvre encore.
  *
  * AUCUNE EXCEPTION, `cancelled` compris. Cette lecture ne regarde PAS le
  * statut : elle compare des `startsAt`. Un contrat résilié qu'on laisserait

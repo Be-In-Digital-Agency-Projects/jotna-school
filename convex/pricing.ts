@@ -148,7 +148,7 @@ export function quoteWithScale(
 }
 
 // ---------------------------------------------------------------------------
-// AVENANT DE SIÈGES — faire grossir un contrat EN COURS, au prorata.
+// AVENANT DE SIÈGES — faire grossir un contrat DÉJÀ SIGNÉ, au prorata.
 //
 // Une école qui recrute vingt élèves en février ne peut pas attendre la
 // rentrée suivante, et un second contrat de février à juillet est précisément
@@ -214,6 +214,9 @@ export interface SeatAmendmentQuote {
  * facturer PLUS qu'une année pleine pour des sièges qu'elle n'a pas encore
  * commencé à consommer. Bornée à 1, elle paie exactement le plein tarif de ce
  * qu'elle ajoute — ce qui est juste, le contrat lui étant tout entier devant.
+ * Et ce n'est plus un cas d'école : `schools.amendSeats` amende le prochain
+ * contrat à commencer quand aucun ne court, donc cette borne-là est une
+ * PREMIÈRE ligne, pas une seconde.
  *
  * La borne basse tient le contrat échu : un `endsAt` dépassé rendrait une part
  * NÉGATIVE, donc un avoir silencieux retranché du total déjà facturé. Zéro,

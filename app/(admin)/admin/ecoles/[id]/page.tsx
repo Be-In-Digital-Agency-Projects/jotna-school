@@ -85,21 +85,31 @@ const SUBSCRIPTION_STATUS_LABEL: Record<SubscriptionStatus, string> = {
 };
 
 /**
- * Les quatre statuts qu'une PERSONNE pose.
+ * Les trois statuts qu'une PERSONNE pose.
  *
  * `past_due` viendra du suivi des tranches, `expired` se déduit de la date de
- * fin à chaque lecture : `recordSubscription` les refuse tous les deux, et le
- * formulaire n'a pas à proposer ce qui sera refusé. `Exclude` sur le type du
- * schéma, et non une liste recopiée : les deux exclus sont nommés une fois.
+ * fin à chaque lecture, et « résilié » dit la FIN d'un contrat existant que
+ * rien ne sait encore prononcer — `recordSubscription` n'insère que des lignes
+ * neuves. Les trois sont refusés par la mutation, et le formulaire n'a pas à
+ * proposer ce qui sera refusé : c'est pourquoi aucun encart n'annonce leur
+ * refus, à la différence d'« actif » daté du futur ou du plafond de sièges,
+ * que le menu peut encore produire.
+ *
+ * « Résilié » était pire qu'inutile au menu : la ligne n'ouvrait aucun accès,
+ * mais devenait le contrat COURANT de l'école à sa date de début — la
+ * sélection du paywall ne compare que les `startsAt` — et coupait les élèves
+ * qu'un contrat actif couvrait encore.
+ *
+ * `Exclude` sur le type du schéma, et non une liste recopiée : les trois
+ * exclus sont nommés une fois, et le menu ne peut pas proposer une valeur que
+ * le schéma ignore.
  */
-type AdminStatus = Exclude<SubscriptionStatus, "past_due" | "expired">;
+type AdminStatus = Exclude<
+  SubscriptionStatus,
+  "past_due" | "expired" | "cancelled"
+>;
 
-const ADMIN_STATUSES: AdminStatus[] = [
-  "draft",
-  "pending_payment",
-  "active",
-  "cancelled",
-];
+const ADMIN_STATUSES: AdminStatus[] = ["draft", "pending_payment", "active"];
 
 /** Niveaux et rôles en dur, mais TYPÉS par le schéma : une valeur inventée ne compile pas. */
 const CLASS_LEVELS: ClassLevel[] = ["CI", "CP", "CE1", "CE2", "CM1", "CM2"];

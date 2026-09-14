@@ -52,11 +52,23 @@ import {
  * chevaucherait un long : le court, plus récemment commencé, gagnerait puis
  * expirerait, coupant une école que le long couvre encore.
  *
- * Seule EXCEPTION tolérée : un contrat `cancelled` peut en croiser un autre —
- * `recordSubscription` ne compte pas les résiliés comme conflit, sans quoi une
- * période résiliée resterait à jamais inutilisable. Un contrat résilié n'ouvre
- * aucun accès dans `decideAccess` ; le pire écart possible est donc un MOTIF
- * (`expired` au lieu de `cancelled`), jamais un droit accordé à tort.
+ * AUCUNE EXCEPTION, `cancelled` compris. Cette lecture ne regarde PAS le
+ * statut : elle compare des `startsAt`. Un contrat résilié qu'on laisserait
+ * croiser un contrat actif gagnerait donc ici le jour où il commence, et
+ * couperait l'école entière — `cancelled` tant qu'il dure, puis `expired` —
+ * pendant que le contrat actif la couvre encore. Ce n'est pas un motif inexact
+ * rendu à un enfant, c'est un droit REFUSÉ à une école qui paie.
+ * `recordSubscription` ferme les deux bouts : il refuse les chevauchements
+ * sans regarder le statut, et refuse d'écrire `cancelled` — aucune mutation ne
+ * sait aujourd'hui faire passer un contrat existant à « résilié », donc aucune
+ * période résiliée n'attend d'être recontractée.
+ *
+ * POUR LE PLAN DE FACTURATION : le jour où la résiliation existera (un `patch`
+ * du statut vers `cancelled`), un contrat résilié devra pouvoir être croisé
+ * par celui qui le remplace, et CETTE lecture devra alors ignorer les contrats
+ * résiliés — sans quoi le défaut décrit ci-dessus se rouvre exactement.
+ * `schools.recordSubscription` demandera la même chose de son côté, par un
+ * index portant `status`.
  *
  * Le repli sur « le plus récent tout court » ne coûte un second document que
  * si l'école n'a AUCUN contrat commencé. Il existe pour celle dont le tout

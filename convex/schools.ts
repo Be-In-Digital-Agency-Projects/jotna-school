@@ -122,19 +122,6 @@ const OVERDUE_INSTALLMENTS_LIMIT = 12;
 const SEAT_SCAN_LIMIT = CLASSES_LIMIT * CLASS_STUDENTS_LIMIT;
 
 /**
- * Contrats lus pour détecter un CHEVAUCHEMENT de périodes.
- *
- * Sous l'invariant que ce contrôle établit — les contrats d'une école sont
- * disjoints — le premier candidat suffirait : des intervalles disjoints se
- * rangent par `startsAt` ET par `endsAt`, donc le plus récemment commencé
- * parmi ceux qui débutent avant la fin du contrat proposé est aussi celui qui
- * finit le plus tard. On en lit une poignée pour que la vérification ne
- * dépende pas de ce qu'elle protège, et parce que des contrats `cancelled`,
- * seuls autorisés à se croiser, peuvent s'intercaler devant un vrai conflit.
- */
-const OVERLAP_SCAN_LIMIT = 8;
-
-/**
  * Événements lus pour UNE inscription.
  *
  * Une inscription porte au plus une entrée et une libération ; tout le reste
@@ -846,7 +833,7 @@ export const createSchool = mutation({
  * nombre payé, sans quoi l'école paierait des sièges qu'elle ne pourrait pas
  * occuper.
  *
- * CINQ REFUS, et la raison de chacun :
+ * SIX REFUS, et la raison de chacun :
  *
  *   - sièges : entier strictement positif. `readSeatState` passe ce nombre à
  *     `.take()`, qui LÈVE sur un argument non entier — un contrat à 12,5
@@ -859,6 +846,15 @@ export const createSchool = mutation({
  *     premier viendra du suivi des tranches, le second se DÉDUIT de `endsAt`
  *     dans `decideAccess` — l'écrire en base créerait une seconde vérité sur
  *     la même question.
+ *   - `cancelled` : résilier n'est pas enregistrer. Aucune mutation ne sait
+ *     faire passer un contrat existant à « résilié » — cette table ne connaît
+ *     que l'insertion — donc une ligne saisie résiliée d'emblée ne décrit
+ *     aucun contrat qui aurait eu lieu. Elle coûterait cher : elle n'ouvre
+ *     aucun accès, mais `access.currentSchoolSubscription` la retiendrait
+ *     comme contrat COURANT dès sa date de début, puisque cette sélection ne
+ *     compare que les `startsAt` — et couperait une école qu'un contrat actif
+ *     couvre. La résiliation viendra avec la facturation, à qui appartient la
+ *     question du montant déjà facturé.
  *   - `active` daté du futur : voir juste en dessous.
  *   - CHEVAUCHEMENT d'une période déjà contractée : voir le refus lui-même,
  *     c'est celui dont dépend la justesse de la lecture du paywall.
@@ -917,7 +913,20 @@ export const recordSubscription = mutation({
         "Ce statut est posé par une machine, pas par une personne : " +
           "« impayé » viendra du suivi des tranches, et « échu » se déduit de " +
           "la date de fin du contrat à chaque lecture. Enregistrez ce contrat " +
-          "en brouillon, en attente de paiement, actif ou résilié.",
+          "en brouillon, en attente de paiement ou actif.",
+      );
+    }
+
+    if (args.status === "cancelled") {
+      throw new Error(
+        "Résilier n'est pas enregistrer : « résilié » dit la FIN d'un contrat " +
+          "existant, et rien ici ne sait encore la prononcer — cette mutation " +
+          "insère, elle ne modifie aucune ligne. Saisi d'emblée, ce statut " +
+          "n'ouvrirait aucun accès mais deviendrait le contrat COURANT de " +
+          "l'école à sa date de début, coupant les élèves qu'un contrat actif " +
+          "couvre encore. La résiliation viendra avec la facturation, qui " +
+          "devra dire ce qu'elle fait du montant déjà facturé. Enregistrez ce " +
+          "contrat en brouillon, en attente de paiement ou actif.",
       );
     }
 
@@ -958,11 +967,47 @@ export const recordSubscription = mutation({
     // renouvellement, et `decideAccess` traite déjà `endsAt` comme exclu
     // (`now >= endsAt` ⇒ échu).
     //
-    // Les contrats `cancelled` ne comptent pas : une période résiliée doit
-    // pouvoir être recontractée, sans quoi une erreur de saisie condamnerait
-    // l'école pour l'année. Le prix de cette exception est borné — un contrat
-    // résilié n'ouvre aucun accès.
-    const candidates = await ctx.db
+    // AUCUNE EXCEPTION DE STATUT, `cancelled` compris. La sélection du contrat
+    // courant ne lit pas le statut : elle compare des `startsAt`. Un contrat
+    // résilié autorisé à croiser un contrat actif deviendrait donc le contrat
+    // courant le jour où il commence, et couperait toute l'école — `cancelled`
+    // tant qu'il dure, puis `expired` — pendant que le contrat actif la
+    // couvre. Cette exemption n'aurait racheté qu'un scénario IMPOSSIBLE :
+    // « recontracter une période résiliée » suppose qu'une ligne puisse
+    // DEVENIR résiliée, or l'insertion ci-dessous est l'unique écriture de la
+    // table et `recordSubscription` refuse désormais `cancelled` à la saisie.
+    // L'invariant est donc entier : les contrats d'une école sont disjoints,
+    // quel que soit leur statut.
+    //
+    // UN SEUL DOCUMENT LU, ET LE CONTRÔLE EST EXACT — c'est cet invariant qui
+    // le rend exact, pas la taille de la lecture. Le candidat est la ligne de
+    // plus grand `startsAt` parmi celles qui commencent avant la fin proposée ;
+    // il y a conflit SI ET SEULEMENT SI son `endsAt` dépasse le début proposé.
+    // Aucun faux positif : `startsAt_C < endsAt` et `endsAt_C > startsAt` sont
+    // exactement le croisement de deux intervalles. Aucun faux négatif, en
+    // deux cas. Si une ligne X chevauche [startsAt, endsAt) en commençant
+    // dedans, le candidat C vérifie `startsAt_C >= startsAt_X >= startsAt`,
+    // donc `endsAt_C > startsAt_C >= startsAt` : le test le voit. Si X
+    // chevauche en commençant AVANT, alors X couvre `startsAt` ; soit C = X et
+    // le test le voit, soit C s'intercale entre X et `startsAt`, ce qui
+    // exigerait `endsAt_X <= startsAt_C < startsAt` quand X couvre `startsAt`
+    // (`endsAt_X > startsAt`) — la disjointness l'interdit. Une fenêtre de
+    // lecture bornée, elle, ne prouvait RIEN : n'importe quel nombre de lignes
+    // intercalées en évinçait le vrai conflit.
+    //
+    // POUR LE PLAN DE FACTURATION — le jour où une vraie résiliation existera
+    // (un `patch` du statut d'un contrat en cours vers `cancelled`), cet
+    // invariant changera de NATURE : une période résiliée devra redevenir
+    // contractable, donc les lignes `cancelled` cesseront de compter ici, et
+    // la disjointness ne vaudra plus que pour les autres. DEUX choses devront
+    // suivre ensemble, sans quoi le défaut refermé ici se rouvre. D'abord
+    // `access.currentSchoolSubscription` devra ignorer les contrats résiliés,
+    // au lieu de retenir le plus récemment commencé quel que soit son statut.
+    // Ensuite ce contrôle aura besoin d'un index portant `status` — par
+    // exemple `["ownerType", "ownerId", "status", "startsAt"]` — pour rester
+    // exact en une lecture : écarter les résiliés APRÈS coup, parmi des lignes
+    // lues par `startsAt`, ramènerait la fenêtre bornée et son trou.
+    const candidate = await ctx.db
       .query("subscriptions")
       .withIndex("by_owner_startsAt", (q) =>
         q
@@ -971,16 +1016,14 @@ export const recordSubscription = mutation({
           .lt("startsAt", args.endsAt),
       )
       .order("desc")
-      .take(OVERLAP_SCAN_LIMIT);
+      .first();
 
-    const conflict = candidates.find(
-      (row) => row.status !== "cancelled" && row.endsAt > args.startsAt,
-    );
-    if (conflict) {
+    if (candidate !== null && candidate.endsAt > args.startsAt) {
       throw new Error(
         "Cette école a déjà un contrat sur cette période : du " +
-          `${formatDay(conflict.startsAt)} au ${formatDay(conflict.endsAt)}, ` +
-          `${pluralCount(conflict.seatsPurchased, "siège", "sièges")}. Un ` +
+          `${formatDay(candidate.startsAt)} au ` +
+          `${formatDay(candidate.endsAt)}, ` +
+          `${pluralCount(candidate.seatsPurchased, "siège", "sièges")}. Un ` +
           "renouvellement commence à la fin du précédent, ou après. Deux " +
           "contrats simultanés rendraient indécidables l'accès des élèves et " +
           "le nombre de sièges de l'école.",

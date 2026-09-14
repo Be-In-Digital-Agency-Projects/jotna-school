@@ -378,7 +378,19 @@ export const markAttemptCorrectByAI = internalMutation({
 // Queries
 // ---------------------------------------------------------------------------
 
-export const getAttemptsForExercise = query({
+/**
+ * Tentatives d'un élève sur un exercice — INTERNE, aucun appelant.
+ *
+ * Cette lecture quitte la surface publique : elle rendait les tentatives de
+ * n'importe quel `Id<"profiles">` — réponses soumises comprises — sans
+ * vérifier l'appelant. Le paywall ci-dessous contrôle le droit d'accès de
+ * l'appelant, jamais son droit sur CET élève-là.
+ *
+ * Pour la rouvrir au public, il manque exactement cela : une vérification du
+ * lien entre l'appelant et l'élève visé, en plus du paywall. Le corps est
+ * inchangé.
+ */
+export const getAttemptsForExercise = internalQuery({
   args: {
     studentId: v.id("profiles"),
     exerciseId: v.id("exercises"),
@@ -482,7 +494,15 @@ export const listByTeacherStudents = query({
   },
 });
 
-export const getProgressForTopic = query({
+/**
+ * Progression d'un élève sur un chapitre — INTERNE, aucun appelant.
+ *
+ * Même raison que `getAttemptsForExercise` ci-dessus : elle rendait la ligne
+ * de progression de n'importe quel `Id<"profiles">` sans vérifier l'appelant,
+ * et le paywall ne dit rien du droit de l'appelant sur cet élève. Une version
+ * publique devrait vérifier ce lien en plus du paywall. Le corps est inchangé.
+ */
+export const getProgressForTopic = internalQuery({
   args: {
     studentId: v.id("profiles"),
     topicId: v.id("topics"),

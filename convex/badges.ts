@@ -82,18 +82,42 @@ export const getById = query({
   },
 });
 
-export const listEarnedByStudent = query({
-  args: { studentId: v.id("profiles") },
-  handler: async (ctx, args) => {
-    // Paywall (spec §5.4) — cette lecture prend `studentId` en argument et
-    // ne résout aucun profil ; elle est aussi partagée avec l'administration
-    // et les professeurs. blockedStudent(ctx) résout le profil de
-    // L'APPELANT et ne bloque que s'il s'agit d'un élève sans droit valide.
+/**
+ * Badges obtenus par l'élève de la SESSION, avec leur fiche complète.
+ *
+ * Renommée : elle s'appelait `listEarnedByStudent` et prenait `studentId` en
+ * argument, sans jamais vérifier l'appelant — n'importe qui pouvait lire les
+ * badges de n'importe quel `Id<"profiles">`. L'élève est désormais dérivé de
+ * la session ; son unique appelant y passait déjà son propre profil, donc le
+ * retrait de l'argument ne change aucun comportement légitime. Le nom
+ * « ByStudent » aurait menti une fois l'argument parti : plus aucun élève
+ * n'est nommé, c'est celui de la session.
+ *
+ * Une requête ne lève jamais : [] si l'appelant n'est pas authentifié ou n'a
+ * pas de profil.
+ */
+export const listMyEarned = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) return [];
+
+    const profile = await ctx.db
+      .query("profiles")
+      .withIndex("by_userId", (q) => q.eq("userId", userId))
+      .unique();
+    if (!profile) return [];
+
+    // Paywall (spec §5.4) — distinct du garde ci-dessus, qui n'établit que
+    // l'identité. blockedStudent(ctx) résout le profil de L'APPELANT et ne
+    // bloque que s'il s'agit d'un élève sans droit valide : jamais un adulte,
+    // cette lecture étant aussi partagée avec l'administration et les
+    // professeurs.
     if (await blockedStudent(ctx)) return [];
 
     const earned = await ctx.db
       .query("earnedBadges")
-      .withIndex("by_studentId", (q) => q.eq("studentId", args.studentId))
+      .withIndex("by_studentId", (q) => q.eq("studentId", profile._id))
       .take(100);
 
     // Join with badges table for full info

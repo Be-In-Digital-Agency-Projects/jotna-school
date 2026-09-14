@@ -9,10 +9,9 @@ import type { Id } from "@/convex/_generated/dataModel";
 export default function ParentDashboardPage() {
   const profile = useQuery(api.profiles.getCurrentProfile);
 
-  const children = useQuery(
-    api.profiles.getChildren,
-    profile ? { guardianId: profile._id } : "skip",
-  );
+  // Le tuteur est dérivé de la session côté serveur : plus d'argument, donc
+  // plus de "skip" en attente du profil.
+  const children = useQuery(api.profiles.getChildren);
 
   // Still loading the profile query
   if (profile === undefined) {

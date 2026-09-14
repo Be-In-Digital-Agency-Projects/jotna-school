@@ -18,10 +18,10 @@ import type { Id } from "@/convex/_generated/dataModel";
 export default function ParentChildrenPage() {
   const profile = useQuery(api.profiles.getCurrentProfile);
 
-  const children = useQuery(
-    api.profiles.getChildren,
-    profile ? { guardianId: profile._id } : "skip",
-  );
+  // Le tuteur est dérivé de la session côté serveur : plus d'argument, donc
+  // plus de "skip" en attente du profil. La requête part immédiatement et rend
+  // [] tant que l'appelant n'est pas authentifié.
+  const children = useQuery(api.profiles.getChildren);
 
   const pendingRequests = useQuery(api.linkRequests.getPendingForParent);
 

@@ -15,10 +15,10 @@ import { Users, ChevronDown, UserCircle } from "lucide-react";
  */
 export function KidSwitcher() {
   const profile = useQuery(api.profiles.getCurrentProfile);
-  const children = useQuery(
-    api.profiles.getChildren,
-    profile ? { guardianId: profile._id } : "skip",
-  );
+  // Le tuteur est dérivé de la session côté serveur : plus d'argument, donc
+  // plus de "skip" en attente du profil. Le garde de chargement ci-dessous
+  // attend toujours les deux requêtes.
+  const children = useQuery(api.profiles.getChildren);
 
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);

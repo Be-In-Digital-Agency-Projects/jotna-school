@@ -86,13 +86,34 @@ export const getTeacherStudents = query({
   },
 });
 
-/** Get all student profiles linked to a guardian via studentGuardians. */
+/**
+ * Profils élèves rattachés au tuteur de la SESSION.
+ *
+ * Le tuteur est dérivé de la session au lieu d'être reçu en argument : la
+ * version précédente acceptait n'importe quel `Id<"profiles">` et rendait les
+ * profils des élèves qui lui étaient rattachés, sans jamais vérifier
+ * l'appelant. Ses trois appelants y passaient déjà l'identifiant de leur
+ * propre profil (`getCurrentProfile`), donc l'argument était redondant et son
+ * retrait ne change aucun comportement légitime.
+ *
+ * Une requête ne lève jamais : [] si l'appelant n'est pas authentifié ou n'a
+ * pas de profil.
+ */
 export const getChildren = query({
-  args: { guardianId: v.id("profiles") },
-  handler: async (ctx, args) => {
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) return [];
+
+    const guardian = await ctx.db
+      .query("profiles")
+      .withIndex("by_userId", (q) => q.eq("userId", userId))
+      .unique();
+    if (!guardian) return [];
+
     const links = await ctx.db
       .query("studentGuardians")
-      .withIndex("by_guardianId", (q) => q.eq("guardianId", args.guardianId))
+      .withIndex("by_guardianId", (q) => q.eq("guardianId", guardian._id))
       .take(50);
 
     const children = await Promise.all(
@@ -110,8 +131,27 @@ export const getChildren = query({
 // Mutations
 // ---------------------------------------------------------------------------
 
-/** Create a new student profile and link it to the guardian via studentGuardians. */
-export const createChildProfile = mutation({
+/**
+ * Crée un profil élève et le lien de tutelle — INTERNE, aucun appelant.
+ *
+ * Cette mutation quitte la surface publique. Elle y était exposée sans aucune
+ * authentification : elle insérait un profil `student` portant le `userId` que
+ * l'appelant lui donnait (`v.string()`, une chaîne libre), rattaché au
+ * `guardianId` que l'appelant choisissait lui aussi. Rien ne vérifiait qui
+ * appelait, ni qu'il avait le moindre droit sur ce tuteur.
+ *
+ * Au-delà du profil parasite : rien n'impose l'unicité de `profiles.userId`,
+ * qui est pourtant lu par `.unique()` (voir `getCurrentProfile` ci-dessus).
+ * Insérer un profil portant le `userId` d'un compte existant fait donc lever
+ * cette lecture pour cette personne, qui ne peut plus charger son profil.
+ *
+ * La voie légitime pour un écran est `createChildAccount` ci-dessous : elle
+ * authentifie le parent, crée le compte de l'enfant via `createAccount`, et
+ * laisse `linkChildToParent` écrire le lien.
+ *
+ * Le corps est inchangé : seul le mot d'enregistrement a changé.
+ */
+export const createChildProfile = internalMutation({
   args: {
     guardianId: v.id("profiles"),
     name: v.string(),

@@ -1,44 +1,22 @@
-import {
-  query,
-  mutation,
-  internalMutation,
-  type QueryCtx,
-} from "./_generated/server";
+import { query, mutation, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
-
-/**
- * Vrai si l'appelant est un professeur ou un admin.
- *
- * Les quatre lectures ci-dessous rendent le document `exercises` BRUT : il
- * porte `answerKey`, le tableau complet des `hints` et un `payload` qui
- * contient la réponse (`correctIndex`, paires correctes…). Ce sont des
- * lectures d'écrans adultes — admin et professeur. Le chemin élève légitime
- * passe par `paliers/index.ts`, qui retire la réponse via
- * `stripAnswerFromExercise` avant de rendre quoi que ce soit.
- *
- * Ce n'est pas un contrôle de paywall mais un contrôle de rôle : aucun élève,
- * payant ou non, ne doit lire ces corrigés. D'où un garde de rôle et non
- * `blockedStudent` / `requireAccess`.
- *
- * Écrit une fois ici plutôt que recopié dans les quatre handlers : quatre
- * copies de la même règle, c'est quatre endroits où la corriger.
- */
-async function callerIsStaff(ctx: QueryCtx): Promise<boolean> {
-  const userId = await getAuthUserId(ctx);
-  if (userId === null) return false;
-
-  const profile = await ctx.db
-    .query("profiles")
-    .withIndex("by_userId", (q) => q.eq("userId", userId))
-    .unique();
-  if (!profile) return false;
-
-  return profile.role === "professeur" || profile.role === "admin";
-}
+import { callerIsStaff } from "./access";
 
 // ---------------------------------------------------------------------------
 // Queries
+//
+// Les quatre premières rendent le document `exercises` BRUT : il porte
+// `answerKey`, le tableau complet des `hints` et un `payload` qui contient la
+// réponse (`correctIndex`, paires correctes…). Ce sont des lectures d'écrans
+// adultes — admin et professeur. Le chemin élève légitime passe par
+// `paliers/index.ts`, qui retire la réponse via `stripAnswerFromExercise`
+// avant de rendre quoi que ce soit.
+//
+// Ce n'est pas un contrôle de paywall mais un contrôle de rôle : aucun élève,
+// payant ou non, ne doit lire ces corrigés. D'où `callerIsStaff` et non
+// `blockedStudent` / `requireAccess`. Le garde vit dans `convex/access.ts`,
+// partagé avec `convex/students.ts`.
 // ---------------------------------------------------------------------------
 
 export const listByTopic = query({

@@ -3,7 +3,12 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { getConditionText, normalizeRarity } from "./badges";
-import { checkAccess, requireAccess } from "./access";
+import {
+  callerIsAdmin,
+  callerIsStaff,
+  checkAccess,
+  requireAccess,
+} from "./access";
 
 // ---------------------------------------------------------------------------
 // Star approximation helper.
@@ -115,9 +120,25 @@ export function resolveTopicStatuses(
 // Queries for admin student management
 // ---------------------------------------------------------------------------
 
+/**
+ * Annuaire des élèves de la plateforme — écran d'administration.
+ *
+ * Garde de RÔLE et non de paywall : cette lecture rend jusqu'à 1000 profils
+ * d'élèves (nom, `userId`, `preferences`), sans aucun rapport avec le droit
+ * d'accès de qui que ce soit. Ni `blockedStudent` ni `requireAccess` n'ont de
+ * sens ici — ils jugent l'abonnement d'un élève, pas la qualité de l'appelant.
+ *
+ * `admin` seul : son unique appelant est `app/(admin)/admin/eleves/page.tsx`,
+ * et lister tous les élèves de la plateforme dépasse ce dont un professeur a
+ * besoin (ses élèves à lui passent par `profiles.getTeacherStudents`).
+ *
+ * Une requête ne lève jamais : [] pour tout autre appelant.
+ */
 export const listStudents = query({
   args: {},
   handler: async (ctx) => {
+    if (!(await callerIsAdmin(ctx))) return [];
+
     const profiles = await ctx.db.query("profiles").take(1000);
     const students = profiles.filter((p) => p.role === "student");
 
@@ -147,9 +168,28 @@ export const listStudents = query({
   },
 });
 
+/**
+ * Dossier complet d'un élève — écrans administration et professeur.
+ *
+ * Garde de RÔLE et non de paywall : progression par matière, badges et dix
+ * dernières tentatives d'un élève nommé en argument. `blockedStudent` et
+ * `requireAccess` jugeraient l'abonnement, pas la qualité de l'appelant.
+ *
+ * `admin` + `professeur` : appelée par `app/(admin)/admin/eleves/[id]` et
+ * `app/(teacher)/teacher/students/[id]`.
+ *
+ * Ce garde autorise un professeur à lire le dossier de N'IMPORTE QUEL élève,
+ * pas seulement des siens — la page enseignant redirige déjà dans ce cas, mais
+ * côté client seulement. Restreindre au lien `studentGuardians` demande un
+ * arbitrage produit et n'est pas fait ici.
+ *
+ * Une requête ne lève jamais : null pour tout autre appelant.
+ */
 export const getStudentDetail = query({
   args: { studentId: v.id("profiles") },
   handler: async (ctx, args) => {
+    if (!(await callerIsStaff(ctx))) return null;
+
     const student = await ctx.db.get(args.studentId);
     if (!student || student.role !== "student") {
       return null;
@@ -513,9 +553,22 @@ export const getMyEarnedBadges = query({
   },
 });
 
+/**
+ * Statistiques agrégées d'un élève — écran professeur.
+ *
+ * Garde de RÔLE et non de paywall, même raisonnement que `getStudentDetail`
+ * ci-dessus, y compris la réserve : un professeur voit les statistiques de
+ * n'importe quel élève, pas seulement des siens.
+ *
+ * `admin` + `professeur` : appelée par `app/(teacher)/teacher/students/[id]`.
+ *
+ * Une requête ne lève jamais : null pour tout autre appelant.
+ */
 export const getStudentStats = query({
   args: { studentId: v.id("profiles") },
   handler: async (ctx, args) => {
+    if (!(await callerIsStaff(ctx))) return null;
+
     const student = await ctx.db.get(args.studentId);
     if (!student || student.role !== "student") {
       return null;

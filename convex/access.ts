@@ -151,6 +151,42 @@ export async function blockedStudent(ctx: QueryCtx): Promise<boolean> {
   return !access.ok;
 }
 
+/** Rôle de l'appelant, ou null s'il n'est pas authentifié ou n'a pas de profil. */
+async function callerRole(
+  ctx: QueryCtx,
+): Promise<Doc<"profiles">["role"] | null> {
+  const profile = await currentProfile(ctx);
+  return profile?.role ?? null;
+}
+
+/**
+ * Vrai si l'appelant est un professeur ou un admin.
+ *
+ * Garde de RÔLE, pas garde de paywall : il répond « cette personne fait-elle
+ * partie du personnel ? », jamais « son école est-elle à jour ? ». Les deux se
+ * cumulent sans se remplacer — ne pas le confondre avec `blockedStudent` ni
+ * `requireAccess` ci-dessus.
+ *
+ * Vit ici plutôt que dans chacun des fichiers qui s'en sert (`exercises.ts`
+ * pour les corrigés bruts, `students.ts` pour les écrans du personnel) : une
+ * seule copie de la règle, un seul endroit où la corriger.
+ */
+export async function callerIsStaff(ctx: QueryCtx): Promise<boolean> {
+  const role = await callerRole(ctx);
+  return role === "professeur" || role === "admin";
+}
+
+/**
+ * Vrai si l'appelant est un admin — garde de rôle, voir `callerIsStaff`.
+ *
+ * Distinct de `callerIsStaff` pour les lectures qui ne sont pas des écrans de
+ * professeur : lister TOUS les élèves de la plateforme n'est pas la même
+ * autorisation que consulter le détail d'un élève depuis un écran enseignant.
+ */
+export async function callerIsAdmin(ctx: QueryCtx): Promise<boolean> {
+  return (await callerRole(ctx)) === "admin";
+}
+
 /**
  * Pour les MUTATIONS : lève si l'accès n'est pas ouvert.
  *

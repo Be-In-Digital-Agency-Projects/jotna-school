@@ -2,7 +2,8 @@
  * Barème d'abonnement des écoles — module PUR.
  *
  * Aucun import, aucune lecture de base : `schools.recordSubscription` passe un
- * nombre de sièges et reçoit un devis. Même découpage que `accessRules.ts`
+ * nombre de sièges et reçoit un devis, `schools.amendSeats` passe le contrat
+ * qu'il vient de lire et reçoit le prorata. Même découpage que `accessRules.ts`
  * (pur, testé) / `access.ts` (I/O), et pour une raison de plus ici : une règle
  * qui décide d'un MONTANT doit pouvoir être éprouvée sans base de données, et
  * le dépôt n'a pas `convex-test`.
@@ -143,5 +144,203 @@ export function quoteWithScale(
     seatsBilled,
     totalFcfa,
     pricePerSeatFcfa: Math.round(totalFcfa / seatsBilled),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// AVENANT DE SIÈGES — faire grossir un contrat EN COURS, au prorata.
+//
+// Une école qui recrute vingt élèves en février ne peut pas attendre la
+// rentrée suivante, et un second contrat de février à juillet est précisément
+// ce que l'invariant de disjointness interdit (spec §4.5) : deux contrats qui
+// se croisent, et la lecture en UN document qui décide de l'accès de chaque
+// enfant devient fausse. L'avenant fait grossir le contrat existant sans
+// toucher à ses dates — la disjointness est alors INCHANGÉE, puisque rien ne
+// bouge de ce sur quoi elle porte.
+//
+// Le calcul vit ici, avec le reste du barème, et pour la même raison : une
+// règle qui décide d'un MONTANT doit pouvoir être éprouvée sans base de
+// données. `schools.amendSeats` lui passe le contrat qu'il vient de lire et
+// écrit ce qu'elle rend.
+// ---------------------------------------------------------------------------
+
+/** Ce que `schools.amendSeats` lit du contrat, et ce que l'école demande. */
+export interface SeatAmendmentInput {
+  /** Sièges que le contrat ouvre AUJOURD'HUI (`subscriptions.seatsPurchased`). */
+  readonly currentSeats: number;
+  /** Ce qui a déjà été facturé (`subscriptions.totalFcfa`), et qui fait foi. */
+  readonly currentTotalFcfa: number;
+  /** Le nouveau nombre TOTAL de sièges demandé — jamais le nombre ajouté. */
+  readonly newSeats: number;
+  /** L'instant de l'acte. Un seul, pour la part restante et pour la trace. */
+  readonly now: number;
+  /** Début du contrat, tel qu'il est en base — l'avenant n'y touche pas. */
+  readonly startsAt: number;
+  /** Fin du contrat, telle qu'elle est en base — l'avenant n'y touche pas. */
+  readonly endsAt: number;
+}
+
+/** Ce qu'un avenant change au contrat, et ce qu'il coûte à l'école. */
+export interface SeatAmendmentQuote {
+  /** Sièges facturés APRÈS l'avenant — la valeur à écrire dans `seatsPurchased`. */
+  seatsBilled: number;
+  /**
+   * Sièges réellement AJOUTÉS. Zéro veut dire « cet avenant n'ajoute rien » —
+   * une baisse, une égalité, ou une demande illisible — et rien ne doit alors
+   * être écrit : `seatsBilled` vaut l'existant et `amountFcfa` vaut zéro.
+   */
+  seatsAdded: number;
+  /** Ce que ces sièges coûteraient sur la période ENTIÈRE, avant prorata. */
+  fullTermDeltaFcfa: number;
+  /** Part de la période qui reste à courir, bornée à [0, 1]. */
+  remainingShare: number;
+  /** Ce qui s'AJOUTE au total — arrondi, le FCFA n'a pas de sous-unité. */
+  amountFcfa: number;
+  /** Le nouveau `totalFcfa` : ancien + `amountFcfa`. Fait foi (§7.2). */
+  totalFcfa: number;
+  /**
+   * Tarif moyen après avenant, MIXTE — des sièges payés sur une année pleine,
+   * d'autres sur une fraction d'année. À usage d'affichage uniquement (§7.2),
+   * comme celui de `quoteWithScale` : ne jamais en reconstituer un total.
+   */
+  pricePerSeatFcfa: number;
+}
+
+/**
+ * La part de la période qui reste à courir, BORNÉE À [0, 1].
+ *
+ * La borne haute n'est pas décorative : un contrat qui n'a pas encore commencé
+ * donne `now < startsAt`, donc un rapport supérieur à 1, et l'école se verrait
+ * facturer PLUS qu'une année pleine pour des sièges qu'elle n'a pas encore
+ * commencé à consommer. Bornée à 1, elle paie exactement le plein tarif de ce
+ * qu'elle ajoute — ce qui est juste, le contrat lui étant tout entier devant.
+ *
+ * La borne basse tient le contrat échu : un `endsAt` dépassé rendrait une part
+ * NÉGATIVE, donc un avoir silencieux retranché du total déjà facturé. Zéro,
+ * jamais moins. `schools.amendSeats` refuse de toute façon d'amender un
+ * contrat échu, qui n'ouvrirait aucun accès à l'école : cette borne est une
+ * seconde ligne, pas la première.
+ *
+ * Une période illisible — bornes non finies, ou fin qui ne suit pas le début —
+ * ne vaut AUCUNE part, par la même convention que `billedSeats` : c'est le
+ * seul repli qui ne peut jamais surfacturer. `recordSubscription` refuse déjà
+ * `endsAt <= startsAt` à la saisie.
+ */
+export function remainingPeriodShare(
+  now: number,
+  startsAt: number,
+  endsAt: number,
+): number {
+  if (
+    !Number.isFinite(now) ||
+    !Number.isFinite(startsAt) ||
+    !Number.isFinite(endsAt)
+  ) {
+    return 0;
+  }
+  const span = endsAt - startsAt;
+  if (span <= 0) return 0;
+  const left = endsAt - now;
+  if (left <= 0) return 0;
+  return Math.min(left / span, 1);
+}
+
+/**
+ * Les sièges qu'un contrat ouvre DÉJÀ, ramenés à un entier exploitable.
+ *
+ * Même convention que `contractSeats` dans `schools.ts`, et pour la même
+ * raison : `seatsPurchased` est un `v.number()` au schéma. Une valeur illisible
+ * vaut zéro siège tenu — l'avenant facture alors tout ce qu'il ouvre, ce qui
+ * est cohérent, plutôt que de rendre `NaN` sur le montant d'une facture.
+ *
+ * Le PLANCHER ne s'applique pas ici : il dit ce qu'une école doit ACHETER au
+ * minimum, pas ce qu'un contrat déjà signé lui a ouvert.
+ */
+function seatsHeld(currentSeats: number): number {
+  if (!Number.isInteger(currentSeats) || currentSeats <= 0) return 0;
+  return currentSeats;
+}
+
+/**
+ * Ce que coûte l'ajout de sièges à un contrat en cours.
+ *
+ * DEUX DEVIS, JAMAIS UNE MULTIPLICATION. Le coût de vingt sièges de plus est
+ * la DIFFÉRENCE entre le devis d'après et le devis d'avant, et non vingt fois
+ * un prix unitaire. Avec le tarif plat d'aujourd'hui les deux coïncident ; le
+ * jour où une remise au volume reviendra, ils divergeront — le coût marginal
+ * d'un siège dépend de la tranche où il tombe, et une multiplication
+ * facturerait au prix du premier palier des sièges qui relèvent du troisième,
+ * ou l'inverse. C'est la même raison qui rend le moteur cumulatif non
+ * négociable (§7.2).
+ *
+ * PUIS LE PRORATA. Une école qui ajoute un élève à deux mois de la fin ne paie
+ * pas une année pleine : le delta est multiplié par la part de période qui
+ * reste à courir, et arrondi au franc. Un directeur trouverait l'année pleine
+ * exactement comme il trouverait la non-monotonie que §7.2 interdit.
+ *
+ * NE REND JAMAIS MOINS QUE L'EXISTANT. `seatsBilled` est le maximum des sièges
+ * demandés (plancher appliqué) et des sièges déjà tenus : une demande en
+ * baisse, nulle ou illisible rend le contrat INCHANGÉ et un montant nul,
+ * plutôt qu'un contrat rétréci et un avoir. `schools.amendSeats` refuse ces
+ * demandes en amont, avec un message qui dit quoi faire ; ceci est la seconde
+ * ligne, celle qui garantit qu'aucun chemin d'écriture ne peut retirer des
+ * sièges à une école qui les a payés.
+ */
+export function quoteSeatAmendment(
+  input: SeatAmendmentInput,
+): SeatAmendmentQuote {
+  return quoteSeatAmendmentWithScale(input, PRICING_SCALE);
+}
+
+/**
+ * Le moteur de l'avenant sur un barème passé en argument — même rôle, mêmes
+ * précautions que `quoteWithScale` : LA PRODUCTION NE L'APPELLE JAMAIS AVEC
+ * AUTRE CHOSE QUE `PRICING_SCALE`, et aucun barème ne vient jamais d'un
+ * argument de mutation. Il existe pour que les tests puissent prouver sur un
+ * barème dégressif ce que le tarif plat rend invisible : que le coût d'un
+ * ajout dépend de la tranche où les sièges tombent.
+ */
+export function quoteSeatAmendmentWithScale(
+  input: SeatAmendmentInput,
+  scale: PricingScale,
+): SeatAmendmentQuote {
+  const held = seatsHeld(input.currentSeats);
+  const seatsBilled = Math.max(billedSeats(input.newSeats, scale), held);
+  const seatsAdded = seatsBilled - held;
+
+  // Positif ou nul par la monotonie du barème (§7.2, prouvée par balayage
+  // dans les tests) : `seatsBilled >= held` et le total ne baisse jamais quand
+  // les sièges montent.
+  const fullTermDeltaFcfa =
+    quoteWithScale(seatsBilled, scale).totalFcfa -
+    quoteWithScale(held, scale).totalFcfa;
+
+  const remainingShare = remainingPeriodShare(
+    input.now,
+    input.startsAt,
+    input.endsAt,
+  );
+
+  const amountFcfa =
+    seatsAdded <= 0 ? 0 : Math.round(fullTermDeltaFcfa * remainingShare);
+
+  // Le total de DÉPART vient du contrat, jamais d'un devis recalculé : après
+  // un premier avenant, `totalFcfa` ne vaut plus le devis de ses sièges — il
+  // vaut le devis d'origine plus les proratas consentis. Le recalculer
+  // effacerait ces avenants de la facture.
+  const currentTotalFcfa = Number.isFinite(input.currentTotalFcfa)
+    ? input.currentTotalFcfa
+    : 0;
+  const totalFcfa = currentTotalFcfa + amountFcfa;
+
+  return {
+    seatsBilled,
+    seatsAdded,
+    fullTermDeltaFcfa,
+    remainingShare,
+    amountFcfa,
+    totalFcfa,
+    pricePerSeatFcfa:
+      seatsBilled > 0 ? Math.round(totalFcfa / seatsBilled) : 0,
   };
 }

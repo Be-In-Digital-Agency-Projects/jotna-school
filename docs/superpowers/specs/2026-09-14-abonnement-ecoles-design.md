@@ -119,8 +119,8 @@ subscriptions: {
   ownerType: "school" | "parent",           // "parent" non implémenté en v1
   ownerId,                                  // v.string() — Id<"schools"> aujourd'hui
   seatsPurchased,
-  pricePerSeatFcfa,                         // effectif moyen, gelé à la signature
-  totalFcfa,                                // gelé à la signature
+  pricePerSeatFcfa,                         // effectif moyen, affichage seul
+  totalFcfa,                                // fait foi ; avenant de sièges : §7.6
   startsAt, endsAt,
   status: "draft" | "pending_payment" | "active"
         | "past_due" | "expired" | "cancelled",
@@ -256,7 +256,10 @@ disjointness, la lecture peut retenir un contrat court et échu niché dans un
 contrat long et actif, et **couper une école qui a payé**.
 
 L'invariant est maintenu à l'écriture : `recordSubscription` refuse toute
-période croisant un contrat existant. Le contrôle est **exact en une lecture** —
+période croisant un contrat existant, et c'est la seule mutation qui crée une
+période. `amendSeats` (§7.6) modifie une ligne existante, mais **ne touche ni
+`startsAt` ni `endsAt`** : il ne peut donc pas créer de chevauchement, puisqu'il
+ne déplace aucune borne. Le contrôle est **exact en une lecture** —
 le candidat est la ligne de plus grand `startsAt` parmi celles qui commencent
 avant la fin proposée, et il y a conflit si et seulement si son `endsAt` dépasse
 le début proposé. Une fenêtre de lecture bornée ne prouverait rien : n'importe
@@ -265,10 +268,11 @@ quel nombre de lignes intercalées en évincerait le vrai conflit.
 **Corollaire : `cancelled` n'est pas enregistrable.** Une première version
 exemptait les contrats résiliés du contrôle de chevauchement, au motif qu'une
 période résiliée doit pouvoir être recontractée. Le motif ne tient pas : aucune
-mutation ne sait résilier un contrat existant — il n'y a **aucun `patch` sur
-`subscriptions`**, seulement un `insert` — donc une ligne ne peut jamais
-*devenir* résiliée. L'exemption ne s'appliquait qu'aux lignes saisies résiliées
-d'emblée, et celles-là empoisonnaient la sélection : enregistrées avant le
+mutation ne sait résilier un contrat existant — le seul `patch` sur
+`subscriptions` est celui d'`amendSeats` (§7.6), qui **n'écrit jamais
+`status`** — donc une ligne ne peut jamais *devenir* résiliée. L'exemption ne
+s'appliquait qu'aux lignes saisies résiliées d'emblée, et celles-là
+empoisonnaient la sélection : enregistrées avant le
 contrat annuel et datées après lui, elles gagnaient la sélection et coupaient
 l'école, sans borne — la ligne résiliée continue de gagner jusqu'à ce qu'un
 contrat au début encore plus tardif soit enregistré.
@@ -723,6 +727,67 @@ La grille vit dans `convex/pricing.ts`, module pur sans aucun import, testé sur
 les trois exemples de §7.2, les bornes de palier, le plancher, et la monotonie
 prouvée par balayage de 0 à 420 sièges — pas par trois points choisis.
 
+### 7.6 Avenant de sièges — faire grossir une école en cours d'année
+
+Une école qui recrute vingt élèves en février ne pouvait rien obtenir avant la
+fin de son contrat (§10, désormais corrigé). La solution évidente — enregistrer
+un second contrat de février à juillet — est exactement ce que **§4.5
+interdit** : un contrat court niché dans un contrat long gagne la sélection du
+paywall, puis expire, et coupe une école qui a payé.
+
+`schools.amendSeats` **modifie le contrat en cours** plutôt que d'en créer un
+second, et sa sûreté tient tout entière à son étroitesse. Il écrit trois
+champs :
+
+| Champ | Écrit | Pourquoi |
+|---|---|---|
+| `seatsPurchased` | à la hausse seulement | ce que l'école achète |
+| `totalFcfa` | ancien **+** prorata | fait foi pour la facturation (§7.2) |
+| `pricePerSeatFcfa` | recalculé | conséquence des deux autres, affichage seul |
+
+et **jamais `status`, jamais `startsAt`, jamais `endsAt`** :
+
+- les dates ne bougeant pas, la disjointness de §4.5 est **inchangée** : aucun
+  chevauchement ne peut naître d'un avenant ;
+- le statut ne bougeant pas, **aucune ligne ne peut *devenir* `cancelled`** —
+  la propriété dont dépendent le refus de `cancelled` à la saisie (§4.5) et le
+  raisonnement de §8.5.
+
+**Le prix est proratisé sur la période restante** :
+
+```
+delta   = quote(nouveauxSièges).totalFcfa − quote(siègesActuels).totalFcfa
+part    = (endsAt − now) / (endsAt − startsAt),  BORNÉE À [0, 1]
+montant = arrondi(delta × part)
+```
+
+Le delta passe par `quote` **des deux côtés** et non par une multiplication : le
+coût marginal de vingt sièges dépend de la tranche où ils tombent, et une
+multiplication redeviendrait fausse au retour d'un barème dégressif, exactement
+comme en §7.2. La borne à 1 n'est pas décorative : sur un contrat qui n'a pas
+encore commencé, `now < startsAt` donnerait une part supérieure à 1 et
+surfacturerait. La borne à 0 interdit l'avoir silencieux sur un contrat échu.
+
+**Refus** — réservé à l'`admin`, comme tout le module : une baisse de sièges
+(le remboursement appartient à la facturation), l'absence de contrat courant ou
+un contrat échu (c'est un contrat neuf qu'il faut, l'agrandir n'ouvrirait aucun
+accès et réécrirait une année révolue), et les entrées absurdes.
+
+**Pas de garde d'effectif**, et c'est vérifié plutôt que supposé : un avenant
+n'augmente que `seatsPurchased`, `used` ne bouge pas, donc `used <= purchased`
+se conserve. Une garde serait en outre **nuisible** — une école déjà au-delà de
+son contrat n'en est rapprochée que par un avenant, et c'est le remède même que
+`enrollStudent` et l'écran d'école recommandent.
+
+**La trace** — `subscriptionAmendments` (`convex/schema.ts`), même farine que
+`schoolMembershipEvents` : contrat, école, sièges avant et après, montant,
+auteur, instant. Un `patch` écrase : sans elle, plus rien ne dirait ce qui avait
+été signé.
+
+**Deux avenants concurrents** ne se perdent pas : une mutation Convex est une
+transaction sérialisable, le second voit son ensemble de lecture invalidé et
+rejoue sur la ligne déjà amendée. Les deux prorata s'additionnent.
+
 ---
 
 ---
@@ -825,10 +890,11 @@ qu'un intendant est en retard est cruel et commercialement suicidaire.
 > la garantit, jamais parce qu'elle « devrait suffire ».
 >
 > Sans effet aujourd'hui : `recordSubscription` refuse `past_due` à la saisie
-> (§4.5), c'est le seul écrivain de `subscriptions`, et **rien n'écrit jamais
-> d'`installments`** — le statut est donc inatteignable et l'ancre toujours
-> absente. La branche décide de ce qui arrivera au plan 3, pas de ce qui arrive
-> maintenant.
+> (§4.5), c'est le seul écrivain du `status` — l'autre écrivain de la table,
+> `amendSeats` (§7.6), ne touche qu'aux sièges et au montant — et **rien
+> n'écrit jamais d'`installments`** : le statut est donc inatteignable et
+> l'ancre toujours absente. La branche décide de ce qui arrivera au plan 3, pas
+> de ce qui arrive maintenant.
 
 ### 8.5 bis Message adulte — promesse non tenue par le plan 1/3
 
@@ -885,6 +951,16 @@ chiffrés de la section 7.2, le plancher de sièges, et une **propriété de
 monotonie** : pour tout n, `total(n + 1) > total(n)`. C'est ce test qui empêche
 la régression non monotone décrite en 7.2.
 
+**Avenant de sièges (même fichier)** — le prorata sur la période restante, les
+**deux bornes** de la part (1 avant le début du contrat, 0 après sa fin : ni
+surfacturation ni avoir silencieux), l'accumulation `ancien + montant` qui
+interdit de recalculer le total depuis un devis neuf, le refus de rétrécir un
+contrat quelle que soit la demande, et — sur le barème dégressif de
+démonstration — un ajout **à cheval sur deux paliers**, qu'aucune
+multiplication par un prix unitaire ne rend. C'est le seul endroit du dépôt où
+l'avenant est testable : le reste vit dans une mutation, et le repo n'a pas
+`convex-test`.
+
 **Import en masse (`convex/__tests__/schoolImport.test.ts`)** — refus quand le
 lot dépasse les sièges disponibles (et vérification qu'aucune ligne n'a été
 créée), reprise après interruption sans doublon, compteur `activeCount` exact
@@ -915,13 +991,16 @@ contenu.
 - Remboursement et avoir sur siège libéré en cours d'année.
 - Ouverture du contenu au-delà de CE2/CM1 : indépendant de ce chantier, la
   génération accepte déjà les six niveaux.
-- **Amender un contrat en cours.** Une école qui veut plus de sièges en février
-  ne peut pas en obtenir avant la fin du contrat courant : l'invariant de §4.5
-  refuse tout contrat chevauchant, et aucune mutation ne modifie une ligne
-  existante. Ce n'est pas un oubli — amender un contrat en cours, c'est décider
-  du sort du montant déjà facturé, donc de la facturation. **C'est une limite de
-  produit, pas une limite technique** : si les écoles doivent pouvoir grossir en
-  cours d'année, il faut la lever avant la mise en service.
+- ~~**Amender un contrat en cours.**~~ **LEVÉ — voir §7.6.** Cette section
+  tenait l'amendement pour une limite de produit assumée : l'invariant de §4.5
+  refuse tout contrat chevauchant, et aucune mutation ne modifiait une ligne
+  existante. La limite a été levée avant la mise en service, sous la forme
+  **étroite** qui ne coûte rien à §4.5 : `schools.amendSeats` fait grossir le
+  contrat en cours — sièges, montant au prorata de la période restante — **sans
+  jamais toucher au statut ni aux dates**. Reste hors périmètre, et pour la
+  raison d'origine (le sort du montant déjà facturé appartient à la
+  facturation) : **réduire** les sièges d'un contrat en cours, en déplacer les
+  dates, et le résilier.
 
 ---
 

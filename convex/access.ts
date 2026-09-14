@@ -45,9 +45,13 @@ import {
  * de cette requête. Le contrat le plus récemment commencé est celui en vigueur
  * si `now < endsAt` ; s'il est échu, aucun contrat plus ancien ne peut couvrir
  * `now`, parce que les contrats d'une école ne se CHEVAUCHENT PAS. Cet
- * invariant n'est pas un pari : `schools.recordSubscription` est l'unique
- * écrivain de la table, il refuse tout contrat dont la période en croise une
- * autre, et la table est partie de vide. Qui le relâchera devra revenir ici —
+ * invariant n'est pas un pari : la table est partie de vide et n'a que DEUX
+ * écrivains, dont un seul crée des périodes. `schools.recordSubscription`
+ * insère, et refuse tout contrat dont la période en croise une autre.
+ * `schools.amendSeats` fait grossir un contrat en cours — sièges et montant —
+ * et ne touche NI `startsAt` NI `endsAt` : il ne peut donc pas créer de
+ * chevauchement, puisqu'il ne déplace aucune borne de période. Qui le
+ * relâchera devra revenir ici —
  * la lecture redeviendrait fausse pour une école dont un contrat COURT
  * chevaucherait un long : le court, plus récemment commencé, gagnerait puis
  * expirerait, coupant une école que le long couvre encore.
@@ -60,11 +64,12 @@ import {
  * rendu à un enfant, c'est un droit REFUSÉ à une école qui paie.
  * `recordSubscription` ferme les deux bouts : il refuse les chevauchements
  * sans regarder le statut, et refuse d'écrire `cancelled` — aucune mutation ne
- * sait aujourd'hui faire passer un contrat existant à « résilié », donc aucune
- * période résiliée n'attend d'être recontractée.
+ * sait aujourd'hui faire passer un contrat existant à « résilié », l'avenant
+ * de sièges d'`amendSeats` compris, qui n'écrit jamais le statut. Aucune
+ * période résiliée n'attend donc d'être recontractée.
  *
  * POUR LE PLAN DE FACTURATION : le jour où la résiliation existera (un `patch`
- * du statut vers `cancelled`), un contrat résilié devra pouvoir être croisé
+ * du STATUT vers `cancelled`), un contrat résilié devra pouvoir être croisé
  * par celui qui le remplace, et CETTE lecture devra alors ignorer les contrats
  * résiliés — sans quoi le défaut décrit ci-dessus se rouvre exactement.
  * `schools.recordSubscription` demandera la même chose de son côté, par un

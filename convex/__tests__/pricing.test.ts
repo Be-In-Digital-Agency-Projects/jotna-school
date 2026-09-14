@@ -2,6 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   quoteSubscription,
   quoteWithScale,
+  quoteSeatAmendment,
+  quoteSeatAmendmentWithScale,
+  remainingPeriodShare,
   PRICING_SCALE,
   type PricingScale,
   type SubscriptionQuote,
@@ -306,5 +309,352 @@ describe("le tarif moyen ne fait pas foi (§7.2)", () => {
     // qu'elle ne se voit plus.
     const quote = quoteSubscription(101);
     expect(quote.pricePerSeatFcfa * quote.seatsBilled).toBe(quote.totalFcfa);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// L'AVENANT DE SIÈGES — faire grossir un contrat en cours, au prorata.
+// ---------------------------------------------------------------------------
+
+/** Une période de contrat ronde : 300 jours, pour que les parts soient lisibles. */
+const DAY_MS = 24 * 60 * 60 * 1000;
+const TERM_START = Date.UTC(2026, 8, 1); // 1er septembre 2026
+const TERM_DAYS = 300;
+const TERM_END = TERM_START + TERM_DAYS * DAY_MS;
+
+/** Le jour `n` du contrat — `n = 0` est son premier instant. */
+function dayOfTerm(n: number): number {
+  return TERM_START + n * DAY_MS;
+}
+
+/** Un contrat de 100 sièges au tarif en vigueur : 500 000 FCFA. */
+const HUNDRED_SEATS = { currentSeats: 100, currentTotalFcfa: 500_000 };
+
+describe("remainingPeriodShare — la part qui reste à courir", () => {
+  it("vaut 1 au premier instant du contrat", () => {
+    expect(remainingPeriodShare(TERM_START, TERM_START, TERM_END)).toBe(1);
+  });
+
+  it("vaut la moitié à la moitié", () => {
+    expect(remainingPeriodShare(dayOfTerm(150), TERM_START, TERM_END)).toBe(0.5);
+  });
+
+  it("vaut 0 au dernier instant, et jamais moins ensuite", () => {
+    expect(remainingPeriodShare(TERM_END, TERM_START, TERM_END)).toBe(0);
+    expect(remainingPeriodShare(dayOfTerm(400), TERM_START, TERM_END)).toBe(0);
+  });
+
+  it("est BORNÉE À 1 avant le début — sans quoi elle surfacturerait", () => {
+    // Un contrat qui n'a pas encore commencé donne `now < startsAt`, donc un
+    // rapport supérieur à 1. Non bornée, l'école paierait plus qu'une année
+    // pleine pour des sièges qu'elle n'a pas commencé à consommer.
+    const early = dayOfTerm(-30);
+    expect((TERM_END - early) / (TERM_END - TERM_START)).toBeGreaterThan(1);
+    expect(remainingPeriodShare(early, TERM_START, TERM_END)).toBe(1);
+  });
+
+  it("ne vaut rien sur une période illisible", () => {
+    expect(remainingPeriodShare(TERM_START, TERM_END, TERM_START)).toBe(0);
+    expect(remainingPeriodShare(TERM_START, TERM_START, TERM_START)).toBe(0);
+    expect(remainingPeriodShare(Number.NaN, TERM_START, TERM_END)).toBe(0);
+    expect(
+      remainingPeriodShare(TERM_START, TERM_START, Number.POSITIVE_INFINITY),
+    ).toBe(0);
+  });
+});
+
+describe("quoteSeatAmendment — le prorata sur le tarif en vigueur", () => {
+  it("facture la moitié d'une année pour vingt sièges ajoutés à mi-parcours", () => {
+    const amendment = quoteSeatAmendment({
+      ...HUNDRED_SEATS,
+      newSeats: 120,
+      now: dayOfTerm(150),
+      startsAt: TERM_START,
+      endsAt: TERM_END,
+    });
+
+    expect(amendment.seatsBilled).toBe(120);
+    expect(amendment.seatsAdded).toBe(20);
+    expect(amendment.fullTermDeltaFcfa).toBe(100_000); // 20 × 5 000
+    expect(amendment.remainingShare).toBe(0.5);
+    expect(amendment.amountFcfa).toBe(50_000);
+    expect(amendment.totalFcfa).toBe(550_000);
+    expect(amendment.pricePerSeatFcfa).toBe(4_583); // 550 000 / 120, arrondi
+  });
+
+  it("ne fait pas payer une année pleine pour un élève ajouté à deux mois de la fin", () => {
+    // Le refus de proratiser, dit en chiffres : cette école paierait cinq fois
+    // le prix de ce qu'elle consomme, et un directeur le trouverait.
+    const amendment = quoteSeatAmendment({
+      ...HUNDRED_SEATS,
+      newSeats: 101,
+      now: dayOfTerm(240),
+      startsAt: TERM_START,
+      endsAt: TERM_END,
+    });
+
+    expect(amendment.remainingShare).toBeCloseTo(0.2, 12);
+    expect(amendment.amountFcfa).toBe(1_000); // 5 000 × 0,2
+    expect(amendment.amountFcfa).toBeLessThan(amendment.fullTermDeltaFcfa);
+  });
+
+  it("facture le PLEIN tarif sur un contrat qui n'a pas encore commencé", () => {
+    // La borne à 1 n'est pas décorative : sans elle, 330 jours restants sur
+    // 300 feraient payer 110 000 FCFA pour 100 000 FCFA de sièges.
+    const amendment = quoteSeatAmendment({
+      ...HUNDRED_SEATS,
+      newSeats: 120,
+      now: dayOfTerm(-30),
+      startsAt: TERM_START,
+      endsAt: TERM_END,
+    });
+
+    expect(amendment.remainingShare).toBe(1);
+    expect(amendment.amountFcfa).toBe(100_000);
+    expect(amendment.amountFcfa).not.toBe(110_000);
+    expect(amendment.totalFcfa).toBe(600_000);
+  });
+
+  it("n'ouvre AUCUN avoir sur un contrat échu", () => {
+    // La borne basse : une part négative retrancherait du total déjà facturé.
+    // `schools.amendSeats` refuse d'amender un contrat échu — ceci est la
+    // seconde ligne.
+    const amendment = quoteSeatAmendment({
+      ...HUNDRED_SEATS,
+      newSeats: 120,
+      now: dayOfTerm(400),
+      startsAt: TERM_START,
+      endsAt: TERM_END,
+    });
+
+    expect(amendment.remainingShare).toBe(0);
+    expect(amendment.amountFcfa).toBe(0);
+    expect(amendment.totalFcfa).toBe(500_000);
+  });
+
+  it("arrondit au franc — le FCFA n'a pas de sous-unité", () => {
+    const amendment = quoteSeatAmendment({
+      ...HUNDRED_SEATS,
+      newSeats: 120,
+      now: dayOfTerm(100), // 200/300 de période restante
+      startsAt: TERM_START,
+      endsAt: TERM_END,
+    });
+
+    expect(amendment.amountFcfa).toBe(66_667); // 100 000 × 2/3
+    expect(Number.isInteger(amendment.amountFcfa)).toBe(true);
+    expect(Number.isInteger(amendment.totalFcfa)).toBe(true);
+    expect(Number.isInteger(amendment.pricePerSeatFcfa)).toBe(true);
+  });
+
+  it("part du total DU CONTRAT, jamais d'un devis recalculé", () => {
+    // Un contrat déjà amendé : 120 sièges mais 550 000 FCFA facturés, pas les
+    // 600 000 d'un devis neuf. Recalculer le total effacerait le prorata
+    // consenti au premier avenant.
+    const amendment = quoteSeatAmendment({
+      currentSeats: 120,
+      currentTotalFcfa: 550_000,
+      newSeats: 140,
+      now: TERM_START,
+      startsAt: TERM_START,
+      endsAt: TERM_END,
+    });
+
+    expect(amendment.amountFcfa).toBe(100_000);
+    expect(amendment.totalFcfa).toBe(650_000);
+    expect(amendment.totalFcfa).not.toBe(quoteSubscription(140).totalFcfa);
+  });
+});
+
+describe("quoteSeatAmendment — un avenant n'enlève jamais rien", () => {
+  const AT_MIDTERM = {
+    now: dayOfTerm(150),
+    startsAt: TERM_START,
+    endsAt: TERM_END,
+  };
+
+  it("ne rend aucun franc et ne retire aucun siège sur une baisse", () => {
+    const amendment = quoteSeatAmendment({
+      ...HUNDRED_SEATS,
+      newSeats: 80,
+      ...AT_MIDTERM,
+    });
+
+    expect(amendment.seatsBilled).toBe(100);
+    expect(amendment.seatsAdded).toBe(0);
+    expect(amendment.amountFcfa).toBe(0);
+    expect(amendment.totalFcfa).toBe(500_000);
+  });
+
+  it("ne facture rien quand rien n'est ajouté", () => {
+    const amendment = quoteSeatAmendment({
+      ...HUNDRED_SEATS,
+      newSeats: 100,
+      ...AT_MIDTERM,
+    });
+
+    expect(amendment.seatsAdded).toBe(0);
+    expect(amendment.amountFcfa).toBe(0);
+  });
+
+  it("laisse le contrat intact sur une demande illisible", () => {
+    // Les mêmes entrées absurdes que le devis initial : une saisie erronée ne
+    // doit ni facturer ni rétrécir un contrat. `amendSeats` les refuse en
+    // amont ; ceci est la seconde ligne.
+    for (const newSeats of [
+      0,
+      -1,
+      -500,
+      12.5,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+    ]) {
+      const amendment = quoteSeatAmendment({
+        ...HUNDRED_SEATS,
+        newSeats,
+        ...AT_MIDTERM,
+      });
+      expect(amendment.seatsBilled).toBe(100);
+      expect(amendment.seatsAdded).toBe(0);
+      expect(amendment.amountFcfa).toBe(0);
+      expect(amendment.totalFcfa).toBe(500_000);
+    }
+  });
+
+  it("ne remonte pas un contrat au plancher sous couvert d'avenant", () => {
+    // Une école au plancher (30 sièges) à qui on demanderait 20 : le plancher
+    // ramènerait la demande à 30, soit exactement ce qu'elle a déjà. Aucun
+    // siège ajouté, aucun franc — et surtout, jamais 20.
+    const amendment = quoteSeatAmendment({
+      currentSeats: PRICING_SCALE.seatFloor,
+      currentTotalFcfa: 150_000,
+      newSeats: 20,
+      ...AT_MIDTERM,
+    });
+
+    expect(amendment.seatsBilled).toBe(PRICING_SCALE.seatFloor);
+    expect(amendment.seatsAdded).toBe(0);
+    expect(amendment.amountFcfa).toBe(0);
+  });
+
+  it("ajoute un siège au-dessus du plancher, et un seul", () => {
+    const amendment = quoteSeatAmendment({
+      currentSeats: PRICING_SCALE.seatFloor,
+      currentTotalFcfa: 150_000,
+      newSeats: PRICING_SCALE.seatFloor + 1,
+      ...AT_MIDTERM,
+    });
+
+    expect(amendment.seatsBilled).toBe(PRICING_SCALE.seatFloor + 1);
+    expect(amendment.seatsAdded).toBe(1);
+    expect(amendment.amountFcfa).toBe(2_500); // 5 000 × 0,5
+  });
+
+  it("ne rétrécit jamais un contrat, quelle que soit la demande", () => {
+    for (let newSeats = -20; newSeats <= 140; newSeats += 1) {
+      const amendment = quoteSeatAmendment({
+        ...HUNDRED_SEATS,
+        newSeats,
+        ...AT_MIDTERM,
+      });
+      expect(amendment.seatsBilled).toBeGreaterThanOrEqual(100);
+      expect(amendment.seatsAdded).toBeGreaterThanOrEqual(0);
+      expect(amendment.amountFcfa).toBeGreaterThanOrEqual(0);
+      expect(amendment.totalFcfa).toBe(500_000 + amendment.amountFcfa);
+    }
+  });
+
+  it("ne facture jamais plus que le delta plein", () => {
+    for (const day of [-30, 0, 1, 75, 150, 299, 300, 400]) {
+      const amendment = quoteSeatAmendment({
+        ...HUNDRED_SEATS,
+        newSeats: 120,
+        now: dayOfTerm(day),
+        startsAt: TERM_START,
+        endsAt: TERM_END,
+      });
+      expect(amendment.amountFcfa).toBeLessThanOrEqual(
+        amendment.fullTermDeltaFcfa,
+      );
+      expect(amendment.amountFcfa).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it("ajouter plus de sièges ne coûte jamais moins (spec §7.2)", () => {
+    let previous = 0;
+    for (let newSeats = 100; newSeats <= 200; newSeats += 1) {
+      const amendment = quoteSeatAmendment({
+        ...HUNDRED_SEATS,
+        newSeats,
+        ...AT_MIDTERM,
+      });
+      expect(amendment.amountFcfa).toBeGreaterThanOrEqual(previous);
+      previous = amendment.amountFcfa;
+    }
+  });
+});
+
+describe("quoteSeatAmendment — deux devis, jamais une multiplication", () => {
+  // Ce que le tarif plat rend invisible et qu'un barème dégressif révèle : le
+  // coût marginal de vingt sièges dépend de la TRANCHE où ils tombent. C'est
+  // la raison pour laquelle le delta passe par `quote` des deux côtés.
+  const MIDTERM = {
+    now: dayOfTerm(150),
+    startsAt: TERM_START,
+    endsAt: TERM_END,
+  };
+
+  it("facture les vingt sièges suivant le 100e au DEUXIÈME palier", () => {
+    const amendment = quoteSeatAmendmentWithScale(
+      {
+        currentSeats: 100,
+        currentTotalFcfa: 300_000,
+        newSeats: 120,
+        ...MIDTERM,
+      },
+      DEGRESSIVE_FIXTURE,
+    );
+
+    expect(amendment.fullTermDeltaFcfa).toBe(20 * 2_400);
+    expect(amendment.fullTermDeltaFcfa).not.toBe(20 * 3_000);
+    expect(amendment.amountFcfa).toBe(24_000);
+    expect(amendment.totalFcfa).toBe(324_000);
+  });
+
+  it("répartit un ajout À CHEVAL sur deux paliers", () => {
+    // 90 → 110 : dix sièges au premier palier, dix au second. Aucun prix
+    // unitaire, quel qu'il soit, ne rend ce montant — seule la différence de
+    // deux devis le fait.
+    const amendment = quoteSeatAmendmentWithScale(
+      {
+        currentSeats: 90,
+        currentTotalFcfa: 270_000,
+        newSeats: 110,
+        ...MIDTERM,
+      },
+      DEGRESSIVE_FIXTURE,
+    );
+
+    expect(amendment.fullTermDeltaFcfa).toBe(10 * 3_000 + 10 * 2_400);
+    expect(amendment.fullTermDeltaFcfa).not.toBe(20 * 3_000);
+    expect(amendment.fullTermDeltaFcfa).not.toBe(20 * 2_400);
+  });
+
+  it("garde la monotonie du §7.2 sur le barème dégressif", () => {
+    let previous = 0;
+    for (let newSeats = 90; newSeats <= 420; newSeats += 1) {
+      const amendment = quoteSeatAmendmentWithScale(
+        {
+          currentSeats: 90,
+          currentTotalFcfa: 270_000,
+          newSeats,
+          ...MIDTERM,
+        },
+        DEGRESSIVE_FIXTURE,
+      );
+      expect(amendment.amountFcfa).toBeGreaterThanOrEqual(previous);
+      previous = amendment.amountFcfa;
+    }
   });
 });

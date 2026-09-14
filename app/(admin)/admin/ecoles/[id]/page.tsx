@@ -6,10 +6,15 @@ import type { FunctionReturnType } from "convex/server";
 import { api } from "@/convex/_generated/api";
 import type { Doc } from "@/convex/_generated/dataModel";
 // Le barème est un module PUR, sans import ni accès à la base : l'écran peut
-// donc montrer le montant AVANT validation sans un aller-retour par serveur.
-// Ce total n'engage rien — `recordSubscription` recalcule le sien, et c'est
-// pourquoi le prix n'est pas un argument de la mutation.
-import { PRICING_SCALE, quoteSubscription } from "@/convex/pricing";
+// donc montrer le montant AVANT validation sans un aller-retour par serveur —
+// celui d'un contrat neuf comme celui d'un avenant, proratisé. Ces totaux
+// n'engagent rien : `recordSubscription` et `amendSeats` recalculent chacun le
+// leur, et c'est pourquoi le prix n'est l'argument d'aucune des deux.
+import {
+  PRICING_SCALE,
+  quoteSeatAmendment,
+  quoteSubscription,
+} from "@/convex/pricing";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -19,6 +24,7 @@ import {
   Plus,
   Receipt,
   School,
+  TrendingUp,
   Users,
   UserMinus,
   UserPlus,
@@ -36,6 +42,11 @@ type ClassStudentRow = FunctionReturnType<
 /** Une ligne du journal d'une inscription — noms déjà résolus par le serveur. */
 type MembershipEventRow = FunctionReturnType<
   typeof api.schools.listMembershipEvents
+>[number];
+
+/** Un avenant du contrat courant — auteur déjà résolu par le serveur. */
+type SeatAmendmentRow = FunctionReturnType<
+  typeof api.schools.listSeatAmendments
 >[number];
 
 /**
@@ -394,19 +405,23 @@ function SubscriptionSection({
   const recordSubscription = useMutation(api.schools.recordSubscription);
 
   const [seats, setSeats] = useState("");
-  // Initialiseurs PARESSEUX : `Date.now()` est impur, et l'appeler dans le
-  // corps du rendu ferait glisser la valeur à chaque re-rendu. Passé en
-  // fonction, il n'est évalué qu'au premier montage — ce que les dates par
-  // défaut demandent, justement : elles sont un point de départ, que
-  // l'administrateur corrige ensuite sans qu'un rendu les lui reprenne.
+  // UN SEUL appel à l'horloge pour toute la section, en initialiseur
+  // PARESSEUX : `Date.now()` est impur, et l'appeler dans le corps du rendu
+  // ferait glisser la valeur à chaque re-rendu. Passé en fonction, il n'est
+  // évalué qu'au premier montage — ce que les dates par défaut demandent,
+  // justement : elles sont un point de départ, que l'administrateur corrige
+  // ensuite sans qu'un rendu les lui reprenne. Cet instant sert aussi de base
+  // au prorata de l'avenant, qui doit rester STABLE tant qu'on saisit : un
+  // montant qui bouge tout seul sous le curseur ne s'engage pas.
   //
-  // `today` sert aussi de point de comparaison : au format « AAAA-MM-JJ »,
-  // l'ordre alphabétique EST l'ordre chronologique, et comparer deux chaînes
-  // évite de rappeler l'horloge au milieu d'un rendu.
-  const [today] = useState(() => toDayInput(Date.now()));
+  // `today` sert de point de comparaison : au format « AAAA-MM-JJ », l'ordre
+  // alphabétique EST l'ordre chronologique, et comparer deux chaînes évite de
+  // rappeler l'horloge au milieu d'un rendu.
+  const [now] = useState(() => Date.now());
+  const today = toDayInput(now);
   const [startsAt, setStartsAt] = useState(today);
   const [endsAt, setEndsAt] = useState(() =>
-    toDayInput(Date.now() + DAYS_IN_YEAR * DAY_MS),
+    toDayInput(now + DAYS_IN_YEAR * DAY_MS),
   );
   // « En attente de paiement » par défaut, et non « actif » : un contrat vient
   // d'être convenu, il n'est pas encaissé. Le défaut le moins coûteux est
@@ -498,9 +513,13 @@ function SubscriptionSection({
                 Du {formatDay(contract.startsAt)} au{" "}
                 {formatDay(contract.endsAt)}
               </p>
+              {/* « pour l'année » serait inexact dès le premier avenant : le
+                  total mêle alors des sièges payés sur toute la période et
+                  d'autres au prorata de ce qu'il en reste. Et la période
+                  elle-même se saisit — rien n'oblige une année. */}
               <p className="mt-1 text-sm text-gray-500">
                 {seatState !== null && `${seatsContractLabel(seatState)} · `}
-                {formatFcfa(contract.totalFcfa)} pour l&apos;année
+                {formatFcfa(contract.totalFcfa)} au total sur la période
               </p>
             </div>
             <span
@@ -512,7 +531,9 @@ function SubscriptionSection({
 
           <p className="mt-2 text-xs text-gray-400">
             Soit {formatFcfa(contract.pricePerSeatFcfa)} par siège en moyenne —
-            valeur d&apos;affichage : c&apos;est le total qui fait foi.
+            valeur d&apos;affichage : c&apos;est le total qui fait foi. Un
+            avenant en fait une moyenne MIXTE : les sièges ajoutés en cours de
+            période n&apos;ont été facturés que pour ce qu&apos;il en restait.
           </p>
 
           {resolved !== null && (
@@ -533,6 +554,23 @@ function SubscriptionSection({
           )}
         </div>
       )}
+
+      {/* L'avenant ne s'offre que sur un contrat qui court encore : la
+          mutation refuse d'agrandir un contrat échu, qui n'ouvrirait aucun
+          accès et réécrirait les sièges d'une année révolue. Proposer un
+          formulaire pour se faire refuser ensuite ferait travailler pour
+          rien — c'est un contrat NEUF qu'il faut, et le formulaire du dessous
+          est déjà là pour ça. */}
+      {contract !== null && seatState !== null && now < contract.endsAt && (
+        <SeatAmendmentForm
+          schoolId={schoolId}
+          contract={contract}
+          seats={seatState}
+          now={now}
+        />
+      )}
+
+      {contract !== null && <SeatAmendmentHistory schoolId={schoolId} />}
 
       {activeBeforeStart && (
         <div className="mb-3 flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
@@ -669,15 +707,274 @@ function SubscriptionSection({
       </form>
 
       <p className="mt-2 text-xs text-gray-400">
-        Un renouvellement s&apos;enregistre comme un contrat NEUF : le contrat
-        ci-dessus n&apos;est jamais modifié, et l&apos;historique reste lisible.
-        Sa période doit commencer à la fin du précédent, ou après — une école
+        Un renouvellement s&apos;enregistre comme un contrat NEUF, dont la
+        période doit commencer à la fin du précédent, ou après — une école
         n&apos;a qu&apos;un contrat en vigueur à la fois, faute de quoi ni son
         accès ni son nombre de sièges ne seraient décidables. Tant que le
         nouveau n&apos;a pas commencé, c&apos;est l&apos;ancien qui décide de
-        l&apos;accès des élèves.
+        l&apos;accès des élèves. Pour agrandir l&apos;école EN COURS de
+        période, c&apos;est l&apos;avenant ci-dessus : il ajoute des sièges au
+        contrat en vigueur sans jamais en déplacer les dates, et chaque ajout
+        reste lisible dans son journal.
       </p>
     </section>
+  );
+}
+
+/**
+ * L'AVENANT — ajouter des sièges au contrat en cours, montant visible AVANT
+ * validation.
+ *
+ * Un administrateur doit voir ce qu&apos;il engage : le montant est proratisé
+ * sur la période qui reste à courir, et il n&apos;y a aucune raison de le lui
+ * apprendre après coup. Il est calculé par le même module PUR que le serveur
+ * (`convex/pricing.ts`), la seule façon que l&apos;écran ne puisse pas
+ * annoncer un prix que la mutation contredira. C&apos;est un aperçu, pas un
+ * engagement : le prix n&apos;est pas un argument d&apos;`amendSeats`, qui
+ * refait le calcul pour son propre compte, sur sa propre horloge — l&apos;écart
+ * de quelques minutes entre les deux ne déplace pas un franc à cette échelle.
+ *
+ * LES SIÈGES VIENNENT DE `seats.purchased`, seul nombre de sièges de la
+ * réponse : `ContractSummary` n&apos;en porte pas, délibérément, pour que deux
+ * nombres de sièges ne finissent pas par diverger dans le même écran.
+ *
+ * Ne s&apos;affiche que sur un contrat qui court encore — voir l&apos;appel.
+ */
+function SeatAmendmentForm({
+  schoolId,
+  contract,
+  seats,
+  now,
+}: {
+  schoolId: Doc<"schools">["_id"];
+  contract: ContractSummary;
+  seats: SeatState;
+  now: number;
+}) {
+  const amendSeats = useMutation(api.schools.amendSeats);
+
+  const [target, setTarget] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+
+  // Les mêmes conditions que la mutation, pour que l'aperçu se taise
+  // exactement là où elle refuserait.
+  const asked = Number(target);
+  const askedSeats = Number.isInteger(asked) && asked > 0 ? asked : null;
+
+  const amendment =
+    askedSeats === null
+      ? null
+      : quoteSeatAmendment({
+          currentSeats: seats.purchased,
+          currentTotalFcfa: contract.totalFcfa,
+          newSeats: askedSeats,
+          now,
+          startsAt: contract.startsAt,
+          endsAt: contract.endsAt,
+        });
+
+  const adds = amendment !== null && amendment.seatsAdded > 0;
+
+  const handleAmend = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (askedSeats === null) {
+      setError("Le nombre de sièges doit être un entier strictement positif");
+      return;
+    }
+    setIsSubmitting(true);
+    setError(null);
+    setDone(null);
+    try {
+      const result = await amendSeats({
+        schoolId,
+        seatsPurchased: askedSeats,
+      });
+      setDone(
+        `${plural(result.seatsAdded, "siège ajouté", "sièges ajoutés")} — ` +
+          `${formatFcfa(result.amountFcfa)} au prorata, soit ` +
+          `${formatFcfa(result.totalFcfa)} au total sur la période.`,
+      );
+      setTarget("");
+    } catch (err) {
+      setError(messageOf(err, "Erreur lors de l'avenant"));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <form
+      onSubmit={handleAmend}
+      className="mb-4 rounded-xl border border-gray-200 bg-white p-4 shadow-sm"
+    >
+      <div className="mb-1 flex items-center gap-2">
+        <TrendingUp className="h-4 w-4 text-gray-400" />
+        <h3 className="text-sm font-semibold text-gray-900">
+          Agrandir ce contrat
+        </h3>
+      </div>
+      <p className="mb-3 text-xs text-gray-500">
+        L&apos;école recrute en cours d&apos;année ? Ajoutez des sièges au
+        contrat en vigueur — ses dates ne bougent pas, et vous ne payez que la
+        période qui reste à courir. Un second contrat sur la même période
+        rendrait l&apos;accès des élèves indécidable : c&apos;est pourquoi il
+        n&apos;y en a qu&apos;un.
+      </p>
+
+      {error && (
+        <div className="mb-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          {error}
+        </div>
+      )}
+
+      {done && (
+        <div className="mb-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+          {done}
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="w-44">
+          <label className="mb-1 block text-sm font-medium text-gray-700">
+            Nouveau total de sièges
+          </label>
+          <input
+            type="number"
+            min={seats.purchased + 1}
+            step={1}
+            value={target}
+            onChange={(e) => setTarget(e.target.value)}
+            required
+            placeholder={`plus de ${seats.purchased}`}
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+          />
+        </div>
+        <button
+          type="submit"
+          disabled={isSubmitting || !adds}
+          className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700 disabled:opacity-50"
+        >
+          {isSubmitting ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Plus className="h-4 w-4" />
+          )}
+          Ajouter les sièges
+        </button>
+      </div>
+
+      <div className="mt-3 border-t border-gray-100 pt-3">
+        {amendment === null ? (
+          <p className="text-xs text-gray-500">
+            Ce contrat ouvre aujourd&apos;hui{" "}
+            {plural(seats.purchased, "siège", "sièges")}. Saisissez le nouveau
+            TOTAL visé — pas le nombre à ajouter — et le montant au prorata
+            s&apos;affichera ici.
+          </p>
+        ) : !adds ? (
+          // Le refus que le serveur opposera, annoncé ici plutôt que subi
+          // après coup — même raison que `SeatsFullNotice` pour l'inscription.
+          <p className="flex gap-2 text-xs text-amber-800">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>
+              L&apos;avenant sera REFUSÉ : ce contrat ouvre déjà{" "}
+              {plural(seats.purchased, "siège", "sièges")}, et un avenant ne
+              fait qu&apos;en AJOUTER. Réduire en cours de période pose la
+              question du remboursement, qui appartient à la facturation :
+              libérez le siège des élèves concernés, ou enregistrez un contrat
+              au nombre voulu à la fin de celui-ci.
+            </span>
+          </p>
+        ) : (
+          <div className="text-sm text-gray-700">
+            <p>
+              <span className="font-semibold text-gray-900">
+                {formatFcfa(amendment.amountFcfa)}
+              </span>{" "}
+              pour {plural(amendment.seatsAdded, "siège ajouté", "sièges ajoutés")}{" "}
+              — {seats.purchased} → {amendment.seatsBilled} sièges.
+            </p>
+            <p className="mt-1 text-xs text-gray-500">
+              Prorata : {Math.round(amendment.remainingShare * 100)} % de la
+              période reste à courir, jusqu&apos;au{" "}
+              {formatDay(contract.endsAt)}. Sur une période entière, ces sièges
+              coûteraient {formatFcfa(amendment.fullTermDeltaFcfa)}.
+            </p>
+            <p className="mt-1 text-xs text-gray-500">
+              Le contrat passera à{" "}
+              <span className="font-medium text-gray-700">
+                {formatFcfa(amendment.totalFcfa)}
+              </span>{" "}
+              au total sur la période.
+            </p>
+            {amendment.seatsBilled !== askedSeats && (
+              <p className="mt-1 text-xs text-amber-800">
+                Plancher de facturation :{" "}
+                {plural(PRICING_SCALE.seatFloor, "siège", "sièges")} au minimum.
+                Ce contrat ouvrira {amendment.seatsBilled} sièges.
+              </p>
+            )}
+            <p className="mt-1 text-xs text-gray-400">
+              Montant calculé, non facturé : cet écran n&apos;encaisse rien et
+              ne produit aucune tranche. Les dates et le statut du contrat ne
+              changent pas.
+            </p>
+          </div>
+        )}
+      </div>
+    </form>
+  );
+}
+
+/**
+ * Le journal des avenants du contrat en cours.
+ *
+ * Un avenant MODIFIE la ligne du contrat : `seatsPurchased` et `totalFcfa` y
+ * sont écrasés. Sans ce journal, plus rien ne dirait ce qui avait été signé,
+ * ni qui a engagé l&apos;école pour ce montant — c&apos;est la même raison qui
+ * fait exister le journal d&apos;inscription d&apos;un élève.
+ *
+ * Rien à afficher, rien d&apos;affiché : une école sans avenant ne porte pas
+ * un encart vide. Les noms sont déjà résolus par le serveur.
+ */
+function SeatAmendmentHistory({
+  schoolId,
+}: {
+  schoolId: Doc<"schools">["_id"];
+}) {
+  const amendments = useQuery(api.schools.listSeatAmendments, { schoolId });
+  if (amendments === undefined || amendments.length === 0) return null;
+
+  return (
+    <div className="mb-4 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+      <div className="mb-2 flex items-center gap-2">
+        <History className="h-4 w-4 text-gray-400" />
+        <h3 className="text-sm font-semibold text-gray-900">
+          Avenants de ce contrat
+        </h3>
+      </div>
+      <ul className="space-y-1.5">
+        {amendments.map((row: SeatAmendmentRow) => (
+          <li key={row._id} className="flex flex-wrap items-baseline gap-x-2 text-xs">
+            <span className="font-medium text-gray-900">
+              {row.seatsBefore} → {row.seatsAfter} sièges
+            </span>
+            <span className="text-gray-700">
+              + {formatFcfa(row.amountFcfa)}
+            </span>
+            <span className="text-gray-400">
+              {formatEventMoment(row.at)} · {row.actorName}
+            </span>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-2 text-xs text-gray-400">
+        Les dates du contrat n&apos;ont pas bougé : un avenant n&apos;ajoute que
+        des sièges, et le montant au prorata de ce qu&apos;il restait à courir.
+      </p>
+    </div>
   );
 }
 

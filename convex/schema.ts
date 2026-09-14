@@ -664,6 +664,49 @@ export default defineSchema({
     .index("by_status", ["status"])
     .index("by_endsAt", ["endsAt"]),
 
+  // Journal des AVENANTS de sièges — qui a agrandi quel contrat, de combien,
+  // et pour quel montant.
+  //
+  // POURQUOI IL EXISTE. `schools.amendSeats` est la seule écriture du dépôt qui
+  // MODIFIE une ligne `subscriptions` : elle augmente `seatsPurchased` et
+  // `totalFcfa` d'un contrat en cours. Un `patch` écrase — sans ce journal,
+  // plus rien ne dirait ce qui avait été signé, ni ce que l'école doit
+  // vraiment payer en plus de son contrat d'origine. Le contrat lui-même ne
+  // porte plus que l'état COURANT ; l'histoire vit ici.
+  //
+  // Mêmes principes que `schoolMembershipEvents`, et pour la même raison — un
+  // acte qui engage de l'argent et ouvre des accès ne doit pas être anonyme :
+  //   - `actorProfileId` est COPIÉ et jamais relu pour autoriser quoi que ce
+  //     soit. C'est une trace, pas un droit ;
+  //   - `at` date l'ACTE — le `Date.now()` exact que la mutation utilise aussi
+  //     pour calculer le prorata — et non l'insertion de la ligne, que
+  //     `_creationTime` porte déjà ;
+  //   - le journal OBSERVE, il ne décide pas : aucune ligne d'ici n'entre dans
+  //     `accessRules.decideAccess`, ni dans le plafond de sièges, ni dans la
+  //     sélection du contrat courant. Les effacer toutes ne changerait rien à
+  //     l'accès d'un seul enfant — seulement à ce qu'on peut expliquer.
+  //
+  // `seatsBefore` et `amountFcfa` suffisent à remonter la chaîne : les sièges
+  // d'origine sont le `seatsBefore` du premier avenant, et le total d'origine
+  // le `totalFcfa` courant moins la somme des montants.
+  //
+  // Insertions seules : aucune fonction du dépôt ne modifie ni ne supprime une
+  // ligne de cette table.
+  subscriptionAmendments: defineTable({
+    subscriptionId: v.id("subscriptions"),
+    // Redondant avec le contrat, et délibérément : il ouvre « qu'est-il arrivé
+    // au contrat de CETTE école » sans passer par la ligne d'abonnement, y
+    // compris quand elle a été renouvelée depuis.
+    schoolId: v.id("schools"),
+    seatsBefore: v.number(),
+    seatsAfter: v.number(),
+    // Ce qui a été AJOUTÉ au total du contrat, au prorata de la période
+    // restante (`pricing.quoteSeatAmendment`) — jamais le total du contrat.
+    amountFcfa: v.number(),
+    actorProfileId: v.id("profiles"),
+    at: v.number(),
+  }).index("by_subscription", ["subscriptionId"]),
+
   installments: defineTable({
     subscriptionId: v.id("subscriptions"),
     index: v.number(), // 1..3

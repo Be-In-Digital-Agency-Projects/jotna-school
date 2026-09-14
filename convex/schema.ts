@@ -26,6 +26,12 @@ const aiPurposeEnum = v.union(
   v.literal("verify_short_answer"),
   v.literal("explain_mistake"),
   v.literal("verify_math"),
+  // `pdf_extract` ne passe pas par `aiGateway.generate` (API Responses +
+  // fichier base64, forme que la passerelle ne connaît pas) mais dépense —
+  // en `gpt-4o`, le poste le plus cher. Il doit donc exister ici pour être
+  // compté. Ajout purement additif : élargir une union ne rend invalide
+  // aucun document déjà écrit.
+  v.literal("pdf_extract"),
 );
 
 export default defineSchema({
@@ -369,6 +375,39 @@ export default defineSchema({
     .index("by_month_status", ["month", "status"])
     .index("by_user_month", ["userId", "month"])
     .index("by_traceId", ["traceId"]),
+
+  // ---------------------------------------------------------------------------
+  // aiSpendShards
+  // Agrégat courant de la dépense du mois, fragmenté en
+  // `SPEND_SHARD_COUNT` documents (aiGateway/spendShards.ts).
+  //
+  // Écrit dans la même mutation que la ligne `aiUsage` (recordUsage), donc la
+  // ligne et l'agrégat ne peuvent pas diverger. Lu en temps constant par le
+  // contrôle de budget et par l'écran admin : additionner `aiUsage` à la volée
+  // coûterait de plus en plus cher au fil du mois, et le borner rendait la
+  // somme fausse — c'est le défaut que cette table répare.
+  //
+  // L'index porte (month, shard) : une écriture lit un point de l'index, donc
+  // deux écritures visant des fragments différents ne se conflictent pas, et
+  // il existe au plus une ligne par couple. Comme `shard` est borné par
+  // construction, un mois a au plus `SPEND_SHARD_COUNT` lignes.
+  // ---------------------------------------------------------------------------
+  aiSpendShards: defineTable({
+    month: v.string(), // YYYY-MM
+    shard: v.number(), // 0 .. SPEND_SHARD_COUNT-1
+    costUsd: v.number(),
+    calls: v.number(),
+    failed: v.number(),
+    rejectedBudget: v.number(),
+    rejectedQuota: v.number(),
+    rejectedAccess: v.number(),
+    // Ventilation par usage. Borné : les clés sont l'enum ci-dessus.
+    byPurpose: v.record(
+      v.string(),
+      v.object({ calls: v.number(), cost: v.number() }),
+    ),
+    updatedAt: v.number(),
+  }).index("by_month_shard", ["month", "shard"]),
 
   // ---------------------------------------------------------------------------
   // aiUserQuota

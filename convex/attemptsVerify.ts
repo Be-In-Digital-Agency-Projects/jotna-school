@@ -3,11 +3,21 @@
 import { v, ConvexError } from "convex/values";
 import { action } from "./_generated/server";
 import { internal } from "./_generated/api";
-import OpenAI from "openai";
 import { getAuthUserId } from "@convex-dev/auth/server";
 
+/** Verdict de l'IA, tel qu'on accepte de le lire. */
+function readVerdict(raw: unknown): { correct: boolean; reason: string } {
+  if (typeof raw !== "object" || raw === null) {
+    return { correct: false, reason: "Réponse IA non parsable" };
+  }
+  const correct = "correct" in raw && raw.correct === true;
+  const rawReason = "reason" in raw ? raw.reason : undefined;
+  return { correct, reason: typeof rawReason === "string" ? rawReason : "" };
+}
+
 /**
- * Public action: semantically verify a short-answer submission using GPT-4o-mini.
+ * Public action: semantically verify a short-answer submission using the AI
+ * gateway (`verify_short_answer`).
  *
  * Called by the client after a literal check has failed on a short-answer
  * exercise. The AI receives the exercise prompt, the accepted answers and the
@@ -17,6 +27,29 @@ import { getAuthUserId } from "@convex-dev/auth/server";
  * If the AI decides the answer is correct, we flip the attempt's isCorrect
  * flag to true and bump the student's progress counters — so the student
  * advances exactly as if they had typed the literal answer.
+ *
+ * ## Pourquoi passer par la passerelle
+ *
+ * Cette action appelait OpenAI en direct : elle échappait donc au plafond de
+ * dépense ET à sa mesure, alors qu'elle tourne à chaque réponse libre fausse —
+ * c'est le chemin le plus fréquent du produit, pas un cas marginal.
+ *
+ * ## Ce que ça risque, et pourquoi c'est tenable
+ *
+ * Passer par la passerelle soumet la vérification au plafond : le jour où le
+ * budget est atteint, l'IA peut refuser. Ce n'est pas laisser l'enfant sans
+ * réponse, parce qu'un repli déterministe a DÉJÀ tranché avant qu'on arrive
+ * ici : `attempts.submit` compare la réponse aux `acceptedAnswers`
+ * (`verifyShortAnswer`, comparaison exacte insensible à la casse et aux
+ * espaces) et a déjà écrit son verdict dans la tentative. L'IA n'est qu'un
+ * second avis, qui peut faire PASSER une réponse jugée fausse mais jamais
+ * l'inverse. Un refus budgétaire laisse donc le verdict littéral en place —
+ * exactement ce qui se passe déjà aujourd'hui quand l'appel OpenAI échoue,
+ * cas explicitement assumé côté client (`ExercisePlayer.handleSubmit`).
+ *
+ * Et le refus est rare : l'usage `verify_short_answer` n'est ni « kid
+ * initiated » ni génératif au sens de `budget.ts`, donc seul le palier
+ * `hard_reject` (>= 110 % du budget) le bloque.
  */
 export const verifyShortAnswerWithAI = action({
   args: {
@@ -73,8 +106,6 @@ export const verifyShortAnswerWithAI = action({
       return { isCorrect: false, reason: "Type d'exercice non supporté" };
     }
 
-    const openai = new OpenAI();
-
     const prompt = `Tu aides à corriger un exercice à réponse courte pour un élève de CE2-CM2 (francophone, Sénégal).
 
 Énoncé de l'exercice : ${data.exercise.prompt}
@@ -99,32 +130,37 @@ Sois BIENVEILLANT mais rigoureux :
 Réponds strictement par un JSON de cette forme exacte :
 {"correct": true/false, "reason": "explication en 1 phrase"}`;
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      store: false,
-      response_format: { type: "json_object" },
-      messages: [
-        {
-          role: "system",
-          content:
-            "Tu es un correcteur pédagogique bienveillant pour des élèves de primaire.",
-        },
-        { role: "user", content: prompt },
-      ],
-      max_tokens: 200,
-      temperature: 0.2,
+    // Pas de `quotaScope` : la vérification ne doit pas consommer le quota
+    // quotidien « J'en veux encore » de l'élève, qui borne une envie, pas une
+    // correction. L'appel est donc de portée « system » (défaut).
+    const gen: {
+      ok: boolean;
+      result?: unknown;
+      traceId: string;
+      reason?: string;
+    } = await ctx.runAction(internal.aiGateway.index.generate, {
+      purpose: "verify_short_answer",
+      prompt,
+      systemPrompt:
+        "Tu es un correcteur pédagogique bienveillant pour des élèves de primaire.",
+      expectJson: true,
+      userId: callerProfile._id,
+      metadata: { attemptId, kind: "verify_short_answer" },
     });
 
-    const raw = completion.choices[0]?.message?.content?.trim() ?? "{}";
-    let verdict: { correct?: boolean; reason?: string };
-    try {
-      verdict = JSON.parse(raw);
-    } catch {
-      verdict = { correct: false, reason: "Réponse IA non parsable" };
+    if (!gen.ok) {
+      // Repli déterministe : le verdict littéral d'`attempts.submit` fait foi.
+      // On ne lève pas — le client sait lire `isCorrect: false` et garde le
+      // sien. L'enfant n'est jamais laissé sans réponse.
+      return {
+        isCorrect: false,
+        reason: "Vérification approfondie indisponible pour le moment",
+      };
     }
 
-    const isCorrect = verdict.correct === true;
-    const reason = verdict.reason ?? "";
+    const verdict = readVerdict(gen.result);
+    const isCorrect = verdict.correct;
+    const reason = verdict.reason;
 
     if (isCorrect) {
       await ctx.runMutation(internal.attempts.markAttemptCorrectByAI, {

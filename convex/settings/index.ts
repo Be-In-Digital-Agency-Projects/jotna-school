@@ -15,6 +15,8 @@ import { mutation, query } from "../_generated/server";
 import type { DatabaseReader } from "../_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { Doc } from "../_generated/dataModel";
+import { readMonthSpend } from "../aiGateway/db";
+import { monthKey } from "../aiGateway/spendShards";
 
 const SINGLETON = "settings" as const;
 
@@ -104,6 +106,15 @@ export const updateSettings = mutation({
   },
 });
 
+/**
+ * Consommation IA du mois pour l'écran /admin/ai-settings.
+ *
+ * Lit le MÊME agrégat que le contrôle de budget (`aiGateway/db.ts`). C'est le
+ * point : cet écran balayait auparavant `aiUsage` avec un `.take(1000)`,
+ * exactement comme le garde-fou, et affichait donc le même chiffre faux —
+ * l'écran qui aurait permis de s'apercevoir que le plafond ne mordait plus
+ * mentait de la même manière. Un seul chiffre, une seule source.
+ */
 export const getMonthSpendSummary = query({
   args: { month: v.optional(v.string()) },
   handler: async (ctx, args) => {
@@ -112,42 +123,17 @@ export const getMonthSpendSummary = query({
     const admin = await loadAdminProfile(ctx, userId as string);
     if (!admin) return null;
 
-    const month =
-      args.month ??
-      (() => {
-        const d = new Date();
-        return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-      })();
+    const month = args.month ?? monthKey();
+    const totals = await readMonthSpend(ctx.db, month);
 
-    const rows = await ctx.db
-      .query("aiUsage")
-      .withIndex("by_month", (q) => q.eq("month", month))
-      .take(1000);
-
-    let total = 0;
-    let calls = 0;
-    let failed = 0;
-    let rejectedBudget = 0;
-    let rejectedQuota = 0;
-    const byPurpose: Record<string, { calls: number; cost: number }> = {};
-    for (const r of rows) {
-      calls++;
-      if (r.status === "ok") total += r.costUsd;
-      if (r.status === "failed") failed++;
-      if (r.status === "rejected_budget") rejectedBudget++;
-      if (r.status === "rejected_quota") rejectedQuota++;
-      if (!byPurpose[r.purpose]) byPurpose[r.purpose] = { calls: 0, cost: 0 };
-      byPurpose[r.purpose].calls++;
-      byPurpose[r.purpose].cost += r.costUsd;
-    }
     return {
       month,
-      total,
-      calls,
-      failed,
-      rejectedBudget,
-      rejectedQuota,
-      byPurpose,
+      total: totals.costUsd,
+      calls: totals.calls,
+      failed: totals.failed,
+      rejectedBudget: totals.rejectedBudget,
+      rejectedQuota: totals.rejectedQuota,
+      byPurpose: totals.byPurpose,
     };
   },
 });
@@ -160,10 +146,7 @@ export const listRecentIncidents = query({
     const admin = await loadAdminProfile(ctx, userId as string);
     if (!admin) return [];
     const limit = args.limit ?? 10;
-    const month = (() => {
-      const d = new Date();
-      return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-    })();
+    const month = monthKey();
     const rows = await ctx.db
       .query("aiUsage")
       .withIndex("by_month_status", (q) =>

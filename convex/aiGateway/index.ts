@@ -5,8 +5,8 @@ import OpenAI from "openai";
 import { internalAction } from "../_generated/server";
 import { internal } from "../_generated/api";
 import {
-  type AiPurpose,
   ALL_PURPOSES,
+  approximateTokenCount,
   estimateCostUsd,
   getPurposeConfig,
   resolveModel,
@@ -59,7 +59,12 @@ export const generate = internalAction({
   },
   handler: async (ctx, args): Promise<GenerateResult> => {
     const traceId = `tr_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const purpose = args.purpose as AiPurpose;
+    // Pas de conversion : `purposeValidator` ne liste que les usages que la
+    // passerelle sait servir, et c'est un sous-ensemble d'`AiPurpose`.
+    // `pdf_extract` en est volontairement absent — la passerelle ne sait pas
+    // faire son appel (API Responses + fichier), il ne doit donc pas pouvoir
+    // entrer ici.
+    const purpose = args.purpose;
     const cfg = getPurposeConfig(purpose);
     const month = currentMonthKey();
     const dKey = dayKey();
@@ -227,6 +232,20 @@ export const generate = internalAction({
     let attempts = 0;
     const maxAttempts = cfg.retries + 1;
 
+    // Jetons qu'OpenAI a réellement facturés sur CET appel, toutes tentatives
+    // confondues.
+    //
+    // Une tentative peut recevoir une réponse — donc être facturée — puis être
+    // rejetée juste après par la validation locale (`JSON.parse` sur
+    // `expectJson`). Le coût était alors perdu : il était calculé dans le
+    // `try`, hors de portée du `catch`, et le chemin d'échec enregistrait
+    // `costUsd: 0`. Une dépense réelle devenait invisible au plafond, sur le
+    // poste le plus cher du produit (`palier_base` plafonne à 6000 jetons de
+    // sortie). On accumule donc hors de la boucle, comme `t0` pour la latence,
+    // et les deux sorties — succès comme échec — enregistrent ce total.
+    let billedInputTokens = 0;
+    let billedOutputTokens = 0;
+
     while (attempts < maxAttempts) {
       attempts++;
       try {
@@ -250,9 +269,22 @@ export const generate = internalAction({
 
         const latencyMs = Date.now() - t0;
         const text = completion.choices[0]?.message?.content ?? "";
-        const inputTokens = completion.usage?.prompt_tokens ?? 0;
-        const outputTokens = completion.usage?.completion_tokens ?? 0;
-        const costUsd = estimateCostUsd(purpose, inputTokens, outputTokens);
+
+        // Comptabiliser AVANT toute validation : à partir d'ici, la réponse
+        // est reçue et facturée, quoi qu'on en fasse ensuite. `usage` est
+        // déclaré optionnel par le SDK ; s'il manque, on estime plutôt que
+        // d'écrire zéro — une estimation haute borne la dépense, un zéro faux
+        // la rend invisible.
+        billedInputTokens +=
+          completion.usage?.prompt_tokens ??
+          approximateTokenCount(`${args.systemPrompt ?? ""}${args.prompt}`);
+        billedOutputTokens +=
+          completion.usage?.completion_tokens ?? approximateTokenCount(text);
+        const costUsd = estimateCostUsd(
+          purpose,
+          billedInputTokens,
+          billedOutputTokens,
+        );
 
         let parsed: unknown = text;
         if (args.expectJson) {
@@ -269,8 +301,8 @@ export const generate = internalAction({
           userId: args.userId,
           purpose,
           modelUsed: resolved.model,
-          inputTokens,
-          outputTokens,
+          inputTokens: billedInputTokens,
+          outputTokens: billedOutputTokens,
           costUsd,
           latencyMs,
           status: "ok",
@@ -309,13 +341,18 @@ export const generate = internalAction({
     const latencyMs = Date.now() - t0;
     const errorMessage =
       lastError instanceof Error ? lastError.message : String(lastError);
+    // Le statut reste `failed` — l'appelant n'a rien reçu d'exploitable — mais
+    // le coût est celui qu'OpenAI facture : zéro si aucune tentative n'a reçu
+    // de réponse (clé refusée, réseau coupé), la dépense réelle si une réponse
+    // est arrivée avant d'être rejetée. L'agrégat compte `costUsd` quel que
+    // soit le statut, précisément pour que cette dépense-là morde aussi.
     await ctx.runMutation(internal.aiGateway.db.recordUsage, {
       userId: args.userId,
       purpose,
       modelUsed: resolved.model,
-      inputTokens: 0,
-      outputTokens: 0,
-      costUsd: 0,
+      inputTokens: billedInputTokens,
+      outputTokens: billedOutputTokens,
+      costUsd: estimateCostUsd(purpose, billedInputTokens, billedOutputTokens),
       latencyMs,
       status: "failed",
       traceId,

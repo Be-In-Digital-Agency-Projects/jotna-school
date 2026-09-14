@@ -14,7 +14,8 @@ export type AiPurpose =
   | "palier_personalized"
   | "verify_short_answer"
   | "explain_mistake"
-  | "verify_math";
+  | "verify_math"
+  | "pdf_extract";
 
 export interface PurposeConfig {
   /** Default model id (when no override + no economy downgrade applies). */
@@ -36,6 +37,13 @@ export interface PurposeConfig {
 const GPT_4O_MINI: Pick<PurposeConfig, "costPer1MInputUsd" | "costPer1MOutputUsd"> = {
   costPer1MInputUsd: 0.15,
   costPer1MOutputUsd: 0.6,
+};
+
+// gpt-4o list price (Sept 2025): $2.50 / 1M input, $10.00 / 1M output — soit
+// ~16x le mini. Seule l'extraction PDF l'utilise.
+const GPT_4O: Pick<PurposeConfig, "costPer1MInputUsd" | "costPer1MOutputUsd"> = {
+  costPer1MInputUsd: 2.5,
+  costPer1MOutputUsd: 10,
 };
 
 const REGISTRY: Record<AiPurpose, PurposeConfig> = {
@@ -79,6 +87,29 @@ const REGISTRY: Record<AiPurpose, PurposeConfig> = {
     retries: 1,
     ...GPT_4O_MINI,
   },
+  // Extraction d'exercices depuis un PDF (convex/pdfUploadsExtract.ts).
+  //
+  // Ce poste ne passe PAS par `generate` : il appelle l'API Responses avec un
+  // fichier en base64 et une sortie structurée, forme que la passerelle ne
+  // connaît pas. Il est ici pour deux raisons seulement : donner à
+  // `estimateCostUsd` le tarif `gpt-4o`, et servir de source unique pour
+  // l'identifiant du modèle, afin que le prix et l'appel ne puissent pas
+  // diverger. Les autres champs décrivent l'appel réel mais ne sont pas
+  // consommés aujourd'hui.
+  //
+  // Pour le router vraiment, il faudrait que `generate` accepte un mode
+  // « fichier » (entrée `input_file` + `text.format.json_schema` de l'API
+  // Responses) en plus de son mode chat, et que `resolveModel` soit contraint
+  // aux modèles qui supportent les sorties structurées — sans quoi un
+  // `modelOverrides` administrateur casserait l'extraction en silence.
+  pdf_extract: {
+    defaultModel: "gpt-4o",
+    maxOutputTokens: 16_000,
+    temperature: 0.2,
+    requestTimeoutMs: 180_000,
+    retries: 0,
+    ...GPT_4O,
+  },
 };
 
 export function getPurposeConfig(purpose: AiPurpose): PurposeConfig {
@@ -113,6 +144,21 @@ export function estimateCostUsd(
     (inputTokens / 1_000_000) * cfg.costPer1MInputUsd +
     (outputTokens / 1_000_000) * cfg.costPer1MOutputUsd
   );
+}
+
+/**
+ * Estimation grossière du nombre de jetons d'un texte, ~4 caractères par
+ * jeton (ordre de grandeur usuel des tokenizers OpenAI sur du français).
+ *
+ * Sert uniquement de filet quand OpenAI a répondu — donc facturé — mais que
+ * le bloc `usage` manque : le type SDK le déclare optionnel. Pour un
+ * garde-fou de dépense, une estimation haute vaut mieux qu'un zéro faux, qui
+ * rendrait la dépense invisible au plafond. Jamais utilisée quand `usage` est
+ * présent.
+ */
+export function approximateTokenCount(text: string): number {
+  if (text.length === 0) return 0;
+  return Math.ceil(text.length / 4);
 }
 
 export const ALL_PURPOSES: AiPurpose[] = Object.keys(REGISTRY) as AiPurpose[];

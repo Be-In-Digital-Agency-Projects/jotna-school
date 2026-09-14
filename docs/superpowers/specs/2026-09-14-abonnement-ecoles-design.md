@@ -354,6 +354,16 @@ Seul le chemin d'apprentissage élève est protégé.
 
 ### 5.7 Surface à instrumenter — 34 fonctions
 
+> **Correction (revue finale de branche).** Cette liste est **incomplète** :
+> `convex/exercises.ts` en fait partie et n'y figurait pas. Ses quatre lectures
+> (`listByTopic`, `listAllDrafts`, `listAllPublished`, `getById`) rendaient le
+> document brut — corrigé, indices et bonne réponse compris — sans aucune
+> authentification, alors que les exercices de palier générés par l'IA y sont
+> insérés en `status: "published"`. Elles portent désormais un garde de rôle
+> (professeur ou admin) ; c'est un contrôle de rôle et non de paywall, un élève
+> payant n'ayant pas davantage à lire les corrigés. Le chemin élève légitime
+> reste `paliers/index.ts` et son `stripAnswerFromExercise`.
+
 | Fichier | Fonctions | n |
 |---|---|---|
 | `paliers/index.ts` | `getExercisesForPalier`, `getBucket`, `regenerateFailedExercises`, `startPalierAttempt` | 4 |
@@ -660,6 +670,35 @@ directeur. L'accès ne se ferme qu'au-delà.
 
 Une comptabilité d'école est lente, pas malveillante. Couper des enfants parce
 qu'un intendant est en retard est cruel et commercialement suicidaire.
+
+> **Trou de spec relevé par la revue finale de branche — à trancher.**
+> Cette section ancre la grâce sur le `dueAt` de la tranche échue la plus
+> ancienne, mais ne dit pas ce qu'il advient d'un abonnement `past_due` pour
+> lequel **aucune tranche échue n'est identifiable**. L'implémentation
+> (`convex/accessRules.ts`) accorde alors l'accès **sans limite de temps** :
+> c'est la seule branche de `decideAccess` qui échoue en ouvert, toutes les
+> autres échouant en fermé, et un test verrouille ce comportement.
+>
+> Ce n'est pas théorique pendant le plan 1/3 : les abonnements y sont insérés
+> à la main **sans aucune ligne `installments`**, et le cron qui bascule les
+> tranches en `overdue` n'arrive qu'au plan 3/3. Un `past_due` posé aujourd'hui
+> donne donc un accès illimité. « Pas d'ancre » ne devrait pas valoir
+> « grâce infinie ».
+>
+> Deux issues possibles, à arbitrer avec le client : refuser l'accès faute
+> d'ancre (cohérent avec le reste, mais coupe une école dont les données de
+> tranches seraient incomplètes), ou ancrer la grâce sur un champ de
+> l'abonnement lui-même — `startsAt`, ou un `pastDueSince` à ajouter.
+
+### 8.5 bis Message adulte — promesse non tenue par le plan 1/3
+
+§5.8 promet à un adulte la vraie raison du refus, là où l'enfant ne voit qu'un
+message encourageant. `lib/accessCopy.ts` fournit bien `accessMessageForAdult`,
+couvrant les neuf raisons — mais **aucun écran ne l'appelle** :
+`components/AccessGate.tsx` affiche le message enfant à tout le monde, y compris
+à un parent connecté et à un visiteur déconnecté qui ouvrirait une route élève.
+Le plan 1/3 n'a commandé que l'écran enfant. À reprendre au plan 2/3, en même
+temps que les gardes de rôle côté layouts.
 
 ### 8.6 Cron
 

@@ -1386,7 +1386,7 @@ subjects, topics et badges servant aussi l'administration et les
 professeurs, le contrôle n'y bloque que les élèves — sinon la tâche
 casserait l'espace admin.
 
-Avec les tâches 5 et 6, les 33 fonctions de la section 5.7 de la spec sont
+Avec les tâches 5 et 6, les 34 fonctions de la section 5.7 de la spec sont
 couvertes."
 ```
 
@@ -1717,7 +1717,12 @@ identifiant d'utilisateur en argument pour autoriser."
 pnpm tsc --noEmit && pnpm test --run && pnpm build && pnpm lint
 ```
 
-- [ ] **Les 33 fonctions de la spec §5.7 sont couvertes**
+- [ ] **Les 34 fonctions de la spec §5.7 sont couvertes**
+
+> **Correction.** Le plan disait « 33 » là où la spec en liste 34 : il
+> n'assignait `attemptsVerify.verifyShortAnswerWithAI` à aucune tâche. La
+> fonction a bien été verrouillée (tâche 6), et la revue finale a recompté les
+> 34 une par une sur les 12 fichiers concernés.
 
 ```bash
 grep -c "checkAccess\|requireAccess\|blockedStudent\|getAccessStateForProfile" \
@@ -1743,11 +1748,33 @@ Attendu : une seule correspondance, dans `app/(student)/layout.tsx`. Aucune dans
 `app/(parent)/`, `app/(teacher)/` ni `app/(admin)/`.
 
 ```bash
-grep -rn "checkAccess\|requireAccess" convex/reports.ts convex/linkRequests.ts convex/exercises.ts convex/pdfUploads.ts
+grep -rn "checkAccess\|requireAccess" convex/reports.ts convex/linkRequests.ts convex/pdfUploads.ts
 ```
 
 Attendu : aucune correspondance. Ces fichiers servent les parents, les
 professeurs et l'administration, que la spec laisse passer.
+
+> **Correction (revue finale de branche).** `convex/exercises.ts` figurait dans
+> cette liste, présenté comme un chemin adulte. C'était **faux**, et cette
+> ligne du plan rendait le défaut introuvable pour qui suivait le plan :
+> `listByTopic`, `listAllDrafts`, `listAllPublished` et `getById` n'avaient
+> aucune authentification et rendaient le document `exercises` brut —
+> `answerKey`, `hints` complets, `payload` avec la bonne réponse. Or les
+> exercices de palier générés par l'IA y sont insérés en `status: "published"`,
+> donc `listAllPublished` appelée **sans session** rendait jusqu'à 1000
+> exercices payants avec leurs corrigés. Le paywall et l'anti-triche tombaient
+> par la même porte.
+>
+> Ces quatre lectures portent désormais un garde de **rôle** (professeur ou
+> admin), pas un garde de paywall : un élève, payant ou non, ne doit pas lire
+> les corrigés. Vérification à lancer à la place :
+
+```bash
+grep -n "callerIsStaff" convex/exercises.ts
+```
+
+Attendu : cinq correspondances — la définition du garde et son appel en tête
+des quatre lectures.
 
 - [ ] **Le verrou de dépense est en place**
 

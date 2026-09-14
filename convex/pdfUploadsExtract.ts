@@ -206,8 +206,25 @@ Si le document ne contient pas d'exercices identifiables, crée des exercices pe
       // donc facturée, quoi qu'on en fasse ensuite. Même raisonnement que dans
       // `aiGateway/index.ts` — un `JSON.parse` qui échoue n'annule pas la
       // facture d'OpenAI.
+      //
+      // Si `usage` manque — le SDK le déclare optionnel — écrire zéro rendrait
+      // invisible au plafond la dépense la plus chère du dépôt. On BORNE au
+      // lieu d'estimer :
+      //
+      //   - la sortie ne peut pas dépasser `maxOutputTokens`, c'est donc un
+      //     vrai majorant (~0,16 $ à ce tarif) ;
+      //   - l'entrée n'est pas estimée. La longueur d'un PDF en base64 n'est
+      //     pas un nombre de jetons, et l'extrapoler donnerait des centaines de
+      //     milliers de jetons fictifs qui feraient sauter le plafond à tort.
+      //     Un faux positif couperait l'IA de tous les élèves ; c'est pire que
+      //     de sous-compter un import rare.
+      //
+      // Le repli est donc un minorant, mais un minorant NON NUL et borné : la
+      // dépense cesse d'être invisible sans jamais pouvoir couper à tort. La
+      // passerelle, elle, peut estimer ses deux côtés (`approximateTokenCount`)
+      // parce que son entrée est du texte.
       const inputTokens = completion.usage?.input_tokens ?? 0;
-      const outputTokens = completion.usage?.output_tokens ?? 0;
+      const outputTokens = completion.usage?.output_tokens ?? cfg.maxOutputTokens;
       await ctx.runMutation(internal.aiGateway.db.recordUsage, {
         purpose: "pdf_extract",
         modelUsed: cfg.defaultModel,

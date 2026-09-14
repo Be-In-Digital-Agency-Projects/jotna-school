@@ -574,29 +574,56 @@ user identity server-side. »*
 
 ## 7. Tarification
 
-### 7.1 Grille
+### 7.1 Grille — **5 000 FCFA par élève et par année scolaire**
 
-| Tranche | Prix / siège / an |
-|---|---|
-| 1 – 100 sièges | 3 000 FCFA |
-| 101 – 300 sièges | 2 400 FCFA |
-| 301 sièges et plus | 1 800 FCFA |
+Tarif **plat**, tranché par le propriétaire du projet, et provisoire de son
+propre aveu (« pour le moment »). Aucune remise au volume : la 500e école paie
+le même prix par élève que la première.
 
-**Plancher : 50 sièges facturés minimum** (150 000 FCFA/an). Une école de 12
+| Effectif | Total / an | Effectif / siège |
+|---|---|---|
+| 80 élèves | 400 000 FCFA | 5 000 |
+| 250 élèves | 1 250 000 FCFA | 5 000 |
+| 500 élèves | 2 500 000 FCFA | 5 000 |
+
+**Plancher : 50 sièges facturés minimum** (250 000 FCFA/an). Une école de 12
 élèves rapporte moins que le temps consacré à l'accompagner.
 
-### 7.2 Le calcul est cumulatif
+**Conséquence à connaître du plancher.** Il a été calibré quand le premier
+palier valait 3 000 FCFA, où 50 sièges faisaient 150 000 FCFA. Au tarif plat,
+le même plancher porte le contrat minimum à **250 000 FCFA, soit +67 %**. Si son
+but était d'écarter les écoles trop petites pour amortir l'accompagnement, il le
+remplit désormais à 30 sièges ; le maintenir à 50 relève d'un choix commercial,
+pas du calcul d'origine. À trancher si de petites écoles se présentent.
 
-Chaque tranche ne s'applique qu'à ses propres sièges. En prix de tranche unique
-appliqué à tout le contrat, l'arithmétique se retourne : 100 × 3 000 =
-300 000 FCFA contre 101 × 2 400 = 242 400 FCFA — acheter plus coûterait moins.
-Non monotone, et un directeur le trouvera.
+**Grille antérieure, non retenue** — trois tranches dégressives cumulatives
+(3 000 / 2 400 / 1 800 FCFA aux bornes 100 et 300). Elle reste la référence si
+une remise au volume est un jour consentie, et §7.2 explique pourquoi sa forme
+cumulative n'est pas négociable.
 
-| École | Calcul | Total / an | Effectif / siège |
+### 7.2 Le calcul reste cumulatif, même à une seule tranche
+
+Le tarif plat de §7.1 est implémenté comme un barème à **une** tranche, et le
+moteur cumulatif demeure. Ce n'est pas du zèle : il ne coûte rien tant qu'il n'y
+a qu'une tranche, il rend le retour à un barème dégressif éditable en une
+constante, et surtout le piège qu'il évite **redevient réel à la seconde
+tranche**.
+
+Ce piège : chaque tranche ne doit facturer que ses propres sièges. En prix de
+tranche unique appliqué à tout le contrat, l'arithmétique se retourne —
+100 × 3 000 = 300 000 FCFA contre 101 × 2 400 = 242 400 FCFA — et acheter plus
+coûterait moins. Non monotone, et un directeur le trouvera.
+
+| École | Calcul dégressif | Total / an | Effectif / siège |
 |---|---|---|---|
 | 80 élèves | 80 × 3 000 | 240 000 FCFA | 3 000 |
 | 250 élèves | (100 × 3 000) + (150 × 2 400) | 660 000 FCFA | 2 640 |
 | 500 élèves | (100 × 3 000) + (200 × 2 400) + (200 × 1 800) | 1 140 000 FCFA | 2 280 |
+
+Ces trois lignes ne sont plus facturées, mais elles restent **testées** :
+`quoteWithScale` prend un barème en argument, et les tests exercent le calcul
+cumulatif sur ce barème dégressif de démonstration. Sans cela, une remise au
+volume arriverait un jour sur un moteur que plus aucun test ne couvre.
 
 Le calcul est fait côté serveur ; le directeur ne voit qu'un total.
 `subscriptions.pricePerSeatFcfa` stocke le tarif effectif moyen
@@ -910,6 +937,6 @@ Chaque étape est livrable et testable séparément.
 | API PayDunya : facture, webhook, signature, plafonds | §8.7 | Documentation officielle PayDunya |
 | Coût IA réel par élève et par an | §7.4 | Agrégation `aiUsage.costUsd` sur la production |
 | Fourchette de scolarité privée élémentaire au Sénégal | §7.3 | Connaissance marché du propriétaire du projet |
-| **Le tarif 3 000 / 2 400 / 1 800 FCFA et le plancher de 50 sièges** | §7.1 | **Jamais confirmés.** La structure (cumulative, monotone) est décidée ; les valeurs sont des hypothèses, isolées dans une seule constante de `convex/pricing.ts`. |
+| ~~Le tarif par siège~~ | §7.1 | **Tranché : 5 000 FCFA par élève et par année scolaire**, plat, provisoire (« pour le moment »). Reste ouvert : le **plancher de 50 sièges**, qui porte désormais le contrat minimum à 250 000 FCFA au lieu de 150 000. |
 | **`past_due` sans échéance impayée identifiable** | §8.5 bis | **Arbitrage ouvert.** La seule branche de `decideAccess` qui échoue en ouvert : accès illimité. Deux issues posées en §8.5 bis. |
 | **Une école peut-elle grossir en cours d'année ?** | §10 | **Arbitrage ouvert.** Aujourd'hui non, par l'invariant de §4.5. |

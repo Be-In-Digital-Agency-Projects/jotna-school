@@ -11,14 +11,14 @@
  */
 
 /** Une tranche du barème : ses sièges s'arrêtent à `upToSeat`, inclus. */
-interface PricingTier {
+export interface PricingTier {
   /** Dernier siège de la tranche, inclus. La dernière tranche est infinie. */
   readonly upToSeat: number;
   /** Prix annuel de CHAQUE siège de cette tranche-là, jamais du contrat. */
   readonly pricePerSeatFcfa: number;
 }
 
-interface PricingScale {
+export interface PricingScale {
   /** Sièges facturés au minimum, quel que soit l'effectif (spec §7.1). */
   readonly seatFloor: number;
   /** Tranches par bornes CROISSANTES, prix par siège non croissant. */
@@ -30,26 +30,28 @@ interface PricingScale {
  *
  * Ces montants ne sont PAS confirmés par le client : la spec §7.3 les donne
  * pour une estimation de marché non vérifiée, et §7.4 rappelle que le coût
- * marginal réel n'a pas pu être calculé. Ce qui est décidé, c'est la STRUCTURE
- * — cumulative, à plancher, monotone ; les valeurs sont des hypothèses, et
- * cette constante est le seul endroit à éditer le jour où le propriétaire du
- * projet les tranche. Rien d'autre dans le dépôt ne porte un prix.
+ * marginal réel n'a pas pu être calculé.
  *
- * Cumulative, « comme un barème d'impôt » : chaque tranche ne facture que ses
- * propres sièges. En prix de tranche unique appliqué à tout le contrat,
- * l'arithmétique se retourne — 100 × 3 000 = 300 000 contre
- * 101 × 2 400 = 242 400 — et acheter plus coûterait moins (spec §7.2). Un
- * directeur le trouverait.
+ * TARIF RETENU — 5 000 FCFA par élève et par année scolaire, décidé par le
+ * propriétaire du projet, et provisoire de son propre aveu (« pour le
+ * moment »). Une seule tranche, donc un prix plat : c'est le barème en
+ * vigueur, et cette constante est le seul endroit du dépôt qui porte un prix.
+ *
+ * POURQUOI LE MOTEUR CUMULATIF RESTE, avec une seule tranche à nourrir. Le
+ * calcul par tranches ne coûte rien tant qu'il n'y en a qu'une, et il rend le
+ * retour à un barème dégressif éditable ici, sans toucher une ligne de logique.
+ * Surtout, le piège qu'il évite redevient réel à la SECONDE tranche : en prix
+ * de tranche unique appliqué à tout le contrat, 101 × 2 400 = 242 400 coûterait
+ * MOINS que 100 × 3 000 = 300 000, et acheter plus reviendrait moins cher
+ * (§7.2). Le supprimer aujourd'hui reviendrait à le réécrire, moins bien, le
+ * jour où une remise au volume sera consentie. Les tests du moteur tournent
+ * d'ailleurs sur un barème dégressif de démonstration, pour qu'il reste couvert
+ * pendant qu'il dort.
  */
 export const PRICING_SCALE: PricingScale = {
   seatFloor: 50,
-  tiers: [
-    { upToSeat: 100, pricePerSeatFcfa: 3000 },
-    { upToSeat: 300, pricePerSeatFcfa: 2400 },
-    { upToSeat: Number.POSITIVE_INFINITY, pricePerSeatFcfa: 1800 },
-  ],
+  tiers: [{ upToSeat: Number.POSITIVE_INFINITY, pricePerSeatFcfa: 5000 }],
 };
-
 /** Ce que coûte un contrat, et sur combien de sièges il porte vraiment. */
 export interface SubscriptionQuote {
   /**
@@ -88,9 +90,9 @@ export interface SubscriptionQuote {
  * surfacturer. `recordSubscription` refuse de toute façon ces entrées avant
  * d'arriver ici : ce repli est une seconde ligne, pas la première.
  */
-function billedSeats(seatsRequested: number): number {
+function billedSeats(seatsRequested: number, scale: PricingScale): number {
   if (!Number.isInteger(seatsRequested) || seatsRequested <= 0) return 0;
-  return Math.max(seatsRequested, PRICING_SCALE.seatFloor);
+  return Math.max(seatsRequested, scale.seatFloor);
 }
 
 /**
@@ -102,7 +104,24 @@ function billedSeats(seatsRequested: number): number {
  * écrit ce que cette fonction rend.
  */
 export function quoteSubscription(seatsRequested: number): SubscriptionQuote {
-  const seatsBilled = billedSeats(seatsRequested);
+  return quoteWithScale(seatsRequested, PRICING_SCALE);
+}
+
+/**
+ * Le moteur, sur un barème passé en argument. Existe pour que le calcul
+ * cumulatif reste TESTÉ alors que le barème en vigueur n'a qu'une tranche : les
+ * tests lui donnent un barème dégressif de démonstration.
+ *
+ * LA PRODUCTION NE L'APPELLE JAMAIS AVEC AUTRE CHOSE QUE `PRICING_SCALE`, et
+ * aucun barème ne doit jamais venir d'un argument de mutation : ce serait un
+ * prix fourni par l'appelant, précisément le trou que `recordSubscription`
+ * existe pour fermer en calculant le montant au lieu de le recevoir.
+ */
+export function quoteWithScale(
+  seatsRequested: number,
+  scale: PricingScale,
+): SubscriptionQuote {
+  const seatsBilled = billedSeats(seatsRequested, scale);
 
   // Zéro siège facturé : zéro franc, et un tarif moyen de zéro plutôt qu'une
   // division par zéro. Un contrat sans siège n'a pas de prix par siège.
@@ -112,7 +131,7 @@ export function quoteSubscription(seatsRequested: number): SubscriptionQuote {
 
   let totalFcfa = 0;
   let seatsPriced = 0;
-  for (const tier of PRICING_SCALE.tiers) {
+  for (const tier of scale.tiers) {
     if (seatsPriced >= seatsBilled) break;
     const upTo = Math.min(seatsBilled, tier.upToSeat);
     totalFcfa += (upTo - seatsPriced) * tier.pricePerSeatFcfa;

@@ -2,6 +2,7 @@ import { query, mutation, internalQuery, internalMutation } from "./_generated/s
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { internal } from "./_generated/api";
+import { checkAccess, requireAccess, blockedStudent } from "./access";
 
 /**
  * Compute where the current student should resume in a given topic session.
@@ -22,6 +23,11 @@ export const getResumeIndex = query({
       .withIndex("by_userId", (q) => q.eq("userId", userId as string))
       .unique();
     if (!profile) return null;
+
+    // Paywall (spec §5.4) — une requête ne lève jamais : elle retourne la
+    // même valeur vide que pour un profil invalide.
+    const access = await checkAccess(ctx, profile);
+    if (!access.ok) return null;
 
     const exercises = await ctx.db
       .query("exercises")
@@ -199,6 +205,23 @@ export const submit = mutation({
     timeSpentMs: v.number(),
   },
   handler: async (ctx, args) => {
+    // Paywall (spec §5.4) — cette mutation ne résolvait jusqu'ici aucun
+    // profil : elle prenait `studentId` en argument sans jamais vérifier
+    // l'appelant. On dérive le profil de L'APPELANT (getAuthUserId, comme
+    // partout ailleurs dans le repo) et on contrôle SON droit — pas celui
+    // de args.studentId, qu'un appelant non authentifié pourrait usurper
+    // pour écrire au nom d'un élève couvert. Effet de bord assumé : cette
+    // mutation exige désormais une authentification, ce qu'elle ne faisait
+    // pas. Une mutation lève, l'appelant attrape.
+    const callerUserId = await getAuthUserId(ctx);
+    if (!callerUserId) throw new Error("Non authentifié");
+    const callerProfile = await ctx.db
+      .query("profiles")
+      .withIndex("by_userId", (q) => q.eq("userId", callerUserId as string))
+      .unique();
+    if (!callerProfile) throw new Error("Profil introuvable");
+    await requireAccess(ctx, callerProfile);
+
     const exercise = await ctx.db.get(args.exerciseId);
     if (!exercise) {
       throw new Error("Exercice introuvable");
@@ -361,6 +384,15 @@ export const getAttemptsForExercise = query({
     exerciseId: v.id("exercises"),
   },
   handler: async (ctx, args) => {
+    // Paywall (spec §5.4) — cette requête ne résout aucun profil (elle
+    // prend `studentId` en argument), donc pas de "juste après la
+    // résolution du profil" applicable ici. blockedStudent(ctx) résout le
+    // profil de L'APPELANT et ne bloque que s'il s'agit d'un élève sans
+    // droit valide — jamais un adulte, jamais un visiteur non authentifié.
+    // Une requête ne lève jamais : même valeur vide que le .take(100)
+    // ci-dessous retournerait pour un résultat sans lignes.
+    if (await blockedStudent(ctx)) return [];
+
     return await ctx.db
       .query("attempts")
       .withIndex("by_studentId_exerciseId", (q) =>
@@ -456,6 +488,11 @@ export const getProgressForTopic = query({
     topicId: v.id("topics"),
   },
   handler: async (ctx, args) => {
+    // Paywall (spec §5.4) — même raisonnement que getAttemptsForExercise
+    // ci-dessus : pas de profil résolu ici, donc blockedStudent(ctx) sur
+    // l'appelant. Valeur vide alignée sur le .first() ci-dessous : null.
+    if (await blockedStudent(ctx)) return null;
+
     return await ctx.db
       .query("studentTopicProgress")
       .withIndex("by_studentId_topicId", (q) =>

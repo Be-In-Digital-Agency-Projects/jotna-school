@@ -23,6 +23,7 @@ import {
 import { checkMathExercise } from "../aiGateway/factCheck";
 import { computeExerciseScore } from "./scoring";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { checkAccess, requireAccess } from "../access";
 
 const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const REGEN_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
@@ -141,6 +142,11 @@ export const getExercisesForPalier = query({
       .withIndex("by_userId", (q) => q.eq("userId", userId as string))
       .unique();
     if (!profile) return null;
+
+    // Paywall (spec §5.4) — une requête ne lève jamais : elle retourne la
+    // même valeur vide que pour un profil invalide.
+    const access = await checkAccess(ctx, profile);
+    if (!access.ok) return null;
 
     const attempt = await ctx.db.get(args.palierAttemptId);
     if (!attempt) return null;
@@ -564,6 +570,30 @@ export const getBucket = action({
     cacheHit: boolean;
     qaStatus: string;
   }> => {
+    // Paywall (spec §5.4) — DOIT s'exécuter AVANT et EN DEHORS du bloc
+    // `palierIndex > 1` ci-dessous. Ce bloc ne résout un profil que pour le
+    // palier 2+, et son contrôle (checkPalierProgression) est pédagogique
+    // — il vérifie la progression, pas le droit — pas financier. Le placer
+    // à l'intérieur du bloc laisserait le palier 1 de chaque topic gratuit
+    // pour tout le monde. Une action n'a pas de ctx.db : on résout le
+    // profil de l'appelant via la requête interne (même motif que la
+    // résolution un peu plus bas), puis on interroge getAccessStateForProfile
+    // — la requête interne de la tâche 3.
+    const callerUserId = await getAuthUserId(ctx);
+    if (!callerUserId) throw new Error("Non authentifié");
+    const callerProfile = await ctx.runQuery(
+      internal.paliers.index.getProfileByUserId,
+      { userId: callerUserId as string },
+    );
+    if (!callerProfile) throw new Error("Profil introuvable");
+    const access = await ctx.runQuery(
+      internal.access.getAccessStateForProfile,
+      { profileId: callerProfile._id },
+    );
+    if (!access.ok) {
+      throw new Error(`ACCESS_DENIED:${access.reason}`);
+    }
+
     if (args.palierIndex > 1) {
       const authUserId = await getAuthUserId(ctx);
       if (!authUserId) throw new Error("Non authentifié");
@@ -746,6 +776,18 @@ export const regenerateFailedExercises = action({
     }
 
     const { attempt, palier, topic, subject, failed } = ctxData;
+
+    // Paywall (spec §5.4) — cette action ne résout aucun profil appelant :
+    // l'élève dont il faut vérifier le droit est le PROPRIÉTAIRE de la
+    // tentative (attempt.userId), pas un appelant résolu par getAuthUserId.
+    // Une action n'a pas de ctx.db, d'où le passage par la requête interne.
+    const access = await ctx.runQuery(internal.access.getAccessStateForProfile, {
+      profileId: attempt.userId,
+    });
+    if (!access.ok) {
+      throw new Error(`ACCESS_DENIED:${access.reason}`);
+    }
+
     if (failed.length === 0) {
       return { ok: false, reason: "NO_FAILED_EXOS" };
     }
@@ -931,6 +973,9 @@ export const startPalierAttempt = mutation({
       .withIndex("by_userId", (q) => q.eq("userId", userId as string))
       .unique();
     if (!profile) throw new Error("Profil introuvable");
+
+    // Paywall (spec §5.4) — une mutation lève, l'appelant attrape.
+    await requireAccess(ctx, profile);
 
     const palier = await ctx.db.get(args.palierId);
     if (!palier) throw new Error("Palier introuvable");

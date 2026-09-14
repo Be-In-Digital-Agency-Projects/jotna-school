@@ -25,7 +25,38 @@ import { computeExerciseScore } from "./scoring";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { checkAccess, requireAccess } from "../access";
 
-const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+/**
+ * Péremption du contenu d'un palier, PARTAGÉ par tous les élèves d'un niveau,
+ * toutes écoles confondues. Un trimestre.
+ *
+ * Elle valait sept jours. Un cache à péremption sert à rattraper une source qui
+ * change ; ici il n'y en a pas : la table de multiplication en CE2 est la même
+ * en septembre et en juin, et le programme ne bouge pas d'une semaine à
+ * l'autre. Régénérer chaque semaine rachetait donc peu et coûtait 92 % du
+ * budget de contenu — la génération d'un palier (6 000 jetons de sortie) est de
+ * loin l'appel le plus cher du produit, ~23 fois une vérification de réponse.
+ *
+ * La variété, elle, ne dépend pas de cette constante : `shuffleSeed`, les
+ * paliers personnalisés, les « encore » quotidiens et REGEN_WINDOW_MS
+ * ci-dessous s'en chargent, et chacun vise UN élève au lieu de rafraîchir pour
+ * tout le monde parce que la semaine d'un seul s'est écoulée.
+ *
+ * Ce qui justifierait vraiment une régénération, c'est un changement de prompt,
+ * pas un calendrier : invalider sur une version de prompt stockée avec le
+ * palier rafraîchirait exactement quand le contenu a une raison de changer.
+ * C'est la forme juste du besoin, et elle n'est pas implémentée.
+ *
+ * Aucune migration : `expiresAt` est figé à la génération, donc les paliers
+ * déjà en base gardent leur échéance courte, se régénèrent une dernière fois,
+ * puis adoptent celle-ci.
+ */
+const PALIER_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+
+/**
+ * Tout autre chose, malgré la valeur voisine : le quota d'UN élève sur UN
+ * palier — au plus REGEN_HARD_CAP régénérations demandées par semaine. Borne un
+ * enfant qui redemanderait des exercices sans fin ; ne périme rien.
+ */
 const REGEN_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const REGEN_HARD_CAP = 3;
 
@@ -334,7 +365,7 @@ export const upsertBucket = internalMutation({
       .unique();
 
     const now = Date.now();
-    const expiresAt = now + ONE_WEEK_MS;
+    const expiresAt = now + PALIER_TTL_MS;
     const shuffleSeed = `${args.topicId}-${args.class}-${args.palierIndex}-${now}`;
 
     if (existing) {

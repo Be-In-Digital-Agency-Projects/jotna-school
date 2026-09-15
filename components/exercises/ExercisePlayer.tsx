@@ -7,6 +7,9 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { useExerciseSessionStore } from "@/stores/exercise-session-store";
 import { useGamificationStore } from "@/stores/gamification-store";
 import { Lightbulb, ArrowRight, Loader2, Sparkles } from "lucide-react";
+import { kidMessages } from "@/lib/kidCopy";
+import { isAccessDenied } from "@/lib/accessCopy";
+import { StudentAlertDialog } from "@/components/student/student-alert-dialog";
 import QcmExercise from "./QcmExercise";
 import MatchExercise from "./MatchExercise";
 import OrderExercise from "./OrderExercise";
@@ -27,7 +30,6 @@ interface ExerciseData {
 interface ExercisePlayerProps {
   exercises: ExerciseData[];
   topicId: string;
-  studentId: string;
   /** 0-based index to start at; useful for resuming an interrupted session. */
   initialIndex?: number;
   onComplete: (stats: {
@@ -44,7 +46,6 @@ const MAX_HINTS = 3;
 export default function ExercisePlayer({
   exercises,
   topicId,
-  studentId,
   initialIndex,
   onComplete,
 }: ExercisePlayerProps) {
@@ -76,6 +77,7 @@ export default function ExercisePlayer({
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [aiExplanation, setAiExplanation] = useState<string | null>(null);
   const [aiExplanationLoading, setAiExplanationLoading] = useState(false);
+  const [accessBlocked, setAccessBlocked] = useState(false);
 
   // Timer
   const exerciseStartTime = useRef<number>(Date.now());
@@ -166,7 +168,6 @@ export default function ExercisePlayer({
     try {
       let result = await submitAttempt({
         exerciseId: currentExercise._id as Id<"exercises">,
-        studentId: studentId as Id<"profiles">,
         submittedAnswer: answer,
         attemptNumber: newAttemptCount,
         hintsUsedCount: hintsRevealed,
@@ -184,6 +185,7 @@ export default function ExercisePlayer({
             result = { ...result, isCorrect: true };
           }
         } catch (err) {
+          // ACCESS_DENIED possible ici (accès révoqué entre deux appels déjà réussis, fenêtre étroite) — non traité : retomber sur "réponse fausse" est un compromis accepté (tâche 8).
           console.error("AI verification failed:", err);
         }
       }
@@ -222,7 +224,6 @@ export default function ExercisePlayer({
           setAiExplanationLoading(true);
           generateExplanation({
             exerciseId: currentExercise._id as Id<"exercises">,
-            studentId: studentId as Id<"profiles">,
           })
             .then((res) => {
               setAiExplanation(res.explanation);
@@ -238,7 +239,11 @@ export default function ExercisePlayer({
         }
       }
     } catch (error) {
-      console.error("Error submitting attempt:", error);
+      if (isAccessDenied(error)) {
+        setAccessBlocked(true);
+      } else {
+        console.error("Error submitting attempt:", error);
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -455,6 +460,25 @@ export default function ExercisePlayer({
           Tentative {attemptCount}/{MAX_ATTEMPTS}
         </div>
       )}
+
+      {/* Paywall (spec §5.8) : attempts.submit lève une ConvexError de
+          données { code: "ACCESS_DENIED", reason } quand l'école n'a plus
+          d'accès valide — reconnue par isAccessDenied(), jamais par le
+          message, que Convex occulte hors développement. Même copy que
+          AccessGate et que la variante SceneAlert "access-blocked" de
+          session/page.tsx — jamais le code brut ni la raison. */}
+      <StudentAlertDialog
+        open={accessBlocked}
+        onOpenChange={(open) => {
+          if (!open) setAccessBlocked(false);
+        }}
+        tone="info"
+        label="Petit blocage"
+        title="Message pour toi"
+        description={kidMessages.accessNotOpen}
+        primaryLabel="J'ai compris"
+        onPrimary={() => setAccessBlocked(false)}
+      />
     </div>
   );
 }

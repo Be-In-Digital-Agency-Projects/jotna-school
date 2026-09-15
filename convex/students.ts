@@ -3,6 +3,12 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { getConditionText, normalizeRarity } from "./badges";
+import {
+  callerIsAdmin,
+  callerMayReadStudent,
+  checkAccess,
+  requireAccess,
+} from "./access";
 
 // ---------------------------------------------------------------------------
 // Star approximation helper.
@@ -114,9 +120,25 @@ export function resolveTopicStatuses(
 // Queries for admin student management
 // ---------------------------------------------------------------------------
 
+/**
+ * Annuaire des élèves de la plateforme — écran d'administration.
+ *
+ * Garde de RÔLE et non de paywall : cette lecture rend jusqu'à 1000 profils
+ * d'élèves (nom, `userId`, `preferences`), sans aucun rapport avec le droit
+ * d'accès de qui que ce soit. Ni `blockedStudent` ni `requireAccess` n'ont de
+ * sens ici — ils jugent l'abonnement d'un élève, pas la qualité de l'appelant.
+ *
+ * `admin` seul : son unique appelant est `app/(admin)/admin/eleves/page.tsx`,
+ * et lister tous les élèves de la plateforme dépasse ce dont un professeur a
+ * besoin (ses élèves à lui passent par `profiles.getTeacherStudents`).
+ *
+ * Une requête ne lève jamais : [] pour tout autre appelant.
+ */
 export const listStudents = query({
   args: {},
   handler: async (ctx) => {
+    if (!(await callerIsAdmin(ctx))) return [];
+
     const profiles = await ctx.db.query("profiles").take(1000);
     const students = profiles.filter((p) => p.role === "student");
 
@@ -146,9 +168,29 @@ export const listStudents = query({
   },
 });
 
+/**
+ * Dossier complet d'un élève — écrans administration et professeur.
+ *
+ * Garde de LIEN et non de paywall : progression par matière, badges et dix
+ * dernières tentatives d'un élève nommé en argument. `blockedStudent` et
+ * `requireAccess` jugeraient l'abonnement, pas le droit de l'appelant sur cet
+ * élève-là.
+ *
+ * `callerMayReadStudent` et non `callerIsStaff` : le garde de rôle autorisait
+ * tout le personnel à lire le dossier de N'IMPORTE QUEL élève. La page
+ * enseignant vérifiait bien le lien, mais côté client seulement
+ * (`app/(teacher)/teacher/students/[id]/page.tsx`) — une redirection est du
+ * confort, pas une autorisation. Cette vérification client reste en place ;
+ * ici est le verrou. Un `admin` continue de tout voir, donc
+ * `app/(admin)/admin/eleves/[id]` ne régresse pas.
+ *
+ * Une requête ne lève jamais : null pour tout autre appelant.
+ */
 export const getStudentDetail = query({
   args: { studentId: v.id("profiles") },
   handler: async (ctx, args) => {
+    if (!(await callerMayReadStudent(ctx, args.studentId))) return null;
+
     const student = await ctx.db.get(args.studentId);
     if (!student || student.role !== "student") {
       return null;
@@ -274,6 +316,11 @@ export const getMyStats = query({
       .withIndex("by_userId", (q) => q.eq("userId", userId as string))
       .unique();
     if (!profile || profile.role !== "student") return null;
+
+    // Paywall (spec §5.4) — même valeur de retour que le garde-fou de rôle
+    // ci-dessus : une requête ne lève jamais.
+    const access = await checkAccess(ctx, profile);
+    if (!access.ok) return null;
 
     const studentId = profile._id;
 
@@ -438,6 +485,10 @@ export const markLevelSeen = mutation({
     if (!profile || profile.role !== "student") {
       throw new Error("Profil élève introuvable");
     }
+
+    // Paywall (spec §5.4) — mutation : lève si l'accès n'est pas ouvert.
+    await requireAccess(ctx, profile);
+
     const prefs = readStudentPreferences(profile);
     const current = prefs.lastSeenLevel ?? 1;
     if (args.level <= current) return; // Idempotent + monotonic.
@@ -461,6 +512,12 @@ export const getMySoundEnabled = query({
       .withIndex("by_userId", (q) => q.eq("userId", userId as string))
       .unique();
     if (!profile || profile.role !== "student") return null;
+
+    // Paywall (spec §5.4) — même valeur de retour que le garde-fou de rôle
+    // ci-dessus.
+    const access = await checkAccess(ctx, profile);
+    if (!access.ok) return null;
+
     const prefs = readStudentPreferences(profile);
     return { soundEnabled: prefs.soundEnabled === true };
   },
@@ -478,7 +535,13 @@ export const getMyEarnedBadges = query({
       .query("profiles")
       .withIndex("by_userId", (q) => q.eq("userId", userId as string))
       .unique();
-    if (!profile) return [];
+    if (!profile || profile.role !== "student") return [];
+
+    // Paywall (spec §5.4) — même valeur de retour que le garde-fou de rôle
+    // ci-dessus.
+    const access = await checkAccess(ctx, profile);
+    if (!access.ok) return [];
+
     const earned = await ctx.db
       .query("earnedBadges")
       .withIndex("by_studentId", (q) => q.eq("studentId", profile._id))
@@ -491,9 +554,24 @@ export const getMyEarnedBadges = query({
   },
 });
 
+/**
+ * Statistiques agrégées d'un élève — écran professeur.
+ *
+ * Garde de LIEN et non de paywall, même raisonnement que `getStudentDetail`
+ * ci-dessus, réserve comprise : le garde de rôle qui vivait ici rendait les
+ * statistiques de n'importe quel élève à n'importe quel membre du personnel.
+ *
+ * Appelée par `app/(teacher)/teacher/students/[id]`, dont la vérification de
+ * lien côté client reste en place — elle redirige proprement, elle ne protège
+ * rien.
+ *
+ * Une requête ne lève jamais : null pour tout autre appelant.
+ */
 export const getStudentStats = query({
   args: { studentId: v.id("profiles") },
   handler: async (ctx, args) => {
+    if (!(await callerMayReadStudent(ctx, args.studentId))) return null;
+
     const student = await ctx.db.get(args.studentId);
     if (!student || student.role !== "student") {
       return null;
@@ -589,6 +667,11 @@ export const getStudentSubjectMap = query({
       .withIndex("by_userId", (q) => q.eq("userId", userId as string))
       .unique();
     if (!profile || profile.role !== "student") return null;
+
+    // Paywall (spec §5.4) — même valeur de retour que le garde-fou de rôle
+    // ci-dessus.
+    const access = await checkAccess(ctx, profile);
+    if (!access.ok) return null;
 
     const studentId = profile._id;
 

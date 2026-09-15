@@ -6,6 +6,7 @@ import {
   LayoutDashboard,
   BookOpen,
   Award,
+  School,
   Users,
   Settings,
   Zap,
@@ -33,6 +34,7 @@ const sidebarLinks = [
   { href: "/admin/subjects", label: "Matières", icon: BookOpen },
   { href: "/admin/ai-settings", label: "AI Gateway", icon: Zap },
   { href: "/admin/badges", label: "Badges", icon: Award },
+  { href: "/admin/ecoles", label: "Écoles", icon: School },
   { href: "/admin/eleves", label: "Élèves", icon: Users },
   { href: "/admin/settings", label: "Paramètres", icon: Settings },
 ];

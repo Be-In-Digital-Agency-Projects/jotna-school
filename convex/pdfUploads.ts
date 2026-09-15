@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import {
   query,
   mutation,
@@ -7,16 +7,56 @@ import {
 } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
+import { callerIsAdmin, callerStaffProfile } from "./access";
 
+// ---------------------------------------------------------------------------
+// CE MODULE ÉTAIT OUVERT DE BOUT EN BOUT. Ses cinq fonctions publiques
+// n'avaient AUCUNE garde : `list` rendait tous les imports de la plateforme,
+// `getById` les exercices BRUTS d'un import — corrigés compris —,
+// `generateUploadUrl` une URL d'envoi, `create` créait un import AU NOM DE
+// N'IMPORTE QUI (elle prenait `adminId` en argument) et planifiait une
+// extraction IA facturée, et `remove` effaçait jusqu'à cinq cents exercices
+// sans le moindre contrôle. Un appelant non authentifié pouvait tout cela.
+//
+// TROIS RÈGLES DÉJÀ POSÉES AILLEURS DANS CETTE BRANCHE suffisent à le fermer,
+// et c'est pourquoi le découpage ci-dessous n'invente rien :
+//   - l'auteur d'un import vient de la SESSION, jamais d'un argument. Un droit
+//     vérifié sur l'appelant n'autorise que ce que l'appelant fait pour
+//     lui-même (cf. `attempts.submit`).
+//   - un professeur n'agit que sur SES imports — garde de LIEN et non de rôle,
+//     comme `exercises.staffMayTouchExercise`. L'administrateur passe partout.
+//   - on n'efface pas ce sur quoi un enfant a travaillé (cf. `exercises.remove`
+//     et `topics.removeWithExercises`). C'est ce manque-là qui laissait des
+//     tentatives orphelines et invalidait le raisonnement de
+//     `removeWithExercises`.
+//
+// Une requête rend vide, une mutation lève — convention du dépôt.
 // ---------------------------------------------------------------------------
 // Queries
 // ---------------------------------------------------------------------------
 
 /** List all PDF uploads, most recent first. Includes subject name. */
+/**
+ * Cet import appartient-il à ce membre du personnel ?
+ *
+ * `pdfUploads.adminId` nomme qui l'a déposé. Un administrateur passe sans
+ * condition — il n'a pas d'import à lui, il les administre tous.
+ */
+function staffOwnsUpload(
+  staff: Doc<"profiles">,
+  upload: Doc<"pdfUploads">,
+): boolean {
+  return staff.role === "admin" || upload.adminId === staff._id;
+}
+
 export const list = query({
   args: {},
   handler: async (ctx) => {
+    // Elle rend les imports de TOUTE la plateforme : c'est une lecture
+    // d'administration. Un professeur a `listByTeacher`, qui filtre sur lui.
+    if (!(await callerIsAdmin(ctx))) return [];
+
     const uploads = await ctx.db.query("pdfUploads").order("desc").take(200);
 
     const results = await Promise.all(
@@ -71,16 +111,27 @@ export const listByTeacher = query({
 export const getById = query({
   args: { id: v.id("pdfUploads") },
   handler: async (ctx, { id }) => {
+    // Elle rend les exercices BRUTS de l'import — `answerKey` et indices
+    // compris. Garde de LIEN : un professeur ne lit que ses propres imports.
+    // Un import hors de portée est INTROUVABLE, jamais « non autorisé » :
+    // distinguer les deux renseignerait sur ce qui existe.
+    const staff = await callerStaffProfile(ctx);
+    if (!staff) return null;
+
     const upload = await ctx.db.get(id);
-    if (!upload) return null;
+    if (!upload || !staffOwnsUpload(staff, upload)) return null;
 
     const subject = await ctx.db.get(upload.subjectId);
 
-    // Count exercises generated from this upload (no index on sourcePdfUploadId,
-    // bounded scan with take)
+    // Exercices produits par cet import, PAR INDEX. Ce commentaire disait
+    // « no index on sourcePdfUploadId, bounded scan with take » : la borne
+    // portait sur le résultat, pas sur le parcours, et cette lecture d'écran
+    // devenait un parcours de toute la table `exercises`.
     const exercises = await ctx.db
       .query("exercises")
-      .filter((q) => q.eq(q.field("sourcePdfUploadId"), id))
+      .withIndex("by_sourcePdfUploadId", (q) =>
+        q.eq("sourcePdfUploadId", id),
+      )
       .take(200);
 
     return {
@@ -100,6 +151,11 @@ export const getById = query({
 export const generateUploadUrl = mutation({
   args: {},
   handler: async (ctx) => {
+    // Une URL d'envoi est un droit d'ÉCRIRE dans le stockage du projet. Sans
+    // garde, n'importe qui pouvait y déposer n'importe quoi.
+    if (!(await callerStaffProfile(ctx))) {
+      throw new ConvexError("Rôle non autorisé");
+    }
     return await ctx.storage.generateUploadUrl();
   },
 });
@@ -107,7 +163,6 @@ export const generateUploadUrl = mutation({
 /** Create a PDF upload record and schedule AI extraction. */
 export const create = mutation({
   args: {
-    adminId: v.id("profiles"),
     storageId: v.string(),
     originalFilename: v.string(),
     mimeType: v.string(),
@@ -115,8 +170,16 @@ export const create = mutation({
     subjectId: v.id("subjects"),
   },
   handler: async (ctx, args) => {
+    // L'AUTEUR VIENT DE LA SESSION, ET IL N'EST PLUS UN ARGUMENT. `adminId`
+    // était reçu de l'appelant puis écrit tel quel : n'importe qui pouvait
+    // créer un import AU NOM D'UN AUTRE — et, comme cette mutation planifie
+    // une extraction IA, déclencher une dépense facturée à l'école d'autrui.
+    // Retirer l'argument rend l'usurpation inexprimable, non refusée.
+    const staff = await callerStaffProfile(ctx);
+    if (!staff) throw new ConvexError("Rôle non autorisé");
+
     const uploadId = await ctx.db.insert("pdfUploads", {
-      adminId: args.adminId,
+      adminId: staff._id,
       storageId: args.storageId,
       originalFilename: args.originalFilename,
       mimeType: args.mimeType,
@@ -133,17 +196,143 @@ export const create = mutation({
 });
 
 /** Delete a PDF upload and its associated exercises. */
+/**
+ * Relance l'extraction d'un import qui a échoué.
+ *
+ * ELLE EXISTE PARCE QUE L'ÉCRAN RECRÉAIT UN IMPORT, et que ce raccourci est
+ * devenu un défaut le jour où `create` a cessé de recevoir `adminId` : l'auteur
+ * venant désormais de la SESSION, un administrateur qui relançait l'import d'un
+ * professeur s'en attribuait la copie — et le professeur perdait l'accès à ses
+ * propres exercices, `listByTeacher` et `getById` filtrant sur `adminId`.
+ *
+ * Relancer sur la ligne EXISTANTE ferme trois choses à la fois : l'auteur reste
+ * celui qui est écrit dans le document et non celui qui clique ; aucune ligne
+ * jumelle n'apparaît ; et les deux ne partagent plus un même `storageId`, ce
+ * qui faisait qu'une suppression de l'une emportait le fichier de l'autre.
+ *
+ * Garde de LIEN comme le reste du module : son propre import, ou administrateur.
+ *
+ * ELLE REFUSE SI L'EXTRACTION N'A PAS ÉCHOUÉ, et cette garde-là n'est pas du
+ * zèle. `pdfUploadsExtract.extract` n'est PAS idempotente : elle rappelle
+ * `createDraftExercises`, qui INSÈRE une ligne par exercice extrait. Relancée
+ * sur un import déjà extrait, elle refacturait donc une extraction gpt-4o
+ * entière — l'appel le plus cher du dépôt, plafonné à 16 000 jetons de sortie —
+ * et doublait les brouillons, sans que rien ne s'y oppose. Le seul obstacle
+ * était que l'écran n'affiche le bouton qu'en cas d'échec ; la règle D24 de
+ * cette branche dit exactement pourquoi cela ne suffit pas.
+ *
+ * L'ÉCHEC SE LIT DANS `extractedRaw.error`, que `markError` est seule à écrire
+ * et que toute sortie en erreur d'`extract` traverse — son `catch` englobe
+ * l'appel, l'analyse de la réponse et la création des brouillons. C'est donc
+ * l'état d'échec lui-même qui autorise la relance, pas un statut approchant.
+ *
+ * FENÊTRE CONNUE, NON FERMÉE ICI : si `markExtracted` a réussi et que
+ * `createDraftExercises` a échoué juste après, l'import porte à la fois des
+ * brouillons et une erreur ; la relance est alors légitime et redoublera ce qui
+ * avait été créé. La fermer demande une idempotence dans
+ * `createDraftExercises`, pas une garde de plus ici — et surtout pas un
+ * effacement préalable des brouillons, qui emporterait ceux qu'un relecteur a
+ * déjà corrigés ou publiés.
+ */
+export const retryExtraction = mutation({
+  args: { id: v.id("pdfUploads") },
+  handler: async (ctx, { id }) => {
+    const staff = await callerStaffProfile(ctx);
+    if (!staff) throw new ConvexError("Rôle non autorisé");
+
+    const upload = await ctx.db.get(id);
+    if (!upload || !staffOwnsUpload(staff, upload)) {
+      throw new ConvexError("Import introuvable");
+    }
+
+    const raw = upload.extractedRaw;
+    const failed =
+      typeof raw === "object" && raw !== null && "error" in raw;
+    if (!failed) {
+      throw new ConvexError(
+        "Cet import n'est pas en erreur : il n'y a rien à relancer. " +
+          "Relancer une extraction réussie la referait payer et créerait un " +
+          "second jeu de brouillons.",
+      );
+    }
+
+    // L'erreur précédente s'efface : la laisser ferait afficher un échec
+    // pendant que l'extraction retourne.
+    await ctx.db.patch(id, { extractedRaw: undefined });
+    await ctx.scheduler.runAfter(0, internal.pdfUploadsExtract.extract, {
+      uploadId: id,
+    });
+  },
+});
+
+/** Exercices lus au plus pour la suppression d'un import. */
+const UPLOAD_EXERCISES_LIMIT = 200;
+
+/**
+ * Supprime un import et les exercices qu'il a produits.
+ *
+ * ELLE CONTOURNAIT LA RÈGLE QUE `exercises.remove` PROTÈGE, et c'est le plus
+ * grave. Sans aucune garde ni aucun contrôle, elle effaçait jusqu'à cinq cents
+ * exercices — y compris ceux qu'un enfant avait tentés, qu'`exercises.remove`
+ * refuse de supprimer un par un. Les `attempts` correspondantes SURVIVAIENT en
+ * pointant vers un exercice effacé.
+ *
+ * Ce n'est pas une nuisance abstraite : c'est elle qui rendait fausse la preuve
+ * de `topics.removeWithExercises`. Celle-ci raisonnait qu'une progression
+ * implique une tentative sur un exercice ACTUEL de la thématique — vrai, sauf
+ * si un exercice peut disparaître en laissant tentative et progression
+ * derrière lui. C'était exactement ce que faisait cette fonction.
+ */
 export const remove = mutation({
   args: { id: v.id("pdfUploads") },
   handler: async (ctx, { id }) => {
-    const upload = await ctx.db.get(id);
-    if (!upload) return;
+    // Garde de LIEN, première instruction : rien n'est lu avant.
+    const staff = await callerStaffProfile(ctx);
+    if (!staff) throw new ConvexError("Rôle non autorisé");
 
-    // Delete associated exercises (bounded scan, no index on sourcePdfUploadId)
+    const upload = await ctx.db.get(id);
+    if (!upload || !staffOwnsUpload(staff, upload)) {
+      throw new ConvexError("Import introuvable");
+    }
+
+    // Filtrer PUIS prendre — l'inverse lirait les premiers documents de la
+    // table entière. La ligne de plus distingue « à la borne » de « au-delà ».
     const exercises = await ctx.db
       .query("exercises")
-      .filter((q) => q.eq(q.field("sourcePdfUploadId"), id))
-      .take(500);
+      .withIndex("by_sourcePdfUploadId", (q) =>
+        q.eq("sourcePdfUploadId", id),
+      )
+      .take(UPLOAD_EXERCISES_LIMIT + 1);
+
+    if (exercises.length > UPLOAD_EXERCISES_LIMIT) {
+      throw new ConvexError(
+        `Cet import a produit plus de ${UPLOAD_EXERCISES_LIMIT} exercices et ne peut pas être supprimé d'un seul geste.`,
+      );
+    }
+
+    // TOUS LES REFUS AVANT LA PREMIÈRE SUPPRESSION. Un import à moitié effacé,
+    // avec son fichier de stockage parti, serait pire que pas de suppression.
+    for (const exercise of exercises) {
+      const attempt = await ctx.db
+        .query("attempts")
+        .withIndex("by_exerciseId", (q) => q.eq("exerciseId", exercise._id))
+        .first();
+      if (attempt) {
+        throw new ConvexError(
+          "Impossible de supprimer cet import car des élèves ont déjà travaillé sur ses exercices.",
+        );
+      }
+
+      const explanation = await ctx.db
+        .query("exerciseExplanations")
+        .withIndex("by_exercise", (q) => q.eq("exerciseId", exercise._id))
+        .first();
+      if (explanation) {
+        throw new ConvexError(
+          "Impossible de supprimer cet import car un élève a demandé une explication sur l'un de ses exercices.",
+        );
+      }
+    }
 
     for (const exercise of exercises) {
       await ctx.db.delete(exercise._id);

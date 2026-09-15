@@ -2,6 +2,12 @@ import { query, mutation, internalQuery, internalMutation } from "./_generated/s
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { internal } from "./_generated/api";
+import {
+  checkAccess,
+  requireAccess,
+  blockedStudent,
+  studentIdsTaughtBy,
+} from "./access";
 
 /**
  * Compute where the current student should resume in a given topic session.
@@ -22,6 +28,11 @@ export const getResumeIndex = query({
       .withIndex("by_userId", (q) => q.eq("userId", userId as string))
       .unique();
     if (!profile) return null;
+
+    // Paywall (spec §5.4) — une requête ne lève jamais : elle retourne la
+    // même valeur vide que pour un profil invalide.
+    const access = await checkAccess(ctx, profile);
+    if (!access.ok) return null;
 
     const exercises = await ctx.db
       .query("exercises")
@@ -58,15 +69,29 @@ export const getResumeIndex = query({
 });
 
 /**
- * Internal query used by the AI verification action (convex/attemptsVerify.ts).
- * Returns the submitted answer + the exercise's prompt and accepted answers
- * so the AI can compare them semantically.
+ * Le contexte d'une tentative pour la vérification IA
+ * (`convex/attemptsVerify.ts`) : la réponse soumise, l'énoncé et les réponses
+ * acceptées, de quoi comparer sémantiquement.
+ *
+ * `studentId` N'EST PAS DÉCORATIF — C'EST LA PREUVE DE PROPRIÉTÉ, et elle est
+ * exigée ICI plutôt que chez l'appelant (§D16). L'action qui appelle ne connaît
+ * qu'un `attemptId` reçu du client ; si le contrôle vivait là-haut, le prochain
+ * appelant pourrait l'oublier, et rien ne le lui rappellerait. En le posant
+ * dans la requête, une tentative qui n'appartient pas à `studentId` est
+ * INTROUVABLE — indistinguable d'une tentative inexistante, donc sans oracle.
+ *
+ * Ce refus arrive AVANT l'appel IA de l'action, ce qui ferme aussi la dépense :
+ * lire les erreurs d'un pair coûtait des jetons facturés à l'appelant.
  */
 export const getAttemptContextForVerification = internalQuery({
-  args: { attemptId: v.id("attempts") },
-  handler: async (ctx, { attemptId }) => {
+  args: {
+    attemptId: v.id("attempts"),
+    studentId: v.id("profiles"),
+  },
+  handler: async (ctx, { attemptId, studentId }) => {
     const attempt = await ctx.db.get(attemptId);
     if (!attempt) return null;
+    if (attempt.studentId !== studentId) return null;
     const exercise = await ctx.db.get(attempt.exerciseId);
     if (!exercise) return null;
     return {
@@ -192,13 +217,55 @@ function verifyShortAnswer(
 export const submit = mutation({
   args: {
     exerciseId: v.id("exercises"),
-    studentId: v.id("profiles"),
     submittedAnswer: v.string(),
     attemptNumber: v.number(),
     hintsUsedCount: v.number(),
     timeSpentMs: v.number(),
   },
   handler: async (ctx, args) => {
+    // L'ÉLÈVE EST L'APPELANT, ET IL N'EST PLUS UN ARGUMENT.
+    //
+    // Cette mutation contrôlait le droit d'accès de l'appelant puis écrivait
+    // quatre fois sous `args.studentId` : la tentative, la progression du
+    // sujet, sa création, et la planification des badges. N'importe quel
+    // compte authentifié couvert par un abonnement pouvait donc fabriquer des
+    // tentatives et faire décerner des badges AU NOM D'UN AUTRE — le garde
+    // regardait une personne, les écritures en désignaient une autre. Un droit
+    // vérifié sur l'appelant n'autorise que ce que l'appelant fait pour
+    // lui-même ; dès qu'une écriture nomme quelqu'un d'autre, il faut soit une
+    // autorisation sur CETTE personne, soit cesser de la nommer. On cesse : le
+    // profil vient de la session et l'argument disparaît, ce qui rend
+    // l'usurpation INEXPRIMABLE plutôt que refusée.
+    //
+    // Paywall (spec §5.4) — une mutation lève, l'appelant attrape. C'EST LUI
+    // QUI ÉCARTE LES NON-ÉLÈVES, et non la garde de rôle plus bas :
+    // `decideAccess` répond `not_student` dès que le rôle n'est pas `student`
+    // (`accessRules.ts`), ce que `loadAccessInput` lui garantit en ne
+    // remplissant que `role` pour les autres. Un professeur qui essaie un
+    // exercice ne produisait donc déjà aucune trace avant ce correctif — ce
+    // que la garde ci-dessous ne change pas.
+    const callerUserId = await getAuthUserId(ctx);
+    if (!callerUserId) throw new Error("Non authentifié");
+    const callerProfile = await ctx.db
+      .query("profiles")
+      .withIndex("by_userId", (q) => q.eq("userId", callerUserId as string))
+      .unique();
+    if (!callerProfile) throw new Error("Profil introuvable");
+    await requireAccess(ctx, callerProfile);
+
+    // CEINTURE ET BRETELLES, ET APRÈS LE PAYWALL À DESSEIN. Cette garde est
+    // redondante aujourd'hui ; elle ne mord que si `decideAccess` cessait un
+    // jour de refuser les non-élèves. La placer AVANT `requireAccess`
+    // remplacerait le `ConvexError({ code: "ACCESS_DENIED" })` — que le client
+    // sait rendre (`lib/accessCopy.ts`) — par une `Error` nue qu'il ne sait
+    // pas lire : une garde morte ne doit pas dégrader le refus vivant.
+    // `attempts` et `studentTopicProgress` alimentent bulletins et badges, et
+    // rien en aval ne saurait écarter une ligne portant un profil d'adulte.
+    if (callerProfile.role !== "student") {
+      throw new Error("Profil élève introuvable");
+    }
+    const studentId = callerProfile._id;
+
     const exercise = await ctx.db.get(args.exerciseId);
     if (!exercise) {
       throw new Error("Exercice introuvable");
@@ -228,7 +295,7 @@ export const submit = mutation({
 
     // Create the attempt record
     const attemptId = await ctx.db.insert("attempts", {
-      studentId: args.studentId,
+      studentId,
       exerciseId: args.exerciseId,
       submittedAnswer: args.submittedAnswer,
       isCorrect,
@@ -248,7 +315,7 @@ export const submit = mutation({
       const progress = await ctx.db
         .query("studentTopicProgress")
         .withIndex("by_studentId_topicId", (q) =>
-          q.eq("studentId", args.studentId).eq("topicId", exercise.topicId),
+          q.eq("studentId", studentId).eq("topicId", exercise.topicId),
         )
         .first();
 
@@ -260,7 +327,7 @@ export const submit = mutation({
         });
       } else {
         await ctx.db.insert("studentTopicProgress", {
-          studentId: args.studentId,
+          studentId,
           topicId: exercise.topicId,
           completedExercises: 1,
           correctExercises: 1,
@@ -271,7 +338,7 @@ export const submit = mutation({
 
       // Check and award badges in real-time
       await ctx.scheduler.runAfter(0, internal.badges.checkAndAward, {
-        studentId: args.studentId,
+        studentId,
       });
     }
 
@@ -314,10 +381,20 @@ export const submit = mutation({
 export const markAttemptCorrectByAI = internalMutation({
   args: {
     attemptId: v.id("attempts"),
+    studentId: v.id("profiles"),
   },
-  handler: async (ctx, { attemptId }) => {
+  handler: async (ctx, { attemptId, studentId }) => {
+    // MÊME PREUVE DE PROPRIÉTÉ QUE LA REQUÊTE DE CONTEXTE, et redondante avec
+    // elle aujourd'hui puisque l'action ne peut plus atteindre cette ligne pour
+    // une tentative étrangère. Elle reste parce que c'est ICI qu'on ÉCRIT : un
+    // `patch` sur la tentative d'un élève et sur sa progression ne doit pas
+    // dépendre de la vigilance d'un appelant qui n'existe pas encore. Une
+    // mutation interne n'est protégée que de l'extérieur, pas de ses pairs.
     const attempt = await ctx.db.get(attemptId);
     if (!attempt) throw new Error("Tentative introuvable");
+    if (attempt.studentId !== studentId) {
+      throw new Error("Tentative introuvable");
+    }
     if (attempt.isCorrect) return; // already correct, nothing to do
 
     await ctx.db.patch(attemptId, { isCorrect: true });
@@ -355,12 +432,33 @@ export const markAttemptCorrectByAI = internalMutation({
 // Queries
 // ---------------------------------------------------------------------------
 
-export const getAttemptsForExercise = query({
+/**
+ * Tentatives d'un élève sur un exercice — INTERNE, aucun appelant.
+ *
+ * Cette lecture quitte la surface publique : elle rendait les tentatives de
+ * n'importe quel `Id<"profiles">` — réponses soumises comprises — sans
+ * vérifier l'appelant. Le paywall ci-dessous contrôle le droit d'accès de
+ * l'appelant, jamais son droit sur CET élève-là.
+ *
+ * Pour la rouvrir au public, il manque exactement cela : une vérification du
+ * lien entre l'appelant et l'élève visé, en plus du paywall. Le corps est
+ * inchangé.
+ */
+export const getAttemptsForExercise = internalQuery({
   args: {
     studentId: v.id("profiles"),
     exerciseId: v.id("exercises"),
   },
   handler: async (ctx, args) => {
+    // Paywall (spec §5.4) — cette requête ne résout aucun profil (elle
+    // prend `studentId` en argument), donc pas de "juste après la
+    // résolution du profil" applicable ici. blockedStudent(ctx) résout le
+    // profil de L'APPELANT et ne bloque que s'il s'agit d'un élève sans
+    // droit valide — jamais un adulte, jamais un visiteur non authentifié.
+    // Une requête ne lève jamais : même valeur vide que le .take(100)
+    // ci-dessous retournerait pour un résultat sans lignes.
+    if (await blockedStudent(ctx)) return [];
+
     return await ctx.db
       .query("attempts")
       .withIndex("by_studentId_exerciseId", (q) =>
@@ -371,8 +469,12 @@ export const getAttemptsForExercise = query({
 });
 
 /**
- * List recent attempts from students linked to the current teacher.
- * Used for teacher dashboard recent activity.
+ * Tentatives récentes des élèves du professeur de la SESSION.
+ *
+ * Alimente l'activité récente du tableau de bord enseignant. Élèves résolus
+ * par ses classes (`access.studentIdsTaughtBy`) et non plus par un lien
+ * `studentGuardians` de relation "professeur", que rien ne crée. Garde de
+ * rôle, `limit` et forme de retour inchangés.
  */
 export const listByTeacherStudents = query({
   args: { limit: v.optional(v.number()) },
@@ -387,14 +489,7 @@ export const listByTeacherStudents = query({
     if (!profile) return [];
     if (profile.role !== "professeur" && profile.role !== "admin") return [];
 
-    const links = await ctx.db
-      .query("studentGuardians")
-      .withIndex("by_guardianId", (q) => q.eq("guardianId", profile._id))
-      .take(200);
-
-    const studentIds = links
-      .filter((l) => l.relation === "professeur")
-      .map((l) => l.studentId);
+    const studentIds = await studentIdsTaughtBy(ctx, profile._id);
 
     if (studentIds.length === 0) return [];
 
@@ -450,12 +545,25 @@ export const listByTeacherStudents = query({
   },
 });
 
-export const getProgressForTopic = query({
+/**
+ * Progression d'un élève sur un chapitre — INTERNE, aucun appelant.
+ *
+ * Même raison que `getAttemptsForExercise` ci-dessus : elle rendait la ligne
+ * de progression de n'importe quel `Id<"profiles">` sans vérifier l'appelant,
+ * et le paywall ne dit rien du droit de l'appelant sur cet élève. Une version
+ * publique devrait vérifier ce lien en plus du paywall. Le corps est inchangé.
+ */
+export const getProgressForTopic = internalQuery({
   args: {
     studentId: v.id("profiles"),
     topicId: v.id("topics"),
   },
   handler: async (ctx, args) => {
+    // Paywall (spec §5.4) — même raisonnement que getAttemptsForExercise
+    // ci-dessus : pas de profil résolu ici, donc blockedStudent(ctx) sur
+    // l'appelant. Valeur vide alignée sur le .first() ci-dessous : null.
+    if (await blockedStudent(ctx)) return null;
+
     return await ctx.db
       .query("studentTopicProgress")
       .withIndex("by_studentId_topicId", (q) =>

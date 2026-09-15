@@ -1,27 +1,73 @@
 "use node";
 
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { action } from "./_generated/server";
 import { internal } from "./_generated/api";
-import OpenAI from "openai";
 import { getAuthUserId } from "@convex-dev/auth/server";
+
+/** Message servi quand l'IA ne peut pas expliquer. Jamais de page vide. */
+const FALLBACK_EXPLANATION =
+  "Pas d'inquiétude ! Regarde bien la bonne réponse, essaie de comprendre pourquoi, et tu réussiras la prochaine fois.";
 
 /**
  * Public action: generate a kid-friendly explanation when a student has
- * exhausted their attempts on an exercise. Uses OpenAI to produce a
- * personalised, pedagogical explanation based on the wrong answers given.
+ * exhausted their attempts on an exercise. Passe par la passerelle IA
+ * (`explain_mistake`) pour produire une explication pédagogique à partir des
+ * réponses fausses.
  *
  * Returns { explanation, correctAnswer }.
+ *
+ * ## Pourquoi passer par la passerelle
+ *
+ * Cette action appelait OpenAI en direct : hors plafond et hors mesure. Elle
+ * est moins fréquente que la vérification (cinq tentatives ratées la
+ * déclenchent) mais plafonne à 800 jetons de sortie, donc elle coûte.
+ *
+ * Un refus budgétaire ne laisse pas l'enfant sans rien : la bonne réponse est
+ * déjà révélée par `attempts.submit` au bout des cinq essais, et on renvoie un
+ * message d'encouragement au lieu de lever. C'est le même repli que le client
+ * appliquait déjà dans son `.catch` quand l'appel OpenAI échouait — on le
+ * remonte simplement côté serveur, où la bonne réponse est disponible.
  */
 export const generateExplanation = action({
   args: {
     exerciseId: v.id("exercises"),
-    studentId: v.id("profiles"),
   },
-  handler: async (ctx, { exerciseId, studentId }) => {
+  handler: async (ctx, { exerciseId }) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) {
       throw new Error("Non authentifié");
+    }
+
+    // L'ÉLÈVE EST L'APPELANT, ET IL N'EST PLUS UN ARGUMENT (§D16).
+    //
+    // Cette action contrôlait le droit de L'APPELANT puis lisait les tentatives
+    // de `args.studentId` : un élève couvert obtenait donc une explication
+    // fabriquée à partir des MAUVAISES RÉPONSES D'UN AUTRE, et la dépense IA
+    // était facturée à son propre compte. Le garde regardait une personne, la
+    // lecture en désignait une autre. L'argument a DISPARU plutôt que d'être
+    // contrôlé : l'usurpation devient inexprimable, non refusée — même
+    // correctif qu'`attempts.submit`.
+    //
+    // Paywall (spec §5.4) — contrôle le droit de l'appelant.
+    // Avant toute lecture de contexte et tout appel IA (cette action appelle
+    // OpenAI directement, sans passer par aiGateway.generate — il n'y a donc
+    // pas de verrou de tâche 4 en aval ici). Même motif que
+    // paliers.index.getBucket : résoudre le profil de l'appelant via la
+    // requête interne existante, puis interroger getAccessStateForProfile
+    // (tâche 3). Une action n'a pas de ctx.db.
+    const callerProfile = await ctx.runQuery(
+      internal.paliers.index.getProfileByUserId,
+      { userId: userId as string },
+    );
+    if (!callerProfile) {
+      throw new Error("Profil introuvable");
+    }
+    const access = await ctx.runQuery(internal.access.getAccessStateForProfile, {
+      profileId: callerProfile._id,
+    });
+    if (!access.ok) {
+      throw new ConvexError({ code: "ACCESS_DENIED", reason: access.reason });
     }
 
     type AttemptsData = {
@@ -36,7 +82,7 @@ export const generateExplanation = action({
 
     const data = (await ctx.runQuery(
       internal.attempts.getExerciseAndAttempts,
-      { exerciseId, studentId },
+      { exerciseId, studentId: callerProfile._id },
     )) as AttemptsData | null;
     if (!data) {
       throw new Error("Exercice introuvable");
@@ -45,8 +91,6 @@ export const generateExplanation = action({
     const wrongAnswers = data.attempts
       .filter((a: { isCorrect: boolean }) => !a.isCorrect)
       .map((a: { submittedAnswer: string }) => a.submittedAnswer);
-
-    const openai = new OpenAI();
 
     const prompt = `Un élève de CE2-CM2 (8-11 ans) n'a pas réussi cet exercice après plusieurs essais.
 
@@ -65,27 +109,28 @@ ${wrongAnswers.map((a, i) => `${i + 1}. "${a}"`).join("\n") || "(aucune réponse
 
 N'utilise pas de jargon technique. Écris comme un professeur patient qui parle directement à l'enfant. Tutoie l'enfant.`;
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      store: false,
-      messages: [
-        {
-          role: "system",
-          content:
-            "Tu es un professeur bienveillant qui aide les élèves de primaire francophone (Sénégal/France).",
-        },
-        { role: "user", content: prompt },
-      ],
-      max_tokens: 350,
-      temperature: 0.7,
+    // `userId` porte le profil de L'APPELANT, pas `args.studentId` : c'est son
+    // droit qu'on a vérifié plus haut, et c'est lui qui déclenche la dépense.
+    // L'élève concerné reste traçable via `metadata`.
+    const gen: {
+      ok: boolean;
+      result?: unknown;
+      traceId: string;
+      reason?: string;
+    } = await ctx.runAction(internal.aiGateway.index.generate, {
+      purpose: "explain_mistake",
+      prompt,
+      systemPrompt:
+        "Tu es un professeur bienveillant qui aide les élèves de primaire francophone (Sénégal/France).",
+      userId: callerProfile._id,
+      metadata: { exerciseId, studentId: callerProfile._id, kind: "explain_mistake" },
     });
 
-    const explanation =
-      completion.choices[0]?.message?.content?.trim() ??
-      "Voici la bonne réponse. Essaie de comprendre pourquoi et tu réussiras la prochaine fois !";
+    const generated =
+      gen.ok && typeof gen.result === "string" ? gen.result.trim() : "";
 
     return {
-      explanation,
+      explanation: generated.length > 0 ? generated : FALLBACK_EXPLANATION,
       correctAnswer: data.exercise.answerKey,
     };
   },

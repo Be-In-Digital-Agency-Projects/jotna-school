@@ -5,6 +5,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { useState } from "react";
 import Link from "next/link";
+import { refusalMessage } from "@/lib/refusalMessage";
 import {
   Pencil,
   Trash2,
@@ -37,6 +38,7 @@ export default function PublishedPage() {
   const removeExercise = useMutation(api.exercises.remove);
 
   const [filterTopicId, setFilterTopicId] = useState<string>("all");
+  const [error, setError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<Id<"exercises"> | null>(null);
   const [unpublishingId, setUnpublishingId] = useState<Id<"exercises"> | null>(
     null,
@@ -66,6 +68,15 @@ export default function PublishedPage() {
           </p>
         </div>
       </div>
+
+      {error && (
+        <div
+          role="alert"
+          className="sticky top-2 z-20 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700 shadow-sm"
+        >
+          {error}
+        </div>
+      )}
 
       {/* Filter bar */}
       {topicIds.length > 1 && (
@@ -153,8 +164,11 @@ export default function PublishedPage() {
                       <button
                         onClick={async () => {
                           setUnpublishingId(exercise._id);
+                          setError(null);
                           try {
                             await unpublishExercise({ id: exercise._id });
+                          } catch (err) {
+                            setError(refusalMessage(err, "Erreur lors de la dépublication"));
                           } finally {
                             setUnpublishingId(null);
                           }
@@ -178,8 +192,11 @@ export default function PublishedPage() {
                           )
                             return;
                           setDeletingId(exercise._id);
+                          setError(null);
                           try {
                             await removeExercise({ id: exercise._id });
+                          } catch (err) {
+                            setError(refusalMessage(err, "Erreur lors de la suppression"));
                           } finally {
                             setDeletingId(null);
                           }

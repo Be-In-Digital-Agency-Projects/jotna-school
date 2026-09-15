@@ -25,6 +25,10 @@ export const kidMessages = {
   jenVeuxEncoreLimit:
     "Tu as déjà fait 3 séries d'exos en bonus aujourd'hui ! Reviens demain pour en faire d'autres 🌟",
 
+  // Accès non ouvert par l'école (spec §5.8)
+  accessNotOpen:
+    "Ton espace n'est pas encore ouvert 🌱 Parle-en à ton maître ou à ta maîtresse, ils vont s'en occuper !",
+
   // 3 alternatives sur cap regen atteint (Decision 83)
   capRegenReached: {
     intro: "On t'a vu galérer 💪. Voici ce que tu peux faire :",

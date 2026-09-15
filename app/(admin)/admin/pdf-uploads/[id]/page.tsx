@@ -3,6 +3,7 @@
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { type Id } from "@/convex/_generated/dataModel";
+import { refusalMessage } from "@/lib/refusalMessage";
 import { use, useState } from "react";
 import Link from "next/link";
 import {
@@ -61,7 +62,7 @@ export default function PdfUploadDetailPage({
   const upload = useQuery(api.pdfUploads.getById, {
     id: id as Id<"pdfUploads">,
   });
-  const createUpload = useMutation(api.pdfUploads.create);
+  const retryExtraction = useMutation(api.pdfUploads.retryExtraction);
 
   const [isRetrying, setIsRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
@@ -115,19 +116,11 @@ export default function PdfUploadDetailPage({
     setIsRetrying(true);
     setRetryError(null);
     try {
-      // Re-create with the same metadata to trigger extraction again
-      await createUpload({
-        adminId: upload.adminId,
-        storageId: upload.storageId,
-        originalFilename: upload.originalFilename,
-        mimeType: upload.mimeType,
-        size: upload.size,
-        subjectId: upload.subjectId,
-      });
+      // Relance sur la ligne EXISTANTE, et non une copie : l'auteur reste
+      // celui qui a déposé le PDF, pas celui qui clique ici.
+      await retryExtraction({ id: id as Id<"pdfUploads"> });
     } catch (err) {
-      setRetryError(
-        err instanceof Error ? err.message : "Erreur lors de la relance.",
-      );
+      setRetryError(refusalMessage(err, "Erreur lors de la relance."));
     } finally {
       setIsRetrying(false);
     }

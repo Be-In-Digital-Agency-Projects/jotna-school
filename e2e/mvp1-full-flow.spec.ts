@@ -7,7 +7,12 @@ import { test, expect } from "@playwright/test";
  *
  * Coût IA : ~$0.05 par run (1 génération palier_base via OpenAI).
  *
- * Pre-requisite: `npx convex run testSeeds:seedMvp1` already executed.
+ * Pré-requis : la matière et les thématiques MVP-1 doivent déjà exister dans
+ * le déploiement visé. `testSeeds:seedMvp1` ne les sème plus sur commande —
+ * elle est passée INTERNE, parce qu'elle écrivait le curriculum sans la moindre
+ * garde là où `subjects.create` et `topics.create` exigent un administrateur.
+ * Les créer par l'interface : /admin/subjects pour la matière,
+ * /admin/subjects/[id] pour les thématiques.
  */
 
 test.describe("MVP-1 — Full E2E with auth", () => {

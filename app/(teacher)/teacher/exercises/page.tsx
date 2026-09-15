@@ -5,6 +5,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import Link from "next/link";
 import { useState } from "react";
+import { refusalMessage } from "@/lib/refusalMessage";
 import {
   Pencil,
   FileText,
@@ -63,8 +64,10 @@ export default function TeacherExercisesPage() {
     setDeletingTopic(topicId);
     try {
       await removeTopic({ id: topicId as Id<"topics"> });
-    } catch {
-      window.alert("Impossible de supprimer cette thématique.");
+    } catch (err) {
+      window.alert(
+        refusalMessage(err, "Impossible de supprimer cette thématique."),
+      );
     } finally {
       setDeletingTopic(null);
     }
@@ -202,25 +205,35 @@ export default function TeacherExercisesPage() {
                                 {topic.items.length !== 1 ? "s" : ""}
                               </span>
                             </button>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                handleDeleteTopic(
-                                  topicId,
-                                  topic.topicName,
-                                  topic.items.length,
-                                )
-                              }
-                              disabled={deletingTopic === topicId}
-                              title="Supprimer ce thème et ses exercices"
-                              className="rounded p-1 text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
-                            >
-                              {deletingTopic === topicId ? (
-                                <Loader2 className="h-4 w-4 animate-spin" />
-                              ) : (
-                                <Trash2 className="h-4 w-4" />
-                              )}
-                            </button>
+                            {/*
+                              Réservé à l'administrateur, comme le serveur :
+                              `topics.removeWithExercises` exige `callerIsAdmin`
+                              depuis qu'elle a cessé d'être la seule écriture du
+                              curriculum à se contenter de `callerIsStaff`. Le
+                              bouton suit la règle plutôt que de la faire
+                              découvrir par un refus.
+                            */}
+                            {profile.role === "admin" && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleDeleteTopic(
+                                    topicId,
+                                    topic.topicName,
+                                    topic.items.length,
+                                  )
+                                }
+                                disabled={deletingTopic === topicId}
+                                title="Supprimer ce thème et ses exercices"
+                                className="rounded p-1 text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
+                              >
+                                {deletingTopic === topicId ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <Trash2 className="h-4 w-4" />
+                                )}
+                              </button>
+                            )}
                           </div>
 
                           {isTopicOpen && (

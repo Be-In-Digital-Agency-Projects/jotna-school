@@ -9,12 +9,62 @@
  * Pure module — no Convex imports. Can run in actions or queries.
  */
 
+import {
+  APIConnectionError,
+  APIError,
+  APIUserAbortError,
+} from "openai";
+
+/**
+ * Faut-il réessayer cet échec ?
+ *
+ * Le prédicat précédent cherchait `/timeout|ECONNRESET|ETIMEDOUT|fetch failed|5\d{2}/`
+ * dans le TEXTE du message. `5\d{2}` visait un code HTTP 5xx, mais trois chiffres
+ * commençant par 5 se trouvent n'importe où — notamment dans la position d'octet
+ * d'un `JSON.parse` raté, que la passerelle relance sous la forme
+ * « Model emitted invalid JSON: ... at position 506 ». Vérifié en exécution :
+ * position 506 réessayait, 106 et 706 non. Le sort d'une génération à 6 000
+ * jetons se jouait donc sur l'endroit où la réponse se faisait couper.
+ *
+ * La règle est désormais structurelle, et elle tient en une phrase : ON NE PAIE
+ * JAMAIS DEUX FOIS POUR UNE RÉPONSE DÉJÀ REÇUE.
+ *
+ *   - Coupure réseau ou délai dépassé (`APIConnectionError`, dont
+ *     `APIConnectionTimeoutError`) : rien n'est arrivé, donc rien n'est facturé.
+ *     Réessai.
+ *   - 5xx, et 429 : la requête est rejetée par le serveur sans production de
+ *     jetons. Réessai.
+ *   - Abandon volontaire : non.
+ *   - TOUT LE RESTE, dont le JSON invalide : la réponse est arrivée et elle est
+ *     facturée. Un réessai doublerait un coût connu sans rien garantir — à
+ *     `temperature` non nulle c'est un nouveau tirage, et si la cause est une
+ *     troncature sur `maxOutputTokens` le second tirage tronquera pareil. Le
+ *     bon remède est le prompt ou le plafond de jetons, pas une seconde
+ *     facture. Depuis que la dépense est comptée même en échec, un JSON
+ *     invalide fréquent se voit dans l'agrégat mensuel : c'est là qu'il faut
+ *     le lire, et non le masquer en payant deux fois.
+ *
+ * Décision réversible : si la fiabilité prime un jour sur le coût, c'est ici
+ * qu'on ajoute une branche, explicitement, et non par un motif de texte.
+ */
+export function isRetryableFailure(err: unknown): boolean {
+  if (err instanceof APIUserAbortError) return false;
+  if (err instanceof APIConnectionError) return true;
+  if (err instanceof APIError) {
+    const { status } = err;
+    if (typeof status !== "number") return false;
+    return status === 429 || (status >= 500 && status < 600);
+  }
+  return false;
+}
+
 export type AiPurpose =
   | "palier_base"
   | "palier_personalized"
   | "verify_short_answer"
   | "explain_mistake"
-  | "verify_math";
+  | "verify_math"
+  | "pdf_extract";
 
 export interface PurposeConfig {
   /** Default model id (when no override + no economy downgrade applies). */
@@ -36,6 +86,13 @@ export interface PurposeConfig {
 const GPT_4O_MINI: Pick<PurposeConfig, "costPer1MInputUsd" | "costPer1MOutputUsd"> = {
   costPer1MInputUsd: 0.15,
   costPer1MOutputUsd: 0.6,
+};
+
+// gpt-4o list price (Sept 2025): $2.50 / 1M input, $10.00 / 1M output — soit
+// ~16x le mini. Seule l'extraction PDF l'utilise.
+const GPT_4O: Pick<PurposeConfig, "costPer1MInputUsd" | "costPer1MOutputUsd"> = {
+  costPer1MInputUsd: 2.5,
+  costPer1MOutputUsd: 10,
 };
 
 const REGISTRY: Record<AiPurpose, PurposeConfig> = {
@@ -79,6 +136,29 @@ const REGISTRY: Record<AiPurpose, PurposeConfig> = {
     retries: 1,
     ...GPT_4O_MINI,
   },
+  // Extraction d'exercices depuis un PDF (convex/pdfUploadsExtract.ts).
+  //
+  // Ce poste ne passe PAS par `generate` : il appelle l'API Responses avec un
+  // fichier en base64 et une sortie structurée, forme que la passerelle ne
+  // connaît pas. Il est ici pour deux raisons seulement : donner à
+  // `estimateCostUsd` le tarif `gpt-4o`, et servir de source unique pour
+  // l'identifiant du modèle, afin que le prix et l'appel ne puissent pas
+  // diverger. Les autres champs décrivent l'appel réel mais ne sont pas
+  // consommés aujourd'hui.
+  //
+  // Pour le router vraiment, il faudrait que `generate` accepte un mode
+  // « fichier » (entrée `input_file` + `text.format.json_schema` de l'API
+  // Responses) en plus de son mode chat, et que `resolveModel` soit contraint
+  // aux modèles qui supportent les sorties structurées — sans quoi un
+  // `modelOverrides` administrateur casserait l'extraction en silence.
+  pdf_extract: {
+    defaultModel: "gpt-4o",
+    maxOutputTokens: 16_000,
+    temperature: 0.2,
+    requestTimeoutMs: 180_000,
+    retries: 0,
+    ...GPT_4O,
+  },
 };
 
 export function getPurposeConfig(purpose: AiPurpose): PurposeConfig {
@@ -113,6 +193,21 @@ export function estimateCostUsd(
     (inputTokens / 1_000_000) * cfg.costPer1MInputUsd +
     (outputTokens / 1_000_000) * cfg.costPer1MOutputUsd
   );
+}
+
+/**
+ * Estimation grossière du nombre de jetons d'un texte, ~4 caractères par
+ * jeton (ordre de grandeur usuel des tokenizers OpenAI sur du français).
+ *
+ * Sert uniquement de filet quand OpenAI a répondu — donc facturé — mais que
+ * le bloc `usage` manque : le type SDK le déclare optionnel. Pour un
+ * garde-fou de dépense, une estimation haute vaut mieux qu'un zéro faux, qui
+ * rendrait la dépense invisible au plafond. Jamais utilisée quand `usage` est
+ * présent.
+ */
+export function approximateTokenCount(text: string): number {
+  if (text.length === 0) return 0;
+  return Math.ceil(text.length / 4);
 }
 
 export const ALL_PURPOSES: AiPurpose[] = Object.keys(REGISTRY) as AiPurpose[];

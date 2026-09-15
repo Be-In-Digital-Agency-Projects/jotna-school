@@ -1,22 +1,59 @@
 /**
- * Test seeds — MVP-1 minimum data set for local + Playwright testing.
+ * Jeu de données MVP-1 pour le développement local et les tests Playwright —
+ * MODULE INTERNE.
  *
- * Idempotent. Safe to run multiple times. Use:
- *   npx convex run testSeeds:seedMvp1
+ * SES DEUX FONCTIONS ÉTAIENT PUBLIQUES ET NE DEMANDAIENT RIEN. Un module
+ * d'ensemencement n'a pas d'écran, donc personne ne relisait sa surface ; il
+ * était pourtant exposé au réseau public au même titre que le reste de l'API.
  *
- * Creates :
- *   - Subject "Mathématiques" (if not already there)
- *   - Topic "Fractions" with class CE2
- *   - Topic "Multiplication" with class CM1
+ * `debugStatus` était le plus grave, et c'était une `query` — donc sans même
+ * l'obstacle d'une écriture. Elle faisait `users.collect()` et rendait les NOMS
+ * et ADRESSES DE COURRIEL d'utilisateurs réels (`latestUsers`), dans une
+ * application destinée à des enfants, dont le schéma cite la loi sénégalaise
+ * 2008-12 sur les données personnelles. Un appelant NON AUTHENTIFIÉ connaissant
+ * l'URL du déploiement les obtenait d'un seul appel.
  *
- * Does NOT create users — register via /register UI.
+ * `seedMvp1` insérait une matière, deux thématiques et le singleton `settings`
+ * sans aucun contrôle — alors que `subjects.create` et `topics.create`, qui
+ * écrivent exactement les mêmes tables, exigent toutes deux `callerIsAdmin`.
+ * Une garde de rôle posée ici n'aurait pas convenu pour autant : l'appelant
+ * légitime est une personne devant un terminal, sans session ni profil, donc
+ * l'exigence d'un `admin` aurait rendu la fonction inutilisable par le seul
+ * chemin qui la justifie. C'est le raisonnement déjà tenu pour
+ * `subjects.seedDefaults` et `resetContent.wipeAll` : un outil de développement
+ * ne se garde pas, il se retire de la surface.
+ *
+ * CONSÉQUENCE ASSUMÉE, IDENTIQUE À CELLE DE SES DEUX PRÉCÉDENTS : plus aucun
+ * appelant, et une fonction interne ne s'appelle que depuis une autre fonction
+ * Convex. Tant que personne ne les câble, elles ne s'exécutent pas.
+ *
+ * TROIS SPECS PLAYWRIGHT ANNONÇAIENT `seedMvp1` COMME PRÉ-REQUIS
+ * (`e2e/mvp1-full-flow`, `mvp1-real-topic`, `mvp1-smoke`). Aucune n'est jouée
+ * par la CI — `.github/workflows/ci.yml` ne lance pas Playwright — donc ce
+ * changement ne casse aucune marche automatique ; il déplace un geste manuel.
+ * Le chemin de remplacement est l'interface d'administration, qui écrit ces
+ * mêmes tables et existe : `/admin/subjects` crée la matière,
+ * `/admin/subjects/[id]` les thématiques. Aucune ligne de commande n'est
+ * proposée ici en échange : les consignes Convex de ce dépôt affirment qu'une
+ * fonction interne « ne peut être appelée que par une autre fonction Convex »
+ * (`convex/_generated/ai/guidelines.md`), et aucun déploiement n'est joignable
+ * depuis cet environnement pour vérifier ce que l'outil en ligne fait vraiment.
+ * Mieux vaut pas de commande qu'une commande que le prochain lecteur devra
+ * vérifier lui-même — c'est déjà pour cela que la ligne d'usage de `wipeAll` a
+ * été retirée plutôt que réécrite.
+ *
+ * Idempotent : relançable sans dupliquer. Ne crée AUCUN utilisateur — les
+ * comptes se créent par /register.
  */
 
-import { mutation, query } from "./_generated/server";
+import { internalMutation, internalQuery } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 
-/** Debug query — list recent aiUsage rows + paliers state + users. */
-export const debugStatus = query({
+/**
+ * État du déploiement — aiUsage récents, paliers, compteurs, trois derniers
+ * comptes. INTERNE : elle nomme des personnes réelles, voir l'en-tête.
+ */
+export const debugStatus = internalQuery({
   args: {},
   handler: async (ctx) => {
     const aiUsage = await ctx.db.query("aiUsage").order("desc").take(10);
@@ -55,7 +92,7 @@ export const debugStatus = query({
   },
 });
 
-export const seedMvp1 = mutation({
+export const seedMvp1 = internalMutation({
   args: {},
   handler: async (ctx) => {
     // 1. Subject Mathématiques

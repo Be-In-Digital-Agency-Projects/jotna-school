@@ -5,6 +5,7 @@ import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { use } from "react";
 import Link from "next/link";
+import { refusalMessage } from "@/lib/refusalMessage";
 import {
   ArrowLeft,
   Pencil,
@@ -68,7 +69,7 @@ export default function SubjectDetailPage({
       setEditingSubject(false);
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Erreur lors de la mise à jour",
+        refusalMessage(err, "Erreur lors de la mise à jour"),
       );
     } finally {
       setIsSubmitting(false);
@@ -92,7 +93,7 @@ export default function SubjectDetailPage({
       setShowTopicForm(false);
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Erreur lors de la création",
+        refusalMessage(err, "Erreur lors de la création"),
       );
     } finally {
       setIsSubmitting(false);
@@ -106,7 +107,7 @@ export default function SubjectDetailPage({
       setDeleteConfirm(null);
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Erreur lors de la suppression",
+        refusalMessage(err, "Erreur lors de la suppression"),
       );
       setDeleteConfirm(null);
     }

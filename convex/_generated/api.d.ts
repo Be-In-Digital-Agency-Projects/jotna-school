@@ -9,6 +9,8 @@
  */
 
 import type * as ResendOTPPasswordReset from "../ResendOTPPasswordReset.js";
+import type * as access from "../access.js";
+import type * as accessRules from "../accessRules.js";
 import type * as aiGateway_budget from "../aiGateway/budget.js";
 import type * as aiGateway_db from "../aiGateway/db.js";
 import type * as aiGateway_factCheck from "../aiGateway/factCheck.js";
@@ -26,6 +28,7 @@ import type * as explainMistake from "../explainMistake.js";
 import type * as http from "../http.js";
 import type * as linkRequests from "../linkRequests.js";
 import type * as linkRequestsEmail from "../linkRequestsEmail.js";
+import type * as linkRules from "../linkRules.js";
 import type * as migrations from "../migrations.js";
 import type * as palierAttempts from "../palierAttempts.js";
 import type * as paliers_index from "../paliers/index.js";
@@ -33,12 +36,14 @@ import type * as paliers_prompts from "../paliers/prompts.js";
 import type * as paliers_scoring from "../paliers/scoring.js";
 import type * as pdfUploads from "../pdfUploads.js";
 import type * as pdfUploadsExtract from "../pdfUploadsExtract.js";
+import type * as pricing from "../pricing.js";
 import type * as profiles from "../profiles.js";
 import type * as progress from "../progress.js";
 import type * as regenNotificationEmail from "../regenNotificationEmail.js";
 import type * as reports from "../reports.js";
 import type * as reportsEmail from "../reportsEmail.js";
 import type * as resetContent from "../resetContent.js";
+import type * as schools from "../schools.js";
 import type * as settings_index from "../settings/index.js";
 import type * as streak from "../streak.js";
 import type * as students from "../students.js";
@@ -54,6 +59,8 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   ResendOTPPasswordReset: typeof ResendOTPPasswordReset;
+  access: typeof access;
+  accessRules: typeof accessRules;
   "aiGateway/budget": typeof aiGateway_budget;
   "aiGateway/db": typeof aiGateway_db;
   "aiGateway/factCheck": typeof aiGateway_factCheck;
@@ -71,6 +78,7 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   linkRequests: typeof linkRequests;
   linkRequestsEmail: typeof linkRequestsEmail;
+  linkRules: typeof linkRules;
   migrations: typeof migrations;
   palierAttempts: typeof palierAttempts;
   "paliers/index": typeof paliers_index;
@@ -78,12 +86,14 @@ declare const fullApi: ApiFromModules<{
   "paliers/scoring": typeof paliers_scoring;
   pdfUploads: typeof pdfUploads;
   pdfUploadsExtract: typeof pdfUploadsExtract;
+  pricing: typeof pricing;
   profiles: typeof profiles;
   progress: typeof progress;
   regenNotificationEmail: typeof regenNotificationEmail;
   reports: typeof reports;
   reportsEmail: typeof reportsEmail;
   resetContent: typeof resetContent;
+  schools: typeof schools;
   "settings/index": typeof settings_index;
   streak: typeof streak;
   students: typeof students;

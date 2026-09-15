@@ -1,9 +1,39 @@
-import { query, mutation } from "./_generated/server";
-import { v } from "convex/values";
+import { query, mutation, internalMutation } from "./_generated/server";
+import { ConvexError, v } from "convex/values";
+import { catalogReadable, callerIsAdmin } from "./access";
+
+// ---------------------------------------------------------------------------
+// Queries — IDENTITÉ ET DROIT D'ACCÈS, en une seule décision.
+//
+// `catalogReadable` (`access.ts`) réunit les deux, et c'est bien DEUX
+// questions qu'il pose, pas une :
+//
+// 1. L'IDENTITÉ. Le paywall seul ne suffit pas : `blockedStudent` rend false
+//    pour un appelant NON authentifié, par conception — il ne doit bloquer ni
+//    un adulte ni un visiteur. Sans exigence de profil, il se contournait en
+//    RETIRANT simplement le jeton de session.
+// 2. Le DROIT D'ACCÈS (paywall, spec §5.4). Lecture partagée avec
+//    l'administration et les professeurs : seul un élève sans droit valide est
+//    bloqué, jamais un adulte.
+//
+// La première ne remplace pas la seconde — un élève impayé a bien un profil.
+// Tous les appelants sont des écrans authentifiés, donc exiger un profil n'en
+// casse aucun.
+//
+// LES DEUX SE POSAIENT EN DEUX APPELS, donc en DEUX résolutions du profil pour
+// chaque abonnement au catalogue — et en deux fois la surface d'invalidation,
+// `profiles.preferences` étant réécrit à chaque série, badge ou réglage de son.
+// Une lecture, deux questions, même réponse qu'avant.
+//
+// Une requête ne lève jamais : même valeur vide que le chemin nominal.
+// ---------------------------------------------------------------------------
 
 export const list = query({
   args: {},
   handler: async (ctx) => {
+    // Identité ET paywall en une lecture — voir `catalogReadable`.
+    if (!(await catalogReadable(ctx))) return [];
+
     const subjects = await ctx.db.query("subjects").take(50);
     return subjects.sort((a, b) => a.order - b.order);
   },
@@ -12,9 +42,39 @@ export const list = query({
 export const getById = query({
   args: { id: v.id("subjects") },
   handler: async (ctx, args) => {
+    // Identité ET paywall en une lecture — voir `catalogReadable`.
+    if (!(await catalogReadable(ctx))) return null;
+
     return await ctx.db.get(args.id);
   },
 });
+
+// ---------------------------------------------------------------------------
+// Mutations — garde de RÔLE, pas garde de paywall.
+//
+// Les écritures ci-dessous créent, modifient et suppriment le curriculum
+// lui-même. Elles n'ont rien à voir avec le droit d'accès d'un élève :
+// `blockedStudent` et `requireAccess` jugent un abonnement, pas la qualité de
+// l'appelant. `admin` seul pour `create`, `update` et `remove` — leurs
+// appelants sont les écrans `app/(admin)/admin/subjects/*`.
+//
+// `seedDefaults` fait exception et n'est PAS gardée ici : elle est interne,
+// donc hors de l'API publique, et un ensemencement n'a pas d'appelant porteur
+// de session à qui demander un rôle. Voir son commentaire.
+//
+// Une mutation peut lever, et le garde est la toute première instruction :
+// rien n'est lu avant d'avoir établi le rôle. Un seul message pour tous les
+// refus de rôle, comme `profiles.linkChild`.
+//
+// CES REFUS SONT DES `ConvexError`, PARCE QU'UN LECTEUR LES AFFICHE. La règle
+// se juge au LECTEUR, jamais au module : hors développement Convex occulte le
+// `message` d'une erreur, et seul `data` est transmis TEL QUEL, donc un refus
+// qu'un écran montre doit voyager par là. Les écrans le lisent avec
+// `refusalMessage` (`lib/refusalMessage.ts`). Sans cette bascule leur repli
+// serait INATTEIGNABLE — ils attrapent en `err instanceof Error`, test que
+// toute erreur passe puisque `ConvexError` étend `Error` — et l'administrateur
+// lirait un message enveloppé et vidé à la place de la phrase écrite ici.
+// ---------------------------------------------------------------------------
 
 export const create = mutation({
   args: {
@@ -24,6 +84,8 @@ export const create = mutation({
     order: v.number(),
   },
   handler: async (ctx, args) => {
+    if (!(await callerIsAdmin(ctx))) throw new ConvexError("Rôle non autorisé");
+
     return await ctx.db.insert("subjects", {
       name: args.name,
       icon: args.icon,
@@ -42,10 +104,12 @@ export const update = mutation({
     order: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    if (!(await callerIsAdmin(ctx))) throw new ConvexError("Rôle non autorisé");
+
     const { id, ...fields } = args;
     const existing = await ctx.db.get(id);
     if (!existing) {
-      throw new Error("Matière introuvable");
+      throw new ConvexError("Matière introuvable");
     }
     // Filter out undefined fields
     const updates: Record<string, unknown> = {};
@@ -59,12 +123,23 @@ export const update = mutation({
 });
 
 /**
- * Seed default subjects (CE2-CM2 curriculum, francophone context).
- * Idempotent: skips subjects that already exist by name.
- * Can be called from any authenticated user; safe for manual runs via
- * `pnpx convex run subjects:seedDefaults`.
+ * Sème les matières par défaut (curriculum CE2-CM2, contexte francophone).
+ * Idempotent : ignore les matières déjà présentes, par nom.
+ *
+ * INTERNE. Elle était publique et n'exigeait rien — huit insertions dans
+ * `subjects` offertes au réseau public, sans le moindre compte. Un garde de
+ * rôle ne convenait pas non plus : un ensemencement n'a pas d'appelant porteur
+ * de session, donc exiger un profil `admin` l'aurait rendue inutilisable par
+ * les chemins mêmes qui la justifient.
+ *
+ * Conséquence assumée : elle n'a aujourd'hui AUCUN appelant, et une fonction
+ * interne ne s'appelle que depuis une autre fonction Convex (`internal.…`).
+ * Tant que personne ne la câble — un cron d'amorçage, une action
+ * d'administration — elle ne s'exécute pas. C'est voulu : mieux vaut un
+ * ensemencement à rebrancher explicitement qu'un ensemencement que n'importe
+ * qui déclenche.
  */
-export const seedDefaults = mutation({
+export const seedDefaults = internalMutation({
   args: {},
   handler: async (ctx) => {
     const defaults = [
@@ -95,13 +170,15 @@ export const seedDefaults = mutation({
 export const remove = mutation({
   args: { id: v.id("subjects") },
   handler: async (ctx, args) => {
+    if (!(await callerIsAdmin(ctx))) throw new ConvexError("Rôle non autorisé");
+
     // Check if any topics reference this subject
     const topics = await ctx.db
       .query("topics")
       .withIndex("by_subjectId", (q) => q.eq("subjectId", args.id))
       .first();
     if (topics) {
-      throw new Error(
+      throw new ConvexError(
         "Impossible de supprimer cette matière car elle contient des thématiques.",
       );
     }

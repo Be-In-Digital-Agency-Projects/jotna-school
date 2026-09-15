@@ -41,10 +41,9 @@ type EarnedRow = {
 export default function StudentBadgesPage() {
   const profile = useQuery(api.profiles.getCurrentProfile);
   const allBadges = useQuery(api.badges.list);
-  const earned = useQuery(
-    api.badges.listEarnedByStudent,
-    profile?._id ? { studentId: profile._id } : "skip",
-  );
+  // L'élève est dérivé de la session côté serveur : plus d'argument, donc
+  // plus de "skip" en attente du profil.
+  const earned = useQuery(api.badges.listMyEarned);
 
   const [tab, setTab] = useState<Tab>("all");
   const [detailBadge, setDetailBadge] = useState<{

@@ -6,6 +6,7 @@ import { api } from "@/convex/_generated/api";
 import Link from "next/link";
 import { ArrowLeft, Search, UserCircle, Send, CheckCircle, Clock, LinkIcon } from "lucide-react";
 import type { Id } from "@/convex/_generated/dataModel";
+import { refusalMessage } from "@/lib/refusalMessage";
 
 export default function LinkChildPage() {
   const profile = useQuery(api.profiles.getCurrentProfile);
@@ -37,7 +38,7 @@ export default function LinkChildPage() {
       setSent(true);
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Erreur lors de l'envoi de la demande.",
+        refusalMessage(err, "Erreur lors de l'envoi de la demande."),
       );
     } finally {
       setSending(false);

@@ -6,6 +6,7 @@ import { api } from "@/convex/_generated/api";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, UserPlus } from "lucide-react";
 import Link from "next/link";
+import { refusalMessage } from "@/lib/refusalMessage";
 
 export default function AddChildPage() {
   const router = useRouter();
@@ -31,9 +32,7 @@ export default function AddChildPage() {
       router.push("/parent/dashboard");
     } catch (err) {
       setError(
-        err instanceof Error
-          ? err.message
-          : "Erreur lors de la création du compte enfant.",
+        refusalMessage(err, "Erreur lors de la création du compte enfant."),
       );
     } finally {
       setLoading(false);

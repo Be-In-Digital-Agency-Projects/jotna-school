@@ -7,6 +7,7 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { useRouter } from "next/navigation";
 import { Save, Send, ArrowLeft, Loader2, Plus, X, GripVertical } from "lucide-react";
 import ExercisePreview from "@/components/exercises/ExercisePreview";
+import { refusalMessage } from "@/lib/refusalMessage";
 
 type ExerciseType = "qcm" | "drag-drop" | "match" | "order" | "short-answer";
 
@@ -38,6 +39,7 @@ export default function ExerciseEditPage({
   const [hints, setHints] = useState<string[]>([]);
   const [order, setOrder] = useState(0);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [publishing, setPublishing] = useState(false);
   const [initialized, setInitialized] = useState(false);
 
@@ -56,6 +58,7 @@ export default function ExerciseEditPage({
 
   const handleSave = useCallback(async () => {
     setSaving(true);
+    setError(null);
     try {
       await updateExercise({
         id: exerciseId,
@@ -66,6 +69,8 @@ export default function ExerciseEditPage({
         hints,
         order,
       });
+    } catch (err) {
+      setError(refusalMessage(err, "Erreur lors de l'enregistrement"));
     } finally {
       setSaving(false);
     }
@@ -73,6 +78,7 @@ export default function ExerciseEditPage({
 
   const handlePublish = useCallback(async () => {
     setPublishing(true);
+    setError(null);
     try {
       // Save first, then publish
       await updateExercise({
@@ -85,7 +91,11 @@ export default function ExerciseEditPage({
         order,
       });
       await publishExercise({ id: exerciseId });
+      // La redirection est DANS le `try`, après la publication : un refus la
+      // saute, et l'administrateur reste sur l'écran pour lire pourquoi.
       router.push("/admin/exercises/published");
+    } catch (err) {
+      setError(refusalMessage(err, "Erreur lors de la publication"));
     } finally {
       setPublishing(false);
     }
@@ -113,6 +123,15 @@ export default function ExerciseEditPage({
 
   return (
     <div className="space-y-4">
+      {error && (
+        <div
+          role="alert"
+          className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700"
+        >
+          {error}
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">

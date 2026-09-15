@@ -1,8 +1,14 @@
 import { query, mutation, internalMutation } from "./_generated/server";
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { internal } from "./_generated/api";
 import { readStudentPreferences, type StudentPreferences } from "./students";
+import {
+  catalogReadable,
+  blockedStudent,
+  callerIsAdmin,
+  requireAccess,
+} from "./access";
 
 // ---------------------------------------------------------------------------
 // D10 — Rarity tier normalization. The schema currently widens
@@ -52,9 +58,39 @@ export function getConditionText(condition: string): string {
   }
 }
 
+// ---------------------------------------------------------------------------
+// `list` et `getById` — IDENTITÉ ET DROIT D'ACCÈS, en une seule décision.
+//
+// `catalogReadable` (`access.ts`) réunit les deux, et c'est bien DEUX questions
+// qu'il pose, pas une :
+//
+// 1. L'IDENTITÉ. Le paywall seul ne suffit pas : `blockedStudent` rend false
+//    pour un appelant NON authentifié, par conception — il ne doit bloquer ni
+//    un adulte ni un visiteur. Sans exigence de profil, il se contournait en
+//    RETIRANT simplement le jeton de session.
+// 2. Le DROIT D'ACCÈS (paywall, spec §5.4). Lecture partagée avec
+//    l'administration : seul un élève sans droit valide est bloqué.
+//
+// La première ne remplace pas la seconde — un élève impayé a bien un profil.
+// Tous les appelants sont des écrans authentifiés (élève, admin) ; `getById`
+// n'en a aucun.
+//
+// LES DEUX SE POSAIENT EN DEUX APPELS, donc en DEUX résolutions du profil par
+// abonnement, et en deux fois la surface d'invalidation — `profiles.preferences`
+// est réécrit à chaque série, badge ou réglage de son. Une lecture, deux
+// questions, même réponse qu'avant.
+//
+// Une requête ne lève jamais : même valeur vide que le chemin nominal.
+// C'est le même couple que `listMyEarned` plus bas, qui établit son identité
+// lui-même puisqu'il a besoin du profil pour travailler.
+// ---------------------------------------------------------------------------
+
 export const list = query({
   args: {},
   handler: async (ctx) => {
+    // Identité ET paywall en une lecture — voir `catalogReadable`.
+    if (!(await catalogReadable(ctx))) return [];
+
     const rows = await ctx.db.query("badges").take(100);
     return rows.map((b) => ({
       ...b,
@@ -67,16 +103,49 @@ export const list = query({
 export const getById = query({
   args: { id: v.id("badges") },
   handler: async (ctx, args) => {
+    // Identité ET paywall en une lecture — voir `catalogReadable`.
+    if (!(await catalogReadable(ctx))) return null;
+
     return await ctx.db.get(args.id);
   },
 });
 
-export const listEarnedByStudent = query({
-  args: { studentId: v.id("profiles") },
-  handler: async (ctx, args) => {
+/**
+ * Badges obtenus par l'élève de la SESSION, avec leur fiche complète.
+ *
+ * Renommée : elle s'appelait `listEarnedByStudent` et prenait `studentId` en
+ * argument, sans jamais vérifier l'appelant — n'importe qui pouvait lire les
+ * badges de n'importe quel `Id<"profiles">`. L'élève est désormais dérivé de
+ * la session ; son unique appelant y passait déjà son propre profil, donc le
+ * retrait de l'argument ne change aucun comportement légitime. Le nom
+ * « ByStudent » aurait menti une fois l'argument parti : plus aucun élève
+ * n'est nommé, c'est celui de la session.
+ *
+ * Une requête ne lève jamais : [] si l'appelant n'est pas authentifié ou n'a
+ * pas de profil.
+ */
+export const listMyEarned = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) return [];
+
+    const profile = await ctx.db
+      .query("profiles")
+      .withIndex("by_userId", (q) => q.eq("userId", userId))
+      .unique();
+    if (!profile) return [];
+
+    // Paywall (spec §5.4) — distinct du garde ci-dessus, qui n'établit que
+    // l'identité. blockedStudent(ctx) résout le profil de L'APPELANT et ne
+    // bloque que s'il s'agit d'un élève sans droit valide : jamais un adulte,
+    // cette lecture étant aussi partagée avec l'administration et les
+    // professeurs.
+    if (await blockedStudent(ctx)) return [];
+
     const earned = await ctx.db
       .query("earnedBadges")
-      .withIndex("by_studentId", (q) => q.eq("studentId", args.studentId))
+      .withIndex("by_studentId", (q) => q.eq("studentId", profile._id))
       .take(100);
 
     // Join with badges table for full info
@@ -100,6 +169,35 @@ export const listEarnedByStudent = query({
 
 // ---------------------------------------------------------------------------
 // Mutations
+//
+// `create`, `update` et `remove` — garde de RÔLE, pas garde de paywall. Ces
+// trois écritures définissent le catalogue de badges lui-même et n'ont rien à
+// voir avec le droit d'accès d'un élève : `blockedStudent` et `requireAccess`
+// jugent un abonnement, pas la qualité de l'appelant. `admin` seul, leur
+// unique appelant étant `app/(admin)/admin/badges/page.tsx`.
+//
+// Une mutation peut lever, et le garde est la toute première instruction :
+// rien n'est lu avant d'avoir établi le rôle. Un seul message pour tous les
+// refus de rôle, comme `profiles.linkChild`.
+//
+// CES REFUS SONT DES `ConvexError`, PARCE QU'UN LECTEUR LES AFFICHE. La règle
+// se juge au LECTEUR, jamais au module : hors développement Convex occulte le
+// `message` d'une erreur, et seul `data` est transmis TEL QUEL, donc un refus
+// qu'un écran montre doit voyager par là. Les écrans le lisent avec
+// `refusalMessage` (`lib/refusalMessage.ts`). Sans cette bascule leur repli
+// serait INATTEIGNABLE — ils attrapent en `err instanceof Error`, test que
+// toute erreur passe puisque `ConvexError` étend `Error` — et l'administrateur
+// lirait un message enveloppé et vidé à la place de la phrase écrite ici.
+//
+// `markBadgesSeen` est l'exception, et elle confirme la règle : elle n'a PAS de
+// lecteur — `void markBadgesSeen(…)`, sans capture — et c'est un ÉLÈVE qui
+// l'appelle, à qui la spec §5.4 interdit de montrer un motif technique. Ses
+// deux refus restent donc des `Error` ordinaires, et elle garde son
+// `requireAccess` : c'est l'élève lui-même qui écrit, sur son propre profil.
+// Ce paywall lève un `ConvexError` par cohérence avec les autres appelants de
+// `requireAccess`, non parce qu'un lecteur le traduirait — ICI PERSONNE NE LE
+// LIT. Les mots d'enfant existent bien (`kidMessages`, via `isAccessDenied`),
+// mais sur l'écran de session, pas sur ce chemin-ci.
 // ---------------------------------------------------------------------------
 
 export const create = mutation({
@@ -111,6 +209,8 @@ export const create = mutation({
     subjectId: v.optional(v.id("subjects")),
   },
   handler: async (ctx, args) => {
+    if (!(await callerIsAdmin(ctx))) throw new ConvexError("Rôle non autorisé");
+
     return await ctx.db.insert("badges", {
       name: args.name,
       description: args.description,
@@ -131,10 +231,12 @@ export const update = mutation({
     subjectId: v.optional(v.id("subjects")),
   },
   handler: async (ctx, args) => {
+    if (!(await callerIsAdmin(ctx))) throw new ConvexError("Rôle non autorisé");
+
     const { id, ...fields } = args;
     const existing = await ctx.db.get(id);
     if (!existing) {
-      throw new Error("Badge introuvable");
+      throw new ConvexError("Badge introuvable");
     }
     const updates: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(fields)) {
@@ -149,18 +251,23 @@ export const update = mutation({
 export const remove = mutation({
   args: { id: v.id("badges") },
   handler: async (ctx, args) => {
+    if (!(await callerIsAdmin(ctx))) throw new ConvexError("Rôle non autorisé");
+
     const existing = await ctx.db.get(args.id);
     if (!existing) {
-      throw new Error("Badge introuvable");
+      throw new ConvexError("Badge introuvable");
     }
 
-    // Check if any earnedBadges reference this badge
+    // Check if any earnedBadges reference this badge.
+    // Par `by_badgeId` : en `.filter()`, `.first()` ne court-circuite que sur
+    // une correspondance, donc le cas qui AUTORISE la suppression — aucun élève
+    // ne l'a obtenu — était précisément celui qui parcourait toute la table.
     const earned = await ctx.db
       .query("earnedBadges")
-      .filter((q) => q.eq(q.field("badgeId"), args.id))
+      .withIndex("by_badgeId", (q) => q.eq("badgeId", args.id))
       .first();
     if (earned) {
-      throw new Error(
+      throw new ConvexError(
         "Impossible de supprimer ce badge car des élèves l'ont déjà obtenu.",
       );
     }
@@ -191,6 +298,10 @@ export const markBadgesSeen = mutation({
     if (!profile || profile.role !== "student") {
       throw new Error("Profil élève introuvable");
     }
+
+    // Paywall (spec §5.4) — mutation : lève si l'accès n'est pas ouvert.
+    await requireAccess(ctx, profile);
+
     if (args.badgeIds.length === 0) return;
 
     const prefs = readStudentPreferences(profile);

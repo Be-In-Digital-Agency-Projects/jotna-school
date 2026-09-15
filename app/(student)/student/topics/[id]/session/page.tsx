@@ -24,6 +24,7 @@ import { playCorrect, setSoundEnabledLocal } from "@/lib/sounds";
 import { PalierStarsBar } from "@/components/star-rating";
 import { CapRegenAlternatives } from "@/components/cap-regen-alternatives";
 import { kidMessages } from "@/lib/kidCopy";
+import { isAccessDenied } from "@/lib/accessCopy";
 import { ExplainStepByStep } from "@/components/student/explain-step-by-step";
 import { Pio } from "@/components/student/pio";
 import { StudentAlertDialog } from "@/components/student/student-alert-dialog";
@@ -33,6 +34,7 @@ import MatchExercise from "@/components/exercises/MatchExercise";
 import OrderExercise from "@/components/exercises/OrderExercise";
 import DragDropExercise from "@/components/exercises/DragDropExercise";
 import { motion, AnimatePresence } from "framer-motion";
+import { refusalMessage } from "@/lib/refusalMessage";
 
 type SanitizedExo = {
   _id: Id<"exercises">;
@@ -56,6 +58,7 @@ type PalierResult = {
 
 type SceneAlert =
   | { type: "regen-error"; message: string }
+  | { type: "access-blocked" }
   | { type: "parent-notified" }
   | { type: "quit-confirm" };
 
@@ -199,10 +202,15 @@ function PalierSession({ topicId, palierIndex }: { topicId: string; palierIndex:
         const attemptId = await startAttempt({ palierId: bucket.palierId });
         setPalierAttemptId(attemptId);
       } catch (err: unknown) {
-        let msg = err instanceof Error ? err.message : String(err ?? "Erreur inconnue");
-        const match = msg.match(/Uncaught Error:\s*(.+?)(?:\n|$)/);
-        if (match) msg = match[1].trim();
-        setBootstrapError(msg);
+        // La rustine qui vivait ici — une expression régulière sur
+        // « Uncaught Error: » pour désenvelopper le message — traitait le
+        // symptôme. La cause est corrigée à la source : les refus que cet écran
+        // affiche sont des `ConvexError`, et `refusalMessage` lit leur `data`.
+        setBootstrapError(
+          isAccessDenied(err)
+            ? kidMessages.accessNotOpen
+            : refusalMessage(err, "Erreur inconnue"),
+        );
       } finally {
         setBootstrapping(false);
       }
@@ -254,7 +262,11 @@ function PalierSession({ topicId, palierIndex }: { topicId: string; palierIndex:
       setHintShown({ text: res.hint, index: res.hintIndex });
       setLocalHintsUsedThisExo(hintsUsedThisExo + 1);
     } catch (err) {
-      console.error(err);
+      if (isAccessDenied(err)) {
+        setSceneAlert({ type: "access-blocked" });
+      } else {
+        console.error(err);
+      }
     }
   }, [exercises, palierAttemptId, currentIndex, hintsUsedThisExo, requestHint]);
 
@@ -276,7 +288,11 @@ function PalierSession({ topicId, palierIndex }: { topicId: string; palierIndex:
       const res = await submitPalier({ palierAttemptId });
       setPalierResult(res as PalierResult);
     } catch (err) {
-      console.error(err);
+      if (isAccessDenied(err)) {
+        setSceneAlert({ type: "access-blocked" });
+      } else {
+        console.error(err);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -313,7 +329,11 @@ function PalierSession({ topicId, palierIndex }: { topicId: string; palierIndex:
           }
         }
       } catch (err) {
-        console.error(err);
+        if (isAccessDenied(err)) {
+          setSceneAlert({ type: "access-blocked" });
+        } else {
+          console.error(err);
+        }
       }
     },
     [
@@ -338,8 +358,14 @@ function PalierSession({ topicId, palierIndex }: { topicId: string; palierIndex:
       setLocalHintsUsedThisExo(0);
       setLocalFailedAttemptsThisExo(0);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Erreur";
-      setSceneAlert({ type: "regen-error", message: msg });
+      if (isAccessDenied(err)) {
+        setSceneAlert({ type: "access-blocked" });
+      } else {
+        setSceneAlert({
+          type: "regen-error",
+          message: refusalMessage(err, "Erreur"),
+        });
+      }
     } finally {
       setRegenerating(false);
     }
@@ -794,6 +820,23 @@ function SceneAlertDialog({
         label="Petit blocage"
         title="On réessaie dans un instant"
         description={alert.message}
+        primaryLabel="J'ai compris"
+        onPrimary={onClose}
+      />
+    );
+  }
+
+  if (alert?.type === "access-blocked") {
+    return (
+      <StudentAlertDialog
+        open
+        onOpenChange={(open) => {
+          if (!open) onClose();
+        }}
+        tone="info"
+        label="Petit blocage"
+        title="Message pour toi"
+        description={kidMessages.accessNotOpen}
         primaryLabel="J'ai compris"
         onPrimary={onClose}
       />

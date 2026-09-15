@@ -20,6 +20,7 @@ import {
 } from "./paliers/scoring";
 import { shuffleDeterministic } from "./paliers";
 import { internal } from "./_generated/api";
+import { checkAccess, requireAccess } from "./access";
 
 // ===========================================================================
 // Verification helpers — server-side only, never expose correctAnswer.
@@ -128,6 +129,9 @@ export const verifyAttempt = mutation({
       .unique();
     if (!profile) throw new Error("Profil introuvable");
 
+    // Paywall (spec §5.4) — une mutation lève, l'appelant attrape.
+    await requireAccess(ctx, profile);
+
     const exercise = await ctx.db.get(args.exerciseId);
     if (!exercise) throw new Error("Exercice introuvable");
 
@@ -185,6 +189,9 @@ export const requestHint = mutation({
       .unique();
     if (!profile) throw new Error("Profil introuvable");
 
+    // Paywall (spec §5.4) — une mutation lève, l'appelant attrape.
+    await requireAccess(ctx, profile);
+
     const exercise = await ctx.db.get(args.exerciseId);
     if (!exercise) throw new Error("Exercice introuvable");
     if (!Array.isArray(exercise.hints)) throw new Error("Aucun indice disponible");
@@ -229,6 +236,9 @@ export const submitPalier = mutation({
       .withIndex("by_userId", (q) => q.eq("userId", userId as string))
       .unique();
     if (!profile) throw new Error("Profil introuvable");
+
+    // Paywall (spec §5.4) — une mutation lève, l'appelant attrape.
+    await requireAccess(ctx, profile);
 
     const palierAttempt = await ctx.db.get(args.palierAttemptId);
     if (!palierAttempt) throw new Error("Tentative introuvable");
@@ -344,6 +354,12 @@ export const getMyAttempt = query({
       .withIndex("by_userId", (q) => q.eq("userId", userId as string))
       .unique();
     if (!profile) return null;
+
+    // Paywall (spec §5.4) — une requête ne lève jamais : elle retourne la
+    // même valeur vide que pour un profil invalide.
+    const access = await checkAccess(ctx, profile);
+    if (!access.ok) return null;
+
     const attempt = await ctx.db.get(args.palierAttemptId);
     if (!attempt || attempt.userId !== profile._id) return null;
     return attempt;
@@ -360,6 +376,11 @@ export const getProgressForPalierAttempt = query({
       .withIndex("by_userId", (q) => q.eq("userId", userId as string))
       .unique();
     if (!profile) return null;
+
+    // Paywall (spec §5.4) — une requête ne lève jamais : elle retourne la
+    // même valeur vide que pour un profil invalide.
+    const access = await checkAccess(ctx, profile);
+    if (!access.ok) return null;
 
     const palierAttempt = await ctx.db.get(args.palierAttemptId);
     if (!palierAttempt) return null;
@@ -429,6 +450,12 @@ export const listMyAttempts = query({
       .withIndex("by_userId", (q) => q.eq("userId", userId as string))
       .unique();
     if (!profile) return [];
+
+    // Paywall (spec §5.4) — une requête ne lève jamais : elle retourne la
+    // même valeur vide que pour un profil invalide.
+    const access = await checkAccess(ctx, profile);
+    if (!access.ok) return [];
+
     const limit = args.limit ?? 20;
     return await ctx.db
       .query("palierAttempts")

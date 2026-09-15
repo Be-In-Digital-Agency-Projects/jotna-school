@@ -6,6 +6,7 @@ import { type Id } from "@/convex/_generated/dataModel";
 import { useState, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { refusalMessage } from "@/lib/refusalMessage";
 import {
   Upload,
   FileText,
@@ -112,7 +113,6 @@ export default function TeacherPdfUploadsPage() {
       setUploadProgress("Création de l'enregistrement...");
 
       const uploadId = await createUpload({
-        adminId: profile._id,
         storageId,
         originalFilename: file.name,
         mimeType: file.type,
@@ -127,9 +127,7 @@ export default function TeacherPdfUploadsPage() {
       // progress and review/publish the generated exercises.
       router.push(`/teacher/pdf-uploads/${uploadId}`);
     } catch (err) {
-      const message =
-        err instanceof Error ? err.message : "Erreur lors de l'envoi.";
-      setError(message);
+      setError(refusalMessage(err, "Erreur lors de l'envoi."));
     } finally {
       setIsUploading(false);
       setUploadProgress(null);
@@ -145,10 +143,11 @@ export default function TeacherPdfUploadsPage() {
     if (!window.confirm("Supprimer ce PDF et tous les exercices associés ?")) {
       return;
     }
+    setError(null);
     try {
       await removeUpload({ id });
-    } catch {
-      setError("Erreur lors de la suppression.");
+    } catch (err) {
+      setError(refusalMessage(err, "Erreur lors de la suppression."));
     }
   };
 

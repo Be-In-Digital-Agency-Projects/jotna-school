@@ -6,6 +6,7 @@ import { type Id } from "@/convex/_generated/dataModel";
 import { use, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { refusalMessage } from "@/lib/refusalMessage";
 import {
   ArrowLeft,
   FileText,
@@ -67,6 +68,10 @@ export default function TeacherPdfUploadDetailPage({
   const publishAll = useMutation(api.exercises.publishAllFromUpload);
   const [publishing, setPublishing] = useState<"all" | string | null>(null);
   const [publishMsg, setPublishMsg] = useState<string | null>(null);
+  // Séparé de `publishMsg` À DESSEIN : ce dernier est rendu en VERT, en
+  // bannière de succès. Y écrire un échec l'affichait en réussite — la couleur
+  // mentait autant que le texte manquait.
+  const [publishError, setPublishError] = useState<string | null>(null);
 
   // Ownership guard: redirect if not the teacher's upload
   useEffect(() => {
@@ -300,11 +305,14 @@ export default function TeacherPdfUploadDetailPage({
           if (!window.confirm(`Publier les ${drafts.length} exercice(s) brouillon ?`)) return;
           setPublishing("all");
           setPublishMsg(null);
+          setPublishError(null);
           try {
             const res = await publishAll({ uploadId: id as Id<"pdfUploads"> });
             setPublishMsg(`${res.published} exercice(s) publié(s) avec succès.`);
-          } catch {
-            setPublishMsg("Erreur lors de la publication.");
+          } catch (err) {
+            setPublishError(
+              refusalMessage(err, "Erreur lors de la publication."),
+            );
           } finally {
             setPublishing(null);
           }
@@ -312,10 +320,17 @@ export default function TeacherPdfUploadDetailPage({
 
         const handlePublishOne = async (exerciseId: Id<"exercises">) => {
           setPublishing(exerciseId);
+          setPublishMsg(null);
+          setPublishError(null);
           try {
             await publishExercise({ id: exerciseId });
-          } catch {
-            setPublishMsg("Erreur lors de la publication de cet exercice.");
+          } catch (err) {
+            setPublishError(
+              refusalMessage(
+                err,
+                "Erreur lors de la publication de cet exercice.",
+              ),
+            );
           } finally {
             setPublishing(null);
           }
@@ -352,6 +367,15 @@ export default function TeacherPdfUploadDetailPage({
             {publishMsg && (
               <div className="border-b border-green-100 bg-green-50 px-6 py-3 text-sm text-green-700">
                 {publishMsg}
+              </div>
+            )}
+
+            {publishError && (
+              <div
+                role="alert"
+                className="border-b border-red-100 bg-red-50 px-6 py-3 text-sm text-red-700"
+              >
+                {publishError}
               </div>
             )}
 

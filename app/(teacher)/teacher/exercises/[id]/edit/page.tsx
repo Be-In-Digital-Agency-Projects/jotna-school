@@ -6,6 +6,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { useRouter } from "next/navigation";
 import { Save, ArrowLeft, Loader2, Plus, X } from "lucide-react";
+import { refusalMessage } from "@/lib/refusalMessage";
 
 // Minimal teacher-facing editor: name/prompt/hints/type only.
 // For richer payload editing, teachers can use the admin editor if granted access.
@@ -35,6 +36,7 @@ export default function TeacherExerciseEditPage({
   const [prompt, setPrompt] = useState("");
   const [hints, setHints] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [initialized, setInitialized] = useState(false);
 
@@ -50,6 +52,7 @@ export default function TeacherExerciseEditPage({
   async function handleSave() {
     setSaving(true);
     setSaved(false);
+    setError(null);
     try {
       await updateExercise({
         id: exerciseId,
@@ -59,6 +62,8 @@ export default function TeacherExerciseEditPage({
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
+    } catch (err) {
+      setError(refusalMessage(err, "Erreur lors de l'enregistrement"));
     } finally {
       setSaving(false);
     }
@@ -90,6 +95,15 @@ export default function TeacherExerciseEditPage({
 
   return (
     <div className="mx-auto max-w-2xl space-y-4">
+      {error && (
+        <div
+          role="alert"
+          className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700"
+        >
+          {error}
+        </div>
+      )}
+
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <button

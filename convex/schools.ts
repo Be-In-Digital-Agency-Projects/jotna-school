@@ -10,6 +10,7 @@ import {
   callerAdminProfile,
   callerIsAdmin,
   currentSchoolSubscription,
+  graceAnchorFor,
 } from "./access";
 import { decideAccess, type AccessReason } from "./accessRules";
 import {
@@ -21,6 +22,7 @@ import {
   quoteSeatAmendment,
   quoteSubscription,
 } from "./pricing";
+import { amendmentDueAt, planInstallments } from "./billingRules";
 
 /**
  * Administration des écoles : écoles, personnel, classes, inscriptions.
@@ -135,15 +137,6 @@ const PROFILE_SCAN_LIMIT = 500;
  * deux troncatures, l'écran n'a pas à les distinguer.
  */
 const CANDIDATES_LIMIT = 100;
-
-/**
- * Tranches lues pour dater l'impayé le plus ancien.
- *
- * Même valeur que la lecture équivalente de `access.loadAccessInput`, qui
- * répond à la même question : un abonnement se règle en trois tranches
- * (`convex/schema.ts`), douze couvre largement.
- */
-const OVERDUE_INSTALLMENTS_LIMIT = 12;
 
 /**
  * Inscriptions actives lues au plus pour juger du plafond de sièges.
@@ -901,17 +894,14 @@ export const getEnrollmentOutlook = query({
     const now = Date.now();
     const current = await currentSchoolSubscription(ctx, args.schoolId, now);
 
-    let oldestOverdueDueAt: number | null = null;
-    if (current && current.status === "past_due") {
-      const rows = await ctx.db
-        .query("installments")
-        .withIndex("by_subscription", (q) => q.eq("subscriptionId", current._id))
-        .take(OVERDUE_INSTALLMENTS_LIMIT);
-      const dues = rows
-        .filter((row) => row.status === "overdue")
-        .map((row) => row.dueAt);
-      oldestOverdueDueAt = dues.length > 0 ? Math.min(...dues) : null;
-    }
+    // La MÊME lecture que le paywall (`access.graceAnchorFor`), et non une
+    // seconde qui lui ressemblerait : l'écran doit annoncer exactement le
+    // verdict que les élèves subissent. Un document lu, et exact — voir
+    // l'en-tête de ce helper pour l'invariante qu'il supprime.
+    const oldestOverdueDueAt =
+      current && current.status === "past_due"
+        ? await graceAnchorFor(ctx, current._id)
+        : null;
 
     const verdict = decideAccess({
       now,
@@ -1374,14 +1364,16 @@ export const recordSubscription = mutation({
     // tant qu'il dure, puis `expired` — pendant que le contrat actif la
     // couvre. Cette exemption n'aurait racheté qu'un scénario IMPOSSIBLE :
     // « recontracter une période résiliée » suppose qu'une ligne puisse
-    // DEVENIR résiliée. Or la table n'a que trois écrivains : l'insertion
-    // ci-dessous, qui refuse `cancelled` à la saisie ; le `patch`
-    // d'`amendSeats`, qui n'écrit ni le statut ni les dates ; et celui
-    // d'`activateSubscription`, qui n'écrit que le statut et une seule valeur,
-    // `active`. Aucun chemin ne fait donc passer un contrat existant à
-    // « résilié », ni ne déplace une période après coup. L'invariant est
-    // entier : les contrats d'une école sont disjoints, quel que soit leur
-    // statut.
+    // DEVENIR résiliée. Or la table n'a que CINQ écrivains, et la liste est
+    // exhaustive : l'insertion ci-dessous, qui refuse `cancelled` à la
+    // saisie ; le `patch` d'`amendSeats`, qui n'écrit ni le statut ni les
+    // dates ; celui d'`activateSubscription` et celui de
+    // `billing.applyPayment`, qui n'écrivent que le statut et une seule
+    // valeur, `active` ; et celui de `billing.markOverdueInstallments`, qui
+    // n'écrit que `past_due`, et seulement depuis `active`. Aucun chemin ne
+    // fait donc passer un contrat existant à « résilié », ni ne déplace une
+    // période après coup. L'invariant est entier : les contrats d'une école
+    // sont disjoints, quel que soit leur statut.
     //
     // UN SEUL DOCUMENT LU, ET LE CONTRÔLE EST EXACT — c'est cet invariant qui
     // le rend exact, pas la taille de la lecture. Le candidat est la ligne de
@@ -1476,7 +1468,7 @@ export const recordSubscription = mutation({
       );
     }
 
-    return await ctx.db.insert("subscriptions", {
+    const subscriptionId = await ctx.db.insert("subscriptions", {
       ownerType: "school",
       ownerId: args.schoolId,
       seatsPurchased: quote.seatsBilled,
@@ -1487,6 +1479,36 @@ export const recordSubscription = mutation({
       status: args.status,
       createdAt: now,
     });
+
+    // L'ÉCHÉANCIER NAÎT AVEC LE CONTRAT, dans CETTE transaction (spec §8.1).
+    //
+    // Ni une seconde mutation, ni un `scheduler.runAfter` : un contrat sans
+    // échéancier est un contrat que rien ne sait encaisser. Il se présenterait
+    // pourtant à l'écran comme payable — l'école verrait un bouton qui n'ouvre
+    // aucune facture — et le cron des impayés n'aurait rien à marquer, donc
+    // rien ne réclamerait jamais son dû. Une transaction sérialisable ne laisse
+    // pas cette fenêtre exister.
+    //
+    // LES MONTANTS NE SONT PAS DES ARGUMENTS, comme le total lui-même : ils
+    // sortent de `billingRules`, module pur, à partir du seul devis et des
+    // dates déjà validées ci-dessus. `Σ amountFcfa` vaut exactement
+    // `totalFcfa` — c'est l'invariante que le découpage prouve par une somme
+    // exacte plutôt que par trois arrondis qui retomberaient peut-être juste.
+    for (const planned of planInstallments({
+      totalFcfa: quote.totalFcfa,
+      startsAt: args.startsAt,
+      endsAt: args.endsAt,
+    })) {
+      await ctx.db.insert("installments", {
+        subscriptionId,
+        index: planned.index,
+        amountFcfa: planned.amountFcfa,
+        dueAt: planned.dueAt,
+        status: "pending",
+      });
+    }
+
+    return subscriptionId;
   },
 });
 
@@ -1540,12 +1562,15 @@ export const recordSubscription = mutation({
  *     Un avenant ne peut pas créer de chevauchement : il ne déplace aucune
  *     borne de période. La sélection en une lecture reste exacte, et le
  *     contrôle de chevauchement de `recordSubscription` garde sa preuve ;
- *   - LE STATUT NE BOUGE PAS ICI, et il ne bouge ailleurs que d'UNE façon :
- *     `activateSubscription` écrit `active`, depuis `pending_payment`, sur un
- *     contrat commencé et non fini. AUCUNE LIGNE NE PEUT DONC DEVENIR
- *     `cancelled`, ni `past_due`. Deux raisonnements de cette branche en
- *     dépendent : le refus de `cancelled` à la saisie (§4.5) et la branche
- *     `past_due` de `decideAccess` (§8.5).
+ *   - LE STATUT NE BOUGE PAS ICI, et il ne bouge ailleurs que de TROIS façons,
+ *     toutes nommées : `activateSubscription` et `billing.applyPayment`
+ *     écrivent `active` ; `billing.markOverdueInstallments` écrit `past_due`,
+ *     depuis `active` et en marquant dans la même transaction la tranche qui
+ *     ancre la grâce. AUCUNE LIGNE NE PEUT DONC DEVENIR `cancelled`, et le
+ *     refus de `cancelled` à la saisie (§4.5) garde sa preuve. La branche
+ *     `past_due` de `decideAccess` (§8.5), elle, n'a jamais reposé sur
+ *     l'absence de ce statut mais sur le fait qu'une MACHINE le pose avec son
+ *     ancre : c'est ce que fait le cron.
  *
  * LE PRIX N'EST PAS UN ARGUMENT, comme dans `recordSubscription` : il se
  * calcule par `pricing.quoteSeatAmendment`, module pur, à partir des seuls
@@ -1730,6 +1755,50 @@ export const amendSeats = mutation({
       at: now,
     });
 
+    // LA TRANCHE DE L'AVENANT — sans elle, le prorata n'est JAMAIS réclamé.
+    //
+    // Le `patch` ci-dessus monte `totalFcfa`, et `totalFcfa` fait foi pour la
+    // facturation (§7.2). Mais ce qui est réellement encaissé, ce sont des
+    // TRANCHES : l'école recevait ses sièges pendant que sa dette montait sans
+    // qu'aucune échéance ne la porte. C'était un trou de facturation, et il se
+    // ferme ici — l'invariante `Σ tranches = totalFcfa` le rend obligatoire
+    // plutôt qu'optionnel.
+    //
+    // L'AVENANT NE PATCHE TOUJOURS QUE SES TROIS CHAMPS. Il INSÈRE ailleurs, ce
+    // qui ne touche ni au statut, ni aux dates, ni à la disjointness de §4.5 :
+    // tout ce que l'en-tête promet reste vrai mot pour mot.
+    //
+    // TRENTE JOURS, ET JAMAIS AU-DELÀ DE LA FIN DU CONTRAT : une échéance
+    // postérieure à `endsAt` ne serait jamais marquée impayée — le cron ne
+    // regarde que des dates passées — donc jamais réclamée, et l'école
+    // garderait des sièges que personne ne lui facture.
+    //
+    // ZÉRO FRANC N'EST PAS UNE CRÉANCE : un siège ajouté l'avant-dernier jour
+    // peut s'arrondir à zéro, et une tranche vide n'aurait rien à encaisser.
+    // L'invariante de somme tient quand même — le total n'a pas bougé non plus.
+    if (amendment.amountFcfa > 0) {
+      // Le rang le plus haut déjà attribué, lu en UN document par
+      // `by_subscription_index` pris à l'envers. Compter les tranches
+      // existantes aurait demandé une fenêtre bornée sur un nombre que rien ne
+      // limite — un contrat peut être amendé autant de fois qu'une école
+      // recrute.
+      const last = await ctx.db
+        .query("installments")
+        .withIndex("by_subscription_index", (q) =>
+          q.eq("subscriptionId", target._id),
+        )
+        .order("desc")
+        .first();
+
+      await ctx.db.insert("installments", {
+        subscriptionId: target._id,
+        index: (last?.index ?? 0) + 1,
+        amountFcfa: amendment.amountFcfa,
+        dueAt: amendmentDueAt(now, target.endsAt),
+        status: "pending",
+      });
+    }
+
     return {
       seatsAdded: amendment.seatsAdded,
       seatsAfter: amendment.seatsBilled,
@@ -1878,11 +1947,25 @@ function activationRefusal(
  * deux refus de période le disent.
  *
  * CE QUE ÇA OUVRE, ET QUI EST SANS RETOUR : tous les élèves inscrits de
- * l'école obtiennent l'application, d'un coup. Rien ne DÉSACTIVE un contrat —
- * aucune mutation ne fait redescendre un statut, et c'est voulu : couper une
- * école est une décision commerciale qui appartient à la facturation, avec la
- * question du montant déjà facturé. L'écran doit donc le dire avant le clic,
- * et il le dit.
+ * l'école obtiennent l'application, d'un coup. Rien ne RÉSILIE un contrat —
+ * aucune mutation ne le fait redescendre à « résilié », et c'est voulu :
+ * couper une école est une décision commerciale qui appartient à la
+ * facturation, avec la question du montant déjà facturé. L'écran doit donc le
+ * dire avant le clic, et il le dit.
+ *
+ * CE BOUTON N'EST PLUS LE SEUL CHEMIN VERS `active`, depuis que l'encaissement
+ * existe : `billing.applyPayment` y mène aussi, quand une tranche est encaissée
+ * (§8.2). Rien ne change ici pour autant — même statut d'arrivée littéral, même
+ * règle de période partagée (`subscriptionRules.decidePeriod`), et c'est
+ * toujours `decideActivation` qui décide de ce clic-ci. Le bouton reste
+ * nécessaire : une école qui règle par virement, ou dont le contrat commence
+ * après le paiement, n'a aucun webhook pour l'activer le jour venu.
+ *
+ * ET UN STATUT PEUT DÉSORMAIS REDESCENDRE, mais d'un seul cran et par une seule
+ * main : `billing.markOverdueInstallments` fait passer `active` → `past_due`
+ * quand une échéance est oubliée (§8.6). Ce n'est pas une résiliation —
+ * `past_due` LAISSE l'accès ouvert vingt et un jours — et aucune personne ne
+ * peut le poser.
  *
  * LA TRACE — une ligne `subscriptionActivations` dans la même transaction. Un
  * `patch` écrase : sans elle, plus rien ne dirait qui a ouvert l'accès de

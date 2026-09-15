@@ -681,16 +681,28 @@ export default defineSchema({
     totalFcfa: v.number(), // fait foi pour la facturation
     startsAt: v.number(),
     endsAt: v.number(),
-    // SIX valeurs au schéma, DEUX que le dépôt sait écrire aujourd'hui.
-    // `schools.recordSubscription` n'accepte à la saisie que
-    // `pending_payment` et `active` (ce dernier seulement sur un contrat déjà
-    // commencé), et `schools.activateSubscription` est le seul `patch` du
-    // statut : `pending_payment` → `active`, sur un contrat commencé et non
-    // fini. Les quatre autres restent des valeurs valides que rien n'écrit —
-    // `draft` attend un flux de devis, `past_due` le suivi des tranches,
-    // `expired` se déduit de `endsAt` à la lecture, `cancelled` une
-    // résiliation qui n'existe pas. Le validateur est la FORME du champ ; les
-    // refus vivent dans les handlers, avec leur raison.
+    // SIX valeurs au schéma, TROIS que le dépôt sait écrire, et QUATRE
+    // écrivains en tout — la liste exhaustive, parce que plusieurs
+    // raisonnements du chantier reposent sur elle :
+    //
+    //   1. `schools.recordSubscription` INSÈRE, et n'accepte à la saisie que
+    //      `pending_payment` ou `active` (ce dernier seulement sur un contrat
+    //      déjà commencé) ;
+    //   2. `schools.activateSubscription` patche `pending_payment` → `active`,
+    //      sur un contrat commencé et non fini, par un clic d'administrateur ;
+    //   3. `billing.applyPayment` patche → `active` quand une tranche est
+    //      encaissée, depuis `pending_payment` ou depuis `past_due` (§8.2) ;
+    //   4. `billing.markOverdueInstallments` patche `active` → `past_due`
+    //      quand une échéance passe, DANS LA MÊME TRANSACTION que le marquage
+    //      de la tranche qui ancre la grâce (§8.5, §8.6).
+    //
+    // CE QU'AUCUN D'EUX NE FAIT, et dont dépendent le refus de `cancelled` à la
+    // saisie (§4.5) comme la sélection du contrat courant : aucune ligne ne
+    // peut DEVENIR `cancelled` ni `expired`, et aucun de ces quatre chemins ne
+    // touche aux dates. `draft` attend toujours un flux de devis, `expired` se
+    // déduit de `endsAt` à la lecture, `cancelled` une résiliation qui n'existe
+    // pas. Le validateur est la FORME du champ ; les refus vivent dans les
+    // handlers, avec leur raison.
     status: v.union(
       v.literal("draft"),
       v.literal("pending_payment"),
@@ -757,9 +769,20 @@ export default defineSchema({
   // POURQUOI IL EXISTE. `schools.activateSubscription` fait passer un contrat
   // de « en attente de paiement » à « actif ». C'est l'acte le plus conséquent
   // du module : il ouvre l'application à TOUS les élèves inscrits de l'école,
-  // d'un coup, et rien ne sait le défaire — aucune mutation ne fait
-  // redescendre un statut. Un acte irréversible qui engage une école entière
-  // ne doit pas être anonyme, et le `patch` écrase le statut d'avant.
+  // d'un coup, et rien ne sait le défaire — aucune mutation ne RÉSILIE un
+  // contrat, et la seule redescente possible est `active` → `past_due`, posée
+  // par le cron des échéances, qui laisse justement l'accès ouvert. Un acte
+  // irréversible qui engage une école entière ne doit pas être anonyme, et le
+  // `patch` écrase le statut d'avant.
+  //
+  // IL NE JOURNALISE QUE LES ACTIVATIONS HUMAINES, et c'est ce que son schéma
+  // dit : `actorProfileId` est obligatoire, `statusBefore` ne vaut que « en
+  // attente de paiement ». L'activation AUTOMATIQUE — `billing.applyPayment`,
+  // quand une tranche est encaissée (§8.2) — n'écrit pas ici : il n'y a
+  // personne à nommer, le départ peut être « impayé », et sa trace est la ligne
+  // `payments`, qui dit quel versement a ouvert l'accès, pour quel montant et à
+  // quelle seconde. Un journal dont l'auteur serait tantôt une personne, tantôt
+  // « le système », ne répondrait plus à la question qu'il existe pour poser.
   //
   // Mêmes principes que `schoolMembershipEvents` et `subscriptionAmendments` :
   //   - `actorProfileId` est COPIÉ et jamais relu pour autoriser quoi que ce
@@ -801,9 +824,33 @@ export default defineSchema({
     at: v.number(),
   }).index("by_subscription", ["subscriptionId"]),
 
+  // L'ÉCHÉANCIER d'un contrat — ce que l'école doit, et quand.
+  //
+  // TROIS LIGNES NAISSENT AVEC LE CONTRAT, dans la transaction de
+  // `schools.recordSubscription` (spec §8.1) : un contrat sans échéancier est
+  // un contrat que rien ne sait encaisser. `schools.amendSeats` en ajoute une
+  // quatrième quand une école achète des sièges en cours d'année — le prorata
+  // de §7.6 montait `totalFcfa` sans que rien ne le réclame.
+  //
+  // L'INVARIANTE : `Σ amountFcfa` d'un abonnement vaut exactement son
+  // `totalFcfa`. Elle tient à la signature (`billingRules
+  // .splitInstallmentAmounts` découpe sans perdre un franc) comme après un
+  // avenant (la tranche ajoutée porte exactement le prorata écrit sur le
+  // contrat). C'est elle qui permet de lire un échéancier et de savoir, sans
+  // calcul, que l'école paiera ce que le contrat dit.
+  //
+  // `index` NE S'ARRÊTE PLUS À TROIS : il vaut 1, 2, 3 pour l'échéancier
+  // d'origine, puis 4, 5… pour chaque avenant. C'est un rang d'affichage et une
+  // identité stable (« tranche 2 sur 3 »), jamais un indice de tableau ni une
+  // borne.
+  //
+  // `status` : `pending` à la création, `overdue` posé par le cron quotidien
+  // (§8.6) quand `dueAt` est passé, `paid` par le webhook. `failed` reste une
+  // valeur du schéma que rien n'écrit — un paiement qui échoue laisse la
+  // TRANCHE intacte, c'est la ligne `payments` qui porte l'échec.
   installments: defineTable({
     subscriptionId: v.id("subscriptions"),
-    index: v.number(), // 1..3
+    index: v.number(), // 1..3 à la signature, puis un rang par avenant
     amountFcfa: v.number(),
     dueAt: v.number(),
     status: v.union(
@@ -814,14 +861,58 @@ export default defineSchema({
     ),
     paidAt: v.optional(v.number()),
   })
-    .index("by_subscription", ["subscriptionId"])
+    // L'ANCRE DE LA GRÂCE, EN UN DOCUMENT. `decideAccess` a besoin du `dueAt`
+    // de la tranche échue LA PLUS ANCIENNE d'un contrat (spec §8.5) : c'est à
+    // partir de là que se comptent les vingt et un jours. Cet index répond
+    // exactement — `eq(subscriptionId).eq("overdue")`, ordre croissant, UN
+    // document — là où la version précédente lisait douze lignes par
+    // `by_subscription` puis filtrait en mémoire.
+    //
+    // CE N'EST PAS QU'UNE ÉCONOMIE. La fenêtre bornée laissait à tenir une
+    // invariante que §8.5 léguait au plan 3 en toutes lettres : « si plus de
+    // douze tranches existaient pour un même abonnement, la plus ancienne échue
+    // pourrait sortir de la fenêtre, l'ancre remonterait null, et l'école
+    // serait coupée ». L'avenant ci-dessus en ajoute précisément, sans compter.
+    // Une borne ne vaut que par l'invariante qui la garantit ; quand la lecture
+    // peut être rendue EXACTE, on ne garde pas la borne.
+    //
+    .index("by_subscription_status_dueAt", ["subscriptionId", "status", "dueAt"])
+    // L'ÉCHÉANCIER D'UN CONTRAT, DANS L'ORDRE OÙ ON LE LIT — « tranche 1, 2,
+    // 3 » — et, par le même index pris à l'envers, le rang le plus haut déjà
+    // attribué : c'est ce que `schools.amendSeats` a besoin de connaître pour
+    // numéroter la tranche qu'il ajoute. UN document lu là aussi, plutôt qu'une
+    // fenêtre bornée sur un nombre de tranches que rien ne limite.
+    .index("by_subscription_index", ["subscriptionId", "index"])
+    // Le cron quotidien : les tranches `pending` dont la date est passée, tous
+    // contrats confondus, en une lecture bornée par la date.
     .index("by_status_dueAt", ["status", "dueAt"]),
 
+  // LES VERSEMENTS REÇUS — un par facture ouverte, plus un par règlement
+  // constaté à la main.
+  //
+  // `provider` A DEUX VALEURS, et la seconde n'est pas un pis-aller : une école
+  // sénégalaise règle souvent par virement ou en espèces, et sans `manual` le
+  // cron des échéances marquerait impayée une tranche déjà payée, puis
+  // couperait une école qui ne doit rien. `billing.settleInstallmentOffline`
+  // écrit ces lignes-là ; elles ne passent par aucun prestataire et ne
+  // déclenchent aucun webhook.
+  //
+  // `providerToken` RESTE LA CLÉ D'IDEMPOTENCE : le jeton de PayDunya pour une
+  // facture, et `manual:<id de tranche>` pour un règlement constaté — une
+  // tranche ne peut donc être constatée qu'une fois, par la même lecture
+  // indexée qui empêche un webhook de créditer deux fois.
+  //
+  // `actorProfileId` NE VAUT QUE POUR LES RÈGLEMENTS CONSTATÉS, d'où
+  // l'optionnel : un paiement PayDunya n'a personne à nommer de notre côté,
+  // alors qu'un adulte qui déclare « cette tranche est réglée » engage l'école
+  // exactement comme celui qui active un contrat. Mêmes principes que les
+  // autres journaux : copié, jamais relu pour autoriser.
   payments: defineTable({
     subscriptionId: v.id("subscriptions"),
     installmentId: v.optional(v.id("installments")),
-    provider: v.literal("paydunya"),
+    provider: v.union(v.literal("paydunya"), v.literal("manual")),
     providerToken: v.string(), // clé d'idempotence du webhook
+    actorProfileId: v.optional(v.id("profiles")),
     amountFcfa: v.number(),
     status: v.union(
       v.literal("initiated"),

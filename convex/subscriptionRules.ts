@@ -28,11 +28,25 @@
  *
  * Les deux survivent parce que la seule transition décrite ici part de
  * `pending_payment` et arrive à `active`, sur un contrat qui a commencé et
- * n'est pas fini. Aucune ligne ne peut donc devenir `cancelled`, aucune ne peut
- * devenir `past_due`, et les dates n'étant jamais touchées, la disjointness de
- * §4.5 est intacte : la sélection en UN document du paywall reste exacte.
- * Élargir cette règle, c'est reprendre ces deux preuves — ici, en §4.5 et en
- * §8.5.
+ * n'est pas fini. Aucune ligne ne peut donc devenir `cancelled` par ce
+ * chemin-là, et les dates n'étant jamais touchées, la disjointness de §4.5 est
+ * intacte : la sélection en UN document du paywall reste exacte. Élargir cette
+ * règle, c'est reprendre ces deux preuves — ici, en §4.5 et en §8.5.
+ *
+ * L'ENCAISSEMENT A DEPUIS AJOUTÉ DEUX ÉCRIVAINS, et les deux preuves y
+ * survivent aussi — elles ne disent pas « personne n'écrit », elles disent
+ * « personne n'écrit CECI » :
+ *
+ *   - `billing.applyPayment` n'écrit qu'`active`, comme ici, quand une tranche
+ *     est encaissée. Il ne peut donc pas produire de `cancelled` ;
+ *   - `billing.markOverdueInstallments` écrit `past_due`, ce que rien n'écrivait
+ *     avant lui. La branche §8.5 ne s'appuyait pas sur l'absence de ce statut
+ *     mais sur le fait qu'il soit posé PAR UNE MACHINE, celle qui marque la
+ *     tranche impayée : c'est exactement ce cron, et il écrit les deux dans la
+ *     même transaction.
+ *
+ * Aucun des deux ne touche aux dates, et aucune saisie humaine ne pose jamais
+ * ni `past_due` ni `cancelled`.
  *
  * POURQUOI `draft` EST REFUSÉ, alors qu'il n'ouvre pas plus d'accès que
  * `pending_payment` : « brouillon » veut dire NON CONCLU. Activer ouvre
@@ -104,6 +118,41 @@ export interface ActivationInput {
   now: number;
 }
 
+/** Où `now` tombe par rapport à la période d'un contrat. */
+export type ContractPeriod = "not_started" | "running" | "period_over";
+
+/**
+ * LA SEULE définition de « ce contrat court-il ? » du dépôt.
+ *
+ * Elle est extraite parce qu'un SECOND lecteur est arrivé : `billingRules
+ * .decidePostPayment` doit savoir, lui aussi, si le contrat qu'un paiement
+ * vient de solder est en cours — et une tranche encaissée ne peut pas ouvrir
+ * l'accès d'une année qui n'a pas commencé, pas plus qu'un clic
+ * d'administrateur. Recopier la comparaison là-bas aurait donné deux façons de
+ * répondre à une même question, qui finissent toujours par diverger : c'est la
+ * règle D18 du plan 1/3, et elle vaut ici autant que pour les sièges.
+ *
+ * TROIS VALEURS ET NON UN BOOLÉEN : ses deux appelants doivent distinguer « pas
+ * encore commencé » de « déjà fini » pour dire à l'administrateur ce qu'il en
+ * est, et un booléen leur imposerait de refaire la comparaison pour trouver
+ * laquelle des deux — donc de rouvrir exactement le trou qu'on ferme.
+ *
+ * BORNES : début INCLUS, fin EXCLUE. C'est la convention de tout le chantier,
+ * et elle vient de `decideAccess`, qui tient `now >= endsAt` pour échu : un
+ * contrat qui finit à midi ne couvre pas midi. Un renouvellement peut donc
+ * commencer exactement à la fin du précédent sans les faire se chevaucher
+ * (§4.5).
+ */
+export function decidePeriod(
+  now: number,
+  startsAt: number,
+  endsAt: number,
+): ContractPeriod {
+  if (now < startsAt) return "not_started";
+  if (now >= endsAt) return "period_over";
+  return "running";
+}
+
 /**
  * Le statut refusé, mis en motif. Exhaustive sur les cinq statuts qui ne sont
  * pas activables : un septième statut au schéma ne compilera pas ici, la
@@ -137,21 +186,22 @@ export function decideActivation(input: ActivationInput): ActivationDecision {
     return { ok: false, reason: refusalForStatus(input.status) };
   }
 
-  // LE CONTRAT DOIT AVOIR COMMENCÉ. C'est le trou que `recordSubscription`
-  // ferme à la saisie, et qui se rouvrirait ici : `decideAccess` ne lit que
-  // `status` et `endsAt`, donc un contrat de l'an prochain marqué actif
-  // ouvrirait l'accès AUJOURD'HUI, pour une période que l'école n'a pas
-  // commencé à payer.
-  if (input.now < input.startsAt) {
-    return { ok: false, reason: "not_started" };
-  }
-
-  // ET IL NE DOIT PAS ÊTRE FINI. Borne HAUTE exclue, comme partout ailleurs :
-  // `decideAccess` tient `now >= endsAt` pour échu. Activer un contrat terminé
-  // n'ouvrirait aucun accès et laisserait en base un « actif » que la lecture
-  // suivante contredit.
-  if (input.now >= input.endsAt) {
-    return { ok: false, reason: "period_over" };
+  // LE CONTRAT DOIT AVOIR COMMENCÉ, ET NE PAS ÊTRE FINI.
+  //
+  // Le premier est le trou que `recordSubscription` ferme à la saisie et qui se
+  // rouvrirait ici : `decideAccess` ne lit que `status` et `endsAt`, donc un
+  // contrat de l'an prochain marqué actif ouvrirait l'accès AUJOURD'HUI, pour
+  // une période que l'école n'a pas commencé à payer. Le second évite de
+  // laisser en base un « actif » que la lecture suivante contredit : activer un
+  // contrat terminé n'ouvre aucun accès.
+  //
+  // Les deux comparaisons vivent dans `decidePeriod`, partagée avec
+  // `billingRules.decidePostPayment` : une seule définition de « ce contrat
+  // court-il », pour que l'encaissement et le clic d'activation ne puissent pas
+  // en juger différemment.
+  const period = decidePeriod(input.now, input.startsAt, input.endsAt);
+  if (period !== "running") {
+    return { ok: false, reason: period };
   }
 
   return { ok: true, from: input.status };

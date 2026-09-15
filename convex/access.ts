@@ -70,11 +70,14 @@ import {
  * rendu à un enfant, c'est un droit REFUSÉ à une école qui paie.
  * `recordSubscription` ferme les deux bouts : il refuse les chevauchements
  * sans regarder le statut, et refuse d'écrire `cancelled` — aucune mutation ne
- * sait aujourd'hui faire passer un contrat existant à « résilié ». Les deux
- * `patch` de la table le garantissent : l'avenant de sièges d'`amendSeats`
- * n'écrit jamais le statut, et `activateSubscription` n'en écrit qu'UNE
- * valeur, `active`. Aucune période résiliée n'attend donc d'être
- * recontractée.
+ * sait aujourd'hui faire passer un contrat existant à « résilié ». Les QUATRE
+ * `patch` de la table le garantissent, et la liste est exhaustive : l'avenant
+ * de sièges d'`amendSeats` n'écrit jamais le statut ; `activateSubscription` et
+ * `billing.applyPayment` n'en écrivent qu'UNE valeur, `active` ;
+ * `billing.markOverdueInstallments` n'en écrit qu'une autre, `past_due`, et
+ * seulement depuis `active`. Aucune période résiliée n'attend donc d'être
+ * recontractée. (`past_due` ne change rien à cette lecture-ci, qui ne regarde
+ * pas le statut ; il change le VERDICT, et `decideAccess` s'en charge.)
  *
  * POUR LE PLAN DE FACTURATION : le jour où la résiliation existera (un `patch`
  * du STATUT vers `cancelled`), un contrat résilié devra pouvoir être croisé
@@ -122,6 +125,46 @@ export async function currentSchoolSubscription(
     )
     .order("desc")
     .first();
+}
+
+/**
+ * L'ANCRE DE LA GRÂCE — le `dueAt` de la tranche échue la PLUS ANCIENNE.
+ *
+ * C'est la date à partir de laquelle `decideAccess` compte les vingt et un
+ * jours (spec §8.5). Sans elle, un contrat « impayé » est une incohérence de
+ * données et le paywall refuse — une grâce se compte à partir de quelque chose.
+ *
+ * UN SEUL DOCUMENT LU, ET LA RÉPONSE EST EXACTE. L'index
+ * `by_subscription_status_dueAt` range les tranches d'un contrat par statut
+ * puis par date : la première ligne `overdue` dans l'ordre croissant EST la
+ * plus ancienne échue. La version précédente lisait douze lignes par
+ * `by_subscription` et filtrait en mémoire, ce qui laissait à tenir
+ * l'invariante que §8.5 léguait au plan 3 — « jamais plus de douze tranches
+ * pour un abonnement » — invariante que l'avenant de sièges (§7.6, D44)
+ * s'apprête justement à faire grossir sans compter. Rendue exacte, la lecture
+ * n'a plus d'invariante à casser.
+ *
+ * UNE SEULE DÉFINITION POUR SES DEUX LECTEURS : le verdict d'accès ici, et
+ * `schools.getEnrollmentOutlook` qui montre le même verdict à
+ * l'administrateur. Deux lectures qui répondraient différemment à la même
+ * question finiraient par se contredire — c'est la règle qui a déjà servi pour
+ * la sélection du contrat et pour le plafond de sièges.
+ *
+ * C'est le chemin le plus chaud du dépôt pour une école en retard : le paywall
+ * passe ici à chaque lecture d'un de ses élèves.
+ */
+export async function graceAnchorFor(
+  ctx: QueryCtx | MutationCtx,
+  subscriptionId: Id<"subscriptions">,
+): Promise<number | null> {
+  const oldest = await ctx.db
+    .query("installments")
+    .withIndex("by_subscription_status_dueAt", (q) =>
+      q.eq("subscriptionId", subscriptionId).eq("status", "overdue"),
+    )
+    .order("asc")
+    .first();
+  return oldest ? oldest.dueAt : null;
 }
 
 /**
@@ -192,17 +235,10 @@ export async function loadAccessInput(
 
   // Lecture des tranches seulement dans la branche past_due : le chemin
   // courant reste à trois lectures de documents.
-  let oldestOverdueDueAt: number | null = null;
-  if (current.status === "past_due") {
-    const rows = await ctx.db
-      .query("installments")
-      .withIndex("by_subscription", (q) => q.eq("subscriptionId", current._id))
-      .take(12);
-    const dues = rows
-      .filter((r) => r.status === "overdue")
-      .map((r) => r.dueAt);
-    oldestOverdueDueAt = dues.length > 0 ? Math.min(...dues) : null;
-  }
+  const oldestOverdueDueAt =
+    current.status === "past_due"
+      ? await graceAnchorFor(ctx, current._id)
+      : null;
 
   return {
     now,

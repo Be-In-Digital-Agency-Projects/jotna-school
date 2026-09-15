@@ -32,17 +32,24 @@ const FALLBACK_EXPLANATION =
 export const generateExplanation = action({
   args: {
     exerciseId: v.id("exercises"),
-    studentId: v.id("profiles"),
   },
-  handler: async (ctx, { exerciseId, studentId }) => {
+  handler: async (ctx, { exerciseId }) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) {
       throw new Error("Non authentifié");
     }
 
-    // Paywall (spec §5.4) — contrôle le droit de L'APPELANT, pas celui de
-    // args.studentId : un utilisateur authentifié pourrait sinon passer
-    // l'identifiant d'un autre élève couvert et se servir de son abonnement.
+    // L'ÉLÈVE EST L'APPELANT, ET IL N'EST PLUS UN ARGUMENT (§D16).
+    //
+    // Cette action contrôlait le droit de L'APPELANT puis lisait les tentatives
+    // de `args.studentId` : un élève couvert obtenait donc une explication
+    // fabriquée à partir des MAUVAISES RÉPONSES D'UN AUTRE, et la dépense IA
+    // était facturée à son propre compte. Le garde regardait une personne, la
+    // lecture en désignait une autre. L'argument a DISPARU plutôt que d'être
+    // contrôlé : l'usurpation devient inexprimable, non refusée — même
+    // correctif qu'`attempts.submit`.
+    //
+    // Paywall (spec §5.4) — contrôle le droit de l'appelant.
     // Avant toute lecture de contexte et tout appel IA (cette action appelle
     // OpenAI directement, sans passer par aiGateway.generate — il n'y a donc
     // pas de verrou de tâche 4 en aval ici). Même motif que
@@ -75,7 +82,7 @@ export const generateExplanation = action({
 
     const data = (await ctx.runQuery(
       internal.attempts.getExerciseAndAttempts,
-      { exerciseId, studentId },
+      { exerciseId, studentId: callerProfile._id },
     )) as AttemptsData | null;
     if (!data) {
       throw new Error("Exercice introuvable");
@@ -116,7 +123,7 @@ N'utilise pas de jargon technique. Écris comme un professeur patient qui parle 
       systemPrompt:
         "Tu es un professeur bienveillant qui aide les élèves de primaire francophone (Sénégal/France).",
       userId: callerProfile._id,
-      metadata: { exerciseId, studentId, kind: "explain_mistake" },
+      metadata: { exerciseId, studentId: callerProfile._id, kind: "explain_mistake" },
     });
 
     const generated =

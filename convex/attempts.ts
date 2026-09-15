@@ -69,15 +69,29 @@ export const getResumeIndex = query({
 });
 
 /**
- * Internal query used by the AI verification action (convex/attemptsVerify.ts).
- * Returns the submitted answer + the exercise's prompt and accepted answers
- * so the AI can compare them semantically.
+ * Le contexte d'une tentative pour la vérification IA
+ * (`convex/attemptsVerify.ts`) : la réponse soumise, l'énoncé et les réponses
+ * acceptées, de quoi comparer sémantiquement.
+ *
+ * `studentId` N'EST PAS DÉCORATIF — C'EST LA PREUVE DE PROPRIÉTÉ, et elle est
+ * exigée ICI plutôt que chez l'appelant (§D16). L'action qui appelle ne connaît
+ * qu'un `attemptId` reçu du client ; si le contrôle vivait là-haut, le prochain
+ * appelant pourrait l'oublier, et rien ne le lui rappellerait. En le posant
+ * dans la requête, une tentative qui n'appartient pas à `studentId` est
+ * INTROUVABLE — indistinguable d'une tentative inexistante, donc sans oracle.
+ *
+ * Ce refus arrive AVANT l'appel IA de l'action, ce qui ferme aussi la dépense :
+ * lire les erreurs d'un pair coûtait des jetons facturés à l'appelant.
  */
 export const getAttemptContextForVerification = internalQuery({
-  args: { attemptId: v.id("attempts") },
-  handler: async (ctx, { attemptId }) => {
+  args: {
+    attemptId: v.id("attempts"),
+    studentId: v.id("profiles"),
+  },
+  handler: async (ctx, { attemptId, studentId }) => {
     const attempt = await ctx.db.get(attemptId);
     if (!attempt) return null;
+    if (attempt.studentId !== studentId) return null;
     const exercise = await ctx.db.get(attempt.exerciseId);
     if (!exercise) return null;
     return {
@@ -367,10 +381,20 @@ export const submit = mutation({
 export const markAttemptCorrectByAI = internalMutation({
   args: {
     attemptId: v.id("attempts"),
+    studentId: v.id("profiles"),
   },
-  handler: async (ctx, { attemptId }) => {
+  handler: async (ctx, { attemptId, studentId }) => {
+    // MÊME PREUVE DE PROPRIÉTÉ QUE LA REQUÊTE DE CONTEXTE, et redondante avec
+    // elle aujourd'hui puisque l'action ne peut plus atteindre cette ligne pour
+    // une tentative étrangère. Elle reste parce que c'est ICI qu'on ÉCRIT : un
+    // `patch` sur la tentative d'un élève et sur sa progression ne doit pas
+    // dépendre de la vigilance d'un appelant qui n'existe pas encore. Une
+    // mutation interne n'est protégée que de l'extérieur, pas de ses pairs.
     const attempt = await ctx.db.get(attemptId);
     if (!attempt) throw new Error("Tentative introuvable");
+    if (attempt.studentId !== studentId) {
+      throw new Error("Tentative introuvable");
+    }
     if (attempt.isCorrect) return; // already correct, nothing to do
 
     await ctx.db.patch(attemptId, { isCorrect: true });

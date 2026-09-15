@@ -61,10 +61,20 @@ export const verifyShortAnswerWithAI = action({
       throw new Error("Non authentifié");
     }
 
+    // LA TENTATIVE DOIT APPARTENIR À L'APPELANT (§D16), et c'est
+    // `getAttemptContextForVerification` qui l'exige : cette action ne recevait
+    // qu'un `attemptId` venu du client, si bien qu'un élève couvert pouvait
+    // faire RECORRIGER LA TENTATIVE D'UN AUTRE — la faire passer en réussie et
+    // incrémenter sa progression — en payant l'appel IA de sa poche. Un droit
+    // vérifié sur l'appelant n'autorise que ce que l'appelant fait pour
+    // lui-même. La preuve de propriété est passée à la requête de contexte, qui
+    // rend `null` pour une tentative étrangère : le refus tombe donc AVANT
+    // l'appel IA, et `markAttemptCorrectByAI` la réexige à l'écriture.
+    //
     // Paywall (spec §5.4) — cette action appelle OpenAI directement, sans
     // passer par aiGateway.generate : il n'y a donc pas de verrou de tâche 4
-    // en aval ici. On contrôle le droit de L'APPELANT (pas un identifiant
-    // reçu en argument) avant toute lecture de contexte et tout appel IA.
+    // en aval ici. On contrôle le droit de L'APPELANT avant toute lecture de
+    // contexte et tout appel IA.
     // Même motif que attemptsExplain.generateExplanation : résoudre le
     // profil de l'appelant via la requête interne existante, puis
     // interroger getAccessStateForProfile (tâche 3). Une action n'a pas de
@@ -95,7 +105,7 @@ export const verifyShortAnswerWithAI = action({
 
     const data = (await ctx.runQuery(
       internal.attempts.getAttemptContextForVerification,
-      { attemptId },
+      { attemptId, studentId: callerProfile._id },
     )) as AttemptContext;
 
     if (!data) {
@@ -165,6 +175,7 @@ Réponds strictement par un JSON de cette forme exacte :
     if (isCorrect) {
       await ctx.runMutation(internal.attempts.markAttemptCorrectByAI, {
         attemptId,
+        studentId: callerProfile._id,
       });
     }
 

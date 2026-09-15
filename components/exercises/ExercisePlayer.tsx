@@ -30,7 +30,6 @@ interface ExerciseData {
 interface ExercisePlayerProps {
   exercises: ExerciseData[];
   topicId: string;
-  studentId: string;
   /** 0-based index to start at; useful for resuming an interrupted session. */
   initialIndex?: number;
   onComplete: (stats: {
@@ -47,7 +46,6 @@ const MAX_HINTS = 3;
 export default function ExercisePlayer({
   exercises,
   topicId,
-  studentId,
   initialIndex,
   onComplete,
 }: ExercisePlayerProps) {
@@ -226,7 +224,6 @@ export default function ExercisePlayer({
           setAiExplanationLoading(true);
           generateExplanation({
             exerciseId: currentExercise._id as Id<"exercises">,
-            studentId: studentId as Id<"profiles">,
           })
             .then((res) => {
               setAiExplanation(res.explanation);

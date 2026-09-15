@@ -62,9 +62,9 @@ async function drawFreeCode(
  *
  * CONSÉQUENCE ASSUMÉE : quiconque lit le billet peut entrer dans ce compte.
  * C'est le modèle voulu à cet âge, où le personnel réinitialise
- * (`schools.resetStudentPassword`) plutôt que l'enfant. Le jour où ces comptes
- * porteront autre chose que des tentatives d'exercices, il faudra revoir ceci
- * EN PREMIER.
+ * (`studentCredentials.resetStudentLoginCode`) plutôt que l'enfant. Le jour où
+ * ces comptes porteront autre chose que des tentatives d'exercices, il faudra
+ * revoir ceci EN PREMIER.
  *
  * Le SECRET garde les majuscules, lui : `Password.authorize` ne fait passer que
  * l'identifiant par `profile()`, jamais le mot de passe. C'est bien le code tel

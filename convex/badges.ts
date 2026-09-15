@@ -173,12 +173,22 @@ export const listMyEarned = query({
 //
 // Une mutation peut lever, et le garde est la toute première instruction :
 // rien n'est lu avant d'avoir établi le rôle. Un seul message pour tous les
-// refus de rôle, comme `profiles.linkChild` — et une `Error` ordinaire, non
-// une `ConvexError` : ce module ne promet aucun texte à l'écran, qui a déjà
-// son repli. `ConvexError` sert à ce qui doit y ARRIVER, puisque son champ
-// `data` est le seul transmis au client : le CODE d'un refus de paywall
-// (`accessRules.ts`), et le TEXTE des refus d'administration de
-// `convex/schools.ts`.
+// refus de rôle, comme `profiles.linkChild`, et une `Error` ordinaire suffit
+// à CELUI-LÀ : il ne dit rien qu'un administrateur puisse suivre, et le repli
+// de l'écran le vaut.
+//
+// NE PAS ÉTENDRE CETTE PHRASE AUX AUTRES REFUS DU MODULE. Ceux qui expliquent
+// un échec de suppression nomment, eux, une action à suivre — et elle
+// n'arrive pas : l'écran attrape en `err instanceof Error`, test que TOUTE
+// erreur passe puisque `ConvexError` étend `Error`, si bien que son repli est
+// inatteignable et que l'administrateur lit le `message` enveloppé par le
+// client Convex, occulté hors développement. C'est un MANQUE, pas un choix :
+// la bascule que `convex/schools.ts` a déjà reçue reste à faire ici.
+//
+// `ConvexError` sert à ce qui doit ARRIVER à l'écran, son champ `data` étant
+// le seul transmis TEL QUEL : le CODE d'un refus de paywall — levé par les
+// modules qui interrogent la couche d'accès, jamais par `accessRules.ts`, pur
+// et sans un seul `throw` — et le TEXTE des refus de `convex/schools.ts`.
 //
 // `markBadgesSeen` plus bas est le cas inverse et garde son `requireAccess` :
 // c'est l'élève lui-même qui écrit, sur son propre profil.

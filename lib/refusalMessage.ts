@@ -33,6 +33,17 @@
  * `kidMessages`) — un objet n'est donc pas un refus d'administration et
  * retombe sur le repli.
  *
+ * LA CHAÎNE VIDE RETOMBE SUR LE REPLI, et c'est le seul cas où ce module
+ * écarte une `data` pourtant textuelle. Il ne se garde pas d'une valeur
+ * improbable : il tient sa propre postcondition, « rendre une chaîne que
+ * l'écran peut AFFICHER ». Les six rendus d'erreur des écrans écoles sont de
+ * la forme `{error && (…)}`, et `""` y est falsy — un refus vide ne montrerait
+ * donc pas une boîte vide, il ne montrerait RIEN : le bouton se réactive, le
+ * formulaire ne se vide pas, et aucune relecture d'écran ne rattrape ça.
+ * Aucun des 48 refus de `convex/schools.ts` ne lève `""` aujourd'hui, donc le
+ * garde ne peut masquer aucun message existant ; il coûte une comparaison et
+ * ferme le seul mode de panne invisible de cette fonction.
+ *
  * TOUT CE QUI N'A PAS DE `data` RETOMBE AUSSI SUR LE REPLI : panne réseau,
  * arguments refusés par le validateur, fonction introuvable, erreur du
  * runtime. Ce ne sont pas des refus rédigés, et leur `message` — occulté en
@@ -46,7 +57,8 @@ export function refusalMessage(err: unknown, fallback: string): string {
     typeof err === "object" &&
     err !== null &&
     "data" in err &&
-    typeof err.data === "string"
+    typeof err.data === "string" &&
+    err.data !== ""
   ) {
     return err.data;
   }

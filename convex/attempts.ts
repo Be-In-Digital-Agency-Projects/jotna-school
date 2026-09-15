@@ -223,24 +223,33 @@ export const submit = mutation({
     // profil vient de la session et l'argument disparaît, ce qui rend
     // l'usurpation INEXPRIMABLE plutôt que refusée.
     //
-    // ET IL DOIT ÊTRE UN ÉLÈVE, comme `badges.markBadgesSeen` l'exige déjà.
-    // `attempts` et `studentTopicProgress` sont des tables de parcours
-    // pédagogique, lues par les bulletins et les badges ; une ligne portant un
-    // profil de parent ou de professeur n'y a pas de sens, et rien en aval ne
-    // sait l'écarter. Un professeur qui essaie un exercice ne produit donc
-    // aucune trace, ce qui est le comportement voulu.
-    //
-    // Paywall (spec §5.4) — une mutation lève, l'appelant attrape.
+    // Paywall (spec §5.4) — une mutation lève, l'appelant attrape. C'EST LUI
+    // QUI ÉCARTE LES NON-ÉLÈVES, et non la garde de rôle plus bas :
+    // `decideAccess` répond `not_student` dès que le rôle n'est pas `student`
+    // (`accessRules.ts`), ce que `loadAccessInput` lui garantit en ne
+    // remplissant que `role` pour les autres. Un professeur qui essaie un
+    // exercice ne produisait donc déjà aucune trace avant ce correctif — ce
+    // que la garde ci-dessous ne change pas.
     const callerUserId = await getAuthUserId(ctx);
     if (!callerUserId) throw new Error("Non authentifié");
     const callerProfile = await ctx.db
       .query("profiles")
       .withIndex("by_userId", (q) => q.eq("userId", callerUserId as string))
       .unique();
-    if (!callerProfile || callerProfile.role !== "student") {
+    if (!callerProfile) throw new Error("Profil introuvable");
+    await requireAccess(ctx, callerProfile);
+
+    // CEINTURE ET BRETELLES, ET APRÈS LE PAYWALL À DESSEIN. Cette garde est
+    // redondante aujourd'hui ; elle ne mord que si `decideAccess` cessait un
+    // jour de refuser les non-élèves. La placer AVANT `requireAccess`
+    // remplacerait le `ConvexError({ code: "ACCESS_DENIED" })` — que le client
+    // sait rendre (`lib/accessCopy.ts`) — par une `Error` nue qu'il ne sait
+    // pas lire : une garde morte ne doit pas dégrader le refus vivant.
+    // `attempts` et `studentTopicProgress` alimentent bulletins et badges, et
+    // rien en aval ne saurait écarter une ligne portant un profil d'adulte.
+    if (callerProfile.role !== "student") {
       throw new Error("Profil élève introuvable");
     }
-    await requireAccess(ctx, callerProfile);
     const studentId = callerProfile._id;
 
     const exercise = await ctx.db.get(args.exerciseId);

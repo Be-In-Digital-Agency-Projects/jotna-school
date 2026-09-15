@@ -5,6 +5,7 @@ import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import Link from "next/link";
 import { Settings, Save, User, UserCircle } from "lucide-react";
+import { refusalMessage } from "@/lib/refusalMessage";
 
 export default function ParentSettingsPage() {
   const profile = useQuery(api.profiles.getCurrentProfile);
@@ -15,6 +16,7 @@ export default function ParentSettingsPage() {
   const [receiveReports, setReceiveReports] = useState(true);
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (profile) {
@@ -32,17 +34,15 @@ export default function ParentSettingsPage() {
 
     setSaving(true);
     setSaved(false);
+    setError(null);
 
     try {
-      await updateProfile({
-        id: profile._id,
-        name,
-        preferences: { receiveReports },
-      });
+      // Plus de cible en argument : le serveur écrit le profil de la session.
+      await updateProfile({ name, receiveReports });
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
-    } catch {
-      // Handle error silently — could add toast
+    } catch (err) {
+      setError(refusalMessage(err, "Erreur lors de l'enregistrement"));
     } finally {
       setSaving(false);
     }
@@ -157,6 +157,10 @@ export default function ParentSettingsPage() {
             <span className="text-sm text-green-600">
               Modifications enregistrées !
             </span>
+          )}
+
+          {error && (
+            <span className="text-sm text-red-700">{error}</span>
           )}
         </div>
       </form>

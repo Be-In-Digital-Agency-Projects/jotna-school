@@ -1,8 +1,10 @@
 import { query, mutation, action, internalMutation } from "./_generated/server";
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { createAccount, getAuthUserId } from "@convex-dev/auth/server";
 import { internal } from "./_generated/api";
 import { decideLinkChild } from "./linkRules";
+import { decideProfileUpdate } from "./profileRules";
+import type { ProfileUpdateDecision } from "./profileRules";
 import { studentIdsTaughtBy } from "./access";
 
 // ---------------------------------------------------------------------------
@@ -183,29 +185,97 @@ export const createChildProfile = internalMutation({
   },
 });
 
-/** Update an existing profile (name, avatar). */
+/**
+ * La phrase que lit l'adulte, pour chaque refus de `decideProfileUpdate`.
+ *
+ * Une TABLE plutôt qu'un `throw` écrit en dur : le jour où la règle gagne un
+ * second motif, TypeScript exige sa phrase ici. Un message unique se serait
+ * tu et aurait raconté au lecteur le mauvais refus — précisément la panne que
+ * cette branche passe son temps à réparer.
+ */
+const UPDATE_REFUSALS: Record<
+  Extract<ProfileUpdateDecision, { ok: false }>["reason"],
+  string
+> = {
+  empty_name: "Le nom est obligatoire",
+};
+
+/**
+ * Le profil de la SESSION se modifie lui-même — nom, avatar, envoi des
+ * rapports par courriel.
+ *
+ * ELLE ÉCRIVAIT SUR LE PROFIL D'AUTRUI. Mutation publique, aucune garde, cible
+ * reçue en argument : il suffisait de tenir un `Id<"profiles">` pour renommer
+ * son porteur. Et cet identifiant s'obtient — `linkRequests.searchStudentByEmail`
+ * le rend contre une adresse de courriel, à un compte parent que l'inscription
+ * délivre en trente secondes. Renommer l'enfant d'un autre était à portée d'un
+ * appel.
+ *
+ * LA CIBLE A DONC DISPARU DES ARGUMENTS au lieu d'être contrôlée. Ses deux
+ * appelants — les écrans de paramètres parent et professeur — y passaient déjà
+ * `getCurrentProfile()._id`, leur propre profil : l'argument était redondant,
+ * et son retrait ne coûte aucun usage légitime. C'est la règle appliquée à
+ * `attempts.submit` et à `getChildren` : une écriture qui n'a pas à nommer
+ * quelqu'un d'autre cesse de le nommer, et l'autorisation devient structurelle
+ * au lieu d'être une vérification qu'on peut oublier.
+ *
+ * `preferences` N'EST PLUS ÉCRIT EN BLOC, pour deux raisons distinctes.
+ *
+ * C'est un fourre-tout : `streak.ts`, `badges.ts` et `students.ts` y rangent
+ * série, badges et son, et TOUS fusionnent — ils relisent l'objet avant de le
+ * réécrire. Cette mutation était la seule à le remplacer entier. L'écran
+ * parent envoyait `{ receiveReports }`, ce qui EFFAÇAIT toute autre clé ;
+ * inoffensif tant qu'un parent n'en a pas d'autre, mais c'est un piège armé
+ * qui se déclenche à la première préférence ajoutée.
+ *
+ * Et `v.any()` laissait le client nommer N'IMPORTE QUELLE clé, la cible fût-elle
+ * devenue soi-même : un élève se décernait ses propres badges et sa propre
+ * série en un appel. Série, badges et niveau sont de l'état GAGNÉ, écrit par le
+ * moteur ; un formulaire de paramètres n'a pas à pouvoir les nommer. L'argument
+ * est donc `receiveReports` — la seule préférence que ces écrans règlent
+ * vraiment — fusionnée dans l'objet existant.
+ *
+ * Les refus sont des `ConvexError` de forme CHAÎNE : leur lecteur est un adulte
+ * sur son propre écran de paramètres, le texte est déjà écrit, aucun écran n'a
+ * à le reformuler (voir l'en-tête de `convex/schools.ts`). Les deux écrans les
+ * avalaient en silence (`catch {}`) ; ils lisent maintenant
+ * `lib/refusalMessage.ts`, sans quoi basculer les jets n'aurait rien changé.
+ *
+ * Le calcul du patch vit dans `convex/profileRules.ts`, pur et testé ; il ne
+ * reste ici que l'authentification, la lecture et l'écriture.
+ */
 export const updateProfile = mutation({
   args: {
-    id: v.id("profiles"),
     name: v.optional(v.string()),
     avatar: v.optional(v.string()),
-    preferences: v.optional(v.any()),
+    receiveReports: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
-    const { id, ...fields } = args;
-    const existing = await ctx.db.get(id);
-    if (!existing) {
-      throw new Error("Profil introuvable");
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      throw new ConvexError("Non authentifié");
     }
 
-    const updates: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(fields)) {
-      if (value !== undefined) {
-        updates[key] = value;
-      }
+    const profile = await ctx.db
+      .query("profiles")
+      .withIndex("by_userId", (q) => q.eq("userId", userId))
+      .unique();
+    if (!profile) {
+      throw new ConvexError("Profil introuvable");
     }
 
-    await ctx.db.patch(id, updates);
+    // Le `required` du formulaire est une commodité d'écran, pas une garantie :
+    // c'est `decideProfileUpdate` qui refuse un nom vide.
+    const decision = decideProfileUpdate(args, profile.preferences);
+    if (!decision.ok) {
+      throw new ConvexError(UPDATE_REFUSALS[decision.reason]);
+    }
+
+    // Un patch vide écrirait quand même le document : une révision de plus, un
+    // réveil de tous les abonnements qui le lisent, pour rien.
+    if (Object.keys(decision.patch).length === 0) return;
+
+    await ctx.db.patch(profile._id, decision.patch);
   },
 });
 

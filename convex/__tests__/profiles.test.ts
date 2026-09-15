@@ -262,40 +262,10 @@ describe("profiles", () => {
     });
   });
 
-  describe("updateProfile", () => {
-    it("devrait mettre à jour uniquement les champs fournis", async () => {
-      const ctx = createMockCtx({
-        profiles: [
-          {
-            _id: "p1",
-            userId: "u1",
-            role: "parent",
-            name: "Ancien Nom",
-          },
-        ],
-      });
-
-      // Simulate updateProfile handler: only update defined fields
-      const args = { id: "p1", name: "Nouveau Nom", avatar: undefined };
-      const { id, ...fields } = args;
-
-      const existing = await ctx.db.get(id);
-      expect(existing).not.toBeNull();
-
-      const updates: Record<string, unknown> = {};
-      for (const [key, value] of Object.entries(fields)) {
-        if (value !== undefined) {
-          updates[key] = value;
-        }
-      }
-
-      expect(updates).toEqual({ name: "Nouveau Nom" });
-      expect(updates).not.toHaveProperty("avatar");
-
-      await ctx.db.patch(id, updates);
-
-      const updated = await ctx.db.get(id);
-      expect(updated!.name).toBe("Nouveau Nom");
-    });
-  });
+  // `updateProfile` est désormais testée pour de vrai, dans
+  // `profileRules.test.ts`. Le test qui vivait ici RECOPIAIT le corps du
+  // handler puis vérifiait la copie : il passait au vert quelle que soit la
+  // mutation réelle, et il est passé au vert pendant tout le temps où elle
+  // écrivait sur le profil d'autrui. Son argument `id` — celui-là même qui
+  // ouvrait la porte — figurait dans le test sans que rien ne s'en émeuve.
 });

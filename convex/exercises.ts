@@ -1,7 +1,7 @@
 import { query, mutation, internalMutation } from "./_generated/server";
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { callerIsStaff } from "./access";
+import { callerIsAdmin, callerIsStaff } from "./access";
 
 // ---------------------------------------------------------------------------
 // Queries
@@ -120,6 +120,31 @@ export const listByTeacher = query({
 
 // ---------------------------------------------------------------------------
 // Mutations
+//
+// LES SIX SONT GARDÉES, ET ELLES NE L'ÉTAIENT PAS. Aucune ne contrôlait quoi
+// que ce soit : un appelant NON AUTHENTIFIÉ pouvait réécrire l'énoncé, le
+// corrigé et les indices de n'importe quel exercice, en publier, en dépublier,
+// en supprimer. Les quatre LECTURES de ce fichier avaient été fermées ; les
+// écritures avaient été manquées, alors qu'elles sont le cœur de valeur d'une
+// application devenue payante.
+//
+// LA LIGNE DE PARTAGE VIENT DES APPELANTS VIVANTS, pas d'une règle produit que
+// personne n'a écrite. `callerIsStaff` là où un écran PROFESSEUR agit
+// aujourd'hui — `update` (son écran d'édition), `publish` et
+// `publishAllFromUpload` (ses imports PDF) ; `callerIsAdmin` là où seuls des
+// écrans d'administration appellent — `unpublish`, `remove`, et `create`, qui
+// n'a aucun appelant applicatif (les exercices naissent par `createDrafts`,
+// interne au flux PDF). Quiconque connaît le produit peut déplacer cette ligne
+// À DESSEIN ; elle n'est resserrée ici qu'à la hauteur que les faits
+// soutiennent, pour fermer le trou sans inventer une restriction.
+//
+// `ConvexError` et non `Error` : ces refus s'adressent à un adulte devant un
+// écran (spec §5.8, `lib/refusalMessage.ts`). Réserve à traiter : QUATRE des
+// cinq écrans appelants n'ont aucune capture, et le cinquième jette l'erreur
+// dans un `catch {}` nu — un refus y est donc invisible aujourd'hui, celui-ci
+// comme ceux qui existaient déjà (« Exercice introuvable », « des tentatives y
+// sont associées »). La classe est posée juste ; les lecteurs restent à
+// réparer.
 // ---------------------------------------------------------------------------
 
 export const create = mutation({
@@ -139,9 +164,11 @@ export const create = mutation({
     order: v.number(),
   },
   handler: async (ctx, args) => {
+    // Garde de RÔLE, première instruction : rien n'est lu avant.
+    if (!(await callerIsAdmin(ctx))) throw new ConvexError("Rôle non autorisé");
     const topic = await ctx.db.get(args.topicId);
     if (!topic) {
-      throw new Error("Thématique introuvable");
+      throw new ConvexError("Thématique introuvable");
     }
     return await ctx.db.insert("exercises", {
       topicId: args.topicId,
@@ -177,10 +204,12 @@ export const update = mutation({
     order: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    // Garde de RÔLE, première instruction : rien n'est lu avant.
+    if (!(await callerIsStaff(ctx))) throw new ConvexError("Rôle non autorisé");
     const { id, ...fields } = args;
     const existing = await ctx.db.get(id);
     if (!existing) {
-      throw new Error("Exercice introuvable");
+      throw new ConvexError("Exercice introuvable");
     }
 
     const updates: Record<string, unknown> = {};
@@ -200,9 +229,11 @@ export const update = mutation({
 export const publish = mutation({
   args: { id: v.id("exercises") },
   handler: async (ctx, args) => {
+    // Garde de RÔLE, première instruction : rien n'est lu avant.
+    if (!(await callerIsStaff(ctx))) throw new ConvexError("Rôle non autorisé");
     const existing = await ctx.db.get(args.id);
     if (!existing) {
-      throw new Error("Exercice introuvable");
+      throw new ConvexError("Exercice introuvable");
     }
     await ctx.db.patch(args.id, {
       status: "published",
@@ -214,9 +245,11 @@ export const publish = mutation({
 export const unpublish = mutation({
   args: { id: v.id("exercises") },
   handler: async (ctx, args) => {
+    // Garde de RÔLE, première instruction : rien n'est lu avant.
+    if (!(await callerIsAdmin(ctx))) throw new ConvexError("Rôle non autorisé");
     const existing = await ctx.db.get(args.id);
     if (!existing) {
-      throw new Error("Exercice introuvable");
+      throw new ConvexError("Exercice introuvable");
     }
     await ctx.db.patch(args.id, {
       status: "draft",
@@ -232,6 +265,8 @@ export const unpublish = mutation({
 export const publishAllFromUpload = mutation({
   args: { uploadId: v.id("pdfUploads") },
   handler: async (ctx, { uploadId }) => {
+    // Garde de RÔLE, première instruction : rien n'est lu avant.
+    if (!(await callerIsStaff(ctx))) throw new ConvexError("Rôle non autorisé");
     const allExercises = await ctx.db.query("exercises").take(1000);
     const relevant = allExercises.filter(
       (ex) => ex.sourcePdfUploadId === uploadId && ex.status === "draft",
@@ -258,9 +293,11 @@ export const publishAllFromUpload = mutation({
 export const remove = mutation({
   args: { id: v.id("exercises") },
   handler: async (ctx, args) => {
+    // Garde de RÔLE, première instruction : rien n'est lu avant.
+    if (!(await callerIsAdmin(ctx))) throw new ConvexError("Rôle non autorisé");
     const existing = await ctx.db.get(args.id);
     if (!existing) {
-      throw new Error("Exercice introuvable");
+      throw new ConvexError("Exercice introuvable");
     }
 
     // Check if any attempts reference this exercise
@@ -269,7 +306,7 @@ export const remove = mutation({
       .filter((q) => q.eq(q.field("exerciseId"), args.id))
       .first();
     if (attempt) {
-      throw new Error(
+      throw new ConvexError(
         "Impossible de supprimer cet exercice car des tentatives y sont associées.",
       );
     }

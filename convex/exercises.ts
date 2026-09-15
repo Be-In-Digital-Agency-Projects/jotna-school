@@ -1,7 +1,13 @@
-import { query, mutation, internalMutation } from "./_generated/server";
+import {
+  query,
+  mutation,
+  internalMutation,
+  type MutationCtx,
+} from "./_generated/server";
+import type { Doc } from "./_generated/dataModel";
 import { ConvexError, v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { callerIsAdmin, callerIsStaff } from "./access";
+import { callerIsAdmin, callerIsStaff, callerStaffProfile } from "./access";
 
 // ---------------------------------------------------------------------------
 // Queries
@@ -121,31 +127,73 @@ export const listByTeacher = query({
 // ---------------------------------------------------------------------------
 // Mutations
 //
-// LES SIX SONT GARDÉES, ET ELLES NE L'ÉTAIENT PAS. Aucune ne contrôlait quoi
-// que ce soit : un appelant NON AUTHENTIFIÉ pouvait réécrire l'énoncé, le
-// corrigé et les indices de n'importe quel exercice, en publier, en dépublier,
-// en supprimer. Les quatre LECTURES de ce fichier avaient été fermées ; les
-// écritures avaient été manquées, alors qu'elles sont le cœur de valeur d'une
+// LES SIX SONT GARDÉES, ET AUCUNE NE L'ÉTAIT. Pas une ne contrôlait quoi que
+// ce soit : un appelant NON AUTHENTIFIÉ pouvait réécrire l'énoncé, le corrigé
+// et les indices de n'importe quel exercice, en publier, en dépublier, en
+// supprimer. Les LECTURES de ce fichier avaient été fermées ; les écritures
+// avaient été manquées, alors qu'elles sont le cœur de valeur d'une
 // application devenue payante.
 //
-// LA LIGNE DE PARTAGE VIENT DES APPELANTS VIVANTS, pas d'une règle produit que
-// personne n'a écrite. `callerIsStaff` là où un écran PROFESSEUR agit
-// aujourd'hui — `update` (son écran d'édition), `publish` et
-// `publishAllFromUpload` (ses imports PDF) ; `callerIsAdmin` là où seuls des
-// écrans d'administration appellent — `unpublish`, `remove`, et `create`, qui
-// n'a aucun appelant applicatif (les exercices naissent par `createDrafts`,
-// interne au flux PDF). Quiconque connaît le produit peut déplacer cette ligne
-// À DESSEIN ; elle n'est resserrée ici qu'à la hauteur que les faits
-// soutiennent, pour fermer le trou sans inventer une restriction.
+// DEUX RÈGLES, et non une liste d'écrans — une liste se périme à l'écran
+// suivant, une règle tient :
 //
-// `ConvexError` et non `Error` : ces refus s'adressent à un adulte devant un
-// écran (spec §5.8, `lib/refusalMessage.ts`). Réserve à traiter : QUATRE des
-// cinq écrans appelants n'ont aucune capture, et le cinquième jette l'erreur
-// dans un `catch {}` nu — un refus y est donc invisible aujourd'hui, celui-ci
-// comme ceux qui existaient déjà (« Exercice introuvable », « des tentatives y
-// sont associées »). La classe est posée juste ; les lecteurs restent à
-// réparer.
+//  1. Une écriture qu'un membre du PERSONNEL fait sur ce qui est À LUI passe
+//     par une garde de LIEN (`staffMayTouchExercise` plus bas) : le rôle ne
+//     suffit pas, parce que `professeur` s'obtient par auto-inscription
+//     (`convex/auth.ts`) — donc gratuitement, sans affiliation. Un garde de
+//     rôle seul rétrécirait le trou au lieu de le fermer.
+//  2. Une écriture qui n'appartient à personne en particulier — créer,
+//     dépublier, supprimer — est réservée à l'ADMINISTRATEUR. Ce sont des
+//     actes sur le catalogue lui-même, pas sur le travail de quelqu'un.
+//
+// Déplacer cette ligne est une décision de produit, pas de code : elle est
+// posée ici au plus serré que les données soutiennent, sans inventer de
+// restriction ni laisser de mou.
+//
+// `ConvexError` et non `Error` : la règle du dépôt (en-têtes de `topics.ts`,
+// `subjects.ts`, `badges.ts` ; `lib/refusalMessage.ts`) veut cette classe pour
+// ce qu'un LECTEUR AFFICHE. RÉSERVE ASSUMÉE, ET C'EST UNE DETTE, PAS UN
+// ACQUIS : aucun des écrans appelants ne lit encore `refusalMessage`. Quatre
+// n'ont aucune capture — un refus y est un rejet de promesse non géré, donc un
+// bouton qui ne fait rien, sans un mot — et le cinquième affiche un texte codé
+// en dur. La classe est donc posée en avance sur ses lecteurs ; elle ne change
+// rien de visible tant qu'ils ne sont pas réparés, ce qui vaut aussi pour les
+// refus antérieurs (« Exercice introuvable », « des tentatives y sont
+// associées »).
 // ---------------------------------------------------------------------------
+
+/**
+ * Ce membre du personnel a-t-il quelque chose à voir avec cet exercice ?
+ *
+ * GARDE DE LIEN, et non de rôle, parce que `professeur` N'EST PAS UN RÔLE DE
+ * CONFIANCE : `convex/auth.ts` l'accepte à l'auto-inscription, sans affiliation
+ * ni validation. Un `callerIsStaff` seul laisserait donc n'importe quel compte
+ * créé en trente secondes réécrire le `answerKey` de n'importe quel exercice —
+ * y compris ceux qu'un palier a générés et que des élèves payants jouent. Le
+ * trou serait rétréci, pas fermé.
+ *
+ * Le lien EXISTE DÉJÀ dans les données : `sourcePdfUploadId` est posé par
+ * `pdfUploads.createDraftExercises`, et `pdfUploads.adminId` nomme qui a
+ * déposé le document. C'est exactement le contrôle que l'écran professeur fait
+ * DÉJÀ côté client (`app/(teacher)/teacher/pdf-uploads/[id]/page.tsx`) — et un
+ * client n'exécute que le code qu'il veut bien exécuter, donc le serveur doit
+ * le refaire.
+ *
+ * Un administrateur passe sans condition : il n'a pas d'import à lui, il les
+ * administre tous. Un professeur ne passe que sur les exercices issus de SES
+ * imports ; un exercice sans import d'origine — ceux que les paliers génèrent —
+ * n'appartient à aucun professeur, donc à aucun d'eux.
+ */
+async function staffMayTouchExercise(
+  ctx: MutationCtx,
+  staff: Doc<"profiles">,
+  exercise: Doc<"exercises">,
+): Promise<boolean> {
+  if (staff.role === "admin") return true;
+  if (!exercise.sourcePdfUploadId) return false;
+  const upload = await ctx.db.get(exercise.sourcePdfUploadId);
+  return upload?.adminId === staff._id;
+}
 
 export const create = mutation({
   args: {
@@ -204,11 +252,14 @@ export const update = mutation({
     order: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    // Garde de RÔLE, première instruction : rien n'est lu avant.
-    if (!(await callerIsStaff(ctx))) throw new ConvexError("Rôle non autorisé");
+    // Garde de LIEN, première instruction : rien n'est lu avant.
+    const staff = await callerStaffProfile(ctx);
+    if (!staff) throw new ConvexError("Rôle non autorisé");
     const { id, ...fields } = args;
     const existing = await ctx.db.get(id);
-    if (!existing) {
+    // Un exercice hors de portée est INTROUVABLE, jamais « non autorisé » :
+    // distinguer les deux renseignerait sur ce qui existe.
+    if (!existing || !(await staffMayTouchExercise(ctx, staff, existing))) {
       throw new ConvexError("Exercice introuvable");
     }
 
@@ -229,10 +280,11 @@ export const update = mutation({
 export const publish = mutation({
   args: { id: v.id("exercises") },
   handler: async (ctx, args) => {
-    // Garde de RÔLE, première instruction : rien n'est lu avant.
-    if (!(await callerIsStaff(ctx))) throw new ConvexError("Rôle non autorisé");
+    // Garde de LIEN, première instruction : rien n'est lu avant.
+    const staff = await callerStaffProfile(ctx);
+    if (!staff) throw new ConvexError("Rôle non autorisé");
     const existing = await ctx.db.get(args.id);
-    if (!existing) {
+    if (!existing || !(await staffMayTouchExercise(ctx, staff, existing))) {
       throw new ConvexError("Exercice introuvable");
     }
     await ctx.db.patch(args.id, {
@@ -265,8 +317,14 @@ export const unpublish = mutation({
 export const publishAllFromUpload = mutation({
   args: { uploadId: v.id("pdfUploads") },
   handler: async (ctx, { uploadId }) => {
-    // Garde de RÔLE, première instruction : rien n'est lu avant.
-    if (!(await callerIsStaff(ctx))) throw new ConvexError("Rôle non autorisé");
+    // Garde de LIEN, première instruction : rien n'est lu avant. Ici le lien se
+    // juge sur l'IMPORT lui-même, que l'argument désigne.
+    const staff = await callerStaffProfile(ctx);
+    if (!staff) throw new ConvexError("Rôle non autorisé");
+    const target = await ctx.db.get(uploadId);
+    if (!target || (staff.role !== "admin" && target.adminId !== staff._id)) {
+      throw new ConvexError("Import introuvable");
+    }
     const allExercises = await ctx.db.query("exercises").take(1000);
     const relevant = allExercises.filter(
       (ex) => ex.sourcePdfUploadId === uploadId && ex.status === "draft",

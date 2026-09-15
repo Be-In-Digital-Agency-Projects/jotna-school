@@ -350,6 +350,34 @@ export async function callerAdminProfile(
 }
 
 /**
+ * Le PROFIL de l'appelant s'il est `professeur` ou `admin`, `null` sinon.
+ *
+ * Même garde que `callerIsStaff` — mêmes refus, exactement — mais qui rend
+ * l'auteur au lieu de le jeter, sur le modèle de `callerAdminProfile`
+ * ci-dessus. Destiné aux mutations qui doivent ensuite juger d'un LIEN et non
+ * d'un rôle : l'identité de l'appelant sert à décider s'il a quelque chose à
+ * voir avec le document qu'il désigne.
+ *
+ * C'est la doctrine que ce fichier énonce déjà plus haut pour toute fonction
+ * qui reçoit un identifiant en argument — un garde de rôle y laisse tout le
+ * personnel agir sur le document de n'importe qui. Elle vaut ici d'autant plus
+ * que `professeur` n'est PAS un rôle de confiance dans ce dépôt :
+ * `convex/auth.ts` l'accepte à l'auto-inscription, sans affiliation ni
+ * validation. « Membre du personnel » y veut dire « a coché Professeur ».
+ *
+ * Le remplace, ne s'y ajoute pas : appeler `callerIsStaff` en plus relirait
+ * `profiles` pour une réponse déjà connue.
+ */
+export async function callerStaffProfile(
+  ctx: QueryCtx | MutationCtx,
+): Promise<Doc<"profiles"> | null> {
+  const profile = await currentProfile(ctx);
+  return profile?.role === "professeur" || profile?.role === "admin"
+    ? profile
+    : null;
+}
+
+/**
  * Nombre maximum de classes lues pour un professeur.
  *
  * Le dépôt ne modélise que six niveaux (CI → CM2) et une classe est une

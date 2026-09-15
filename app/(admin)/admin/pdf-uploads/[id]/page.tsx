@@ -117,7 +117,6 @@ export default function PdfUploadDetailPage({
     try {
       // Re-create with the same metadata to trigger extraction again
       await createUpload({
-        adminId: upload.adminId,
         storageId: upload.storageId,
         originalFilename: upload.originalFilename,
         mimeType: upload.mimeType,

@@ -215,10 +215,15 @@ const TOPIC_EXERCISES_LIMIT = 500;
  * commentaire prétendait à tort que c'était inutile. Le raisonnement était :
  * ses deux seuls écrivains exigent une tentative, donc le refus sur les
  * tentatives la couvre. Il est faux, parce qu'une progression peut SURVIVRE à
- * son exercice — `pdfUploads.remove` efface des exercices sans toucher aux
- * tentatives ni aux progressions. La boucle ci-dessous n'itère que sur les
- * exercices ENCORE présents ; une progression rattachée à un exercice déjà
- * effacé passait donc entre les mailles.
+ * son exercice, et la boucle ci-dessous n'itère que sur les exercices ENCORE
+ * présents.
+ *
+ * La porte qui produisait ces survivantes est désormais fermée —
+ * `pdfUploads.remove` effaçait des exercices sans toucher aux tentatives ni
+ * aux progressions, elle refuse maintenant — MAIS LE CONTRÔLE RESTE. Fermer
+ * une porte n'efface pas ce qui est déjà passé : les lignes créées avant ce
+ * correctif survivent en base, et rien ne les nettoie. Un contrôle qui ne
+ * vaudrait que pour les données futures n'est pas un contrôle.
  */
 export const removeWithExercises = mutation({
   args: { id: v.id("topics") },

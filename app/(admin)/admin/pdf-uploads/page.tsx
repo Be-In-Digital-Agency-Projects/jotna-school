@@ -5,6 +5,7 @@ import { api } from "@/convex/_generated/api";
 import { type Id } from "@/convex/_generated/dataModel";
 import { useState, useRef } from "react";
 import Link from "next/link";
+import { refusalMessage } from "@/lib/refusalMessage";
 import {
   Upload,
   FileText,
@@ -109,7 +110,6 @@ export default function PdfUploadsPage() {
       // Step 3: Create the upload record
       // TODO: Replace with actual admin profile ID from auth context
       await createUpload({
-        adminId: selectedSubjectId as unknown as Id<"profiles">,
         storageId,
         originalFilename: file.name,
         mimeType: file.type,
@@ -144,10 +144,11 @@ export default function PdfUploadsPage() {
     if (!window.confirm("Supprimer ce PDF et tous les exercices associes ?")) {
       return;
     }
+    setError(null);
     try {
       await removeUpload({ id });
-    } catch {
-      setError("Erreur lors de la suppression.");
+    } catch (err) {
+      setError(refusalMessage(err, "Erreur lors de la suppression."));
     }
   };
 

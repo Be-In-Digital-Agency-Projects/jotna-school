@@ -13,9 +13,11 @@ export default function RegisterPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [role, setRole] = useState<"parent" | "student" | "professeur">(
-    "parent",
-  );
+  // Ni `professeur` ni `directeur` ni `admin` : un rôle qui confère une
+  // autorité ne s'attribue pas soi-même, et `convex/auth.ts` REFUSE désormais
+  // ceux-là. Ce menu ne doit proposer que ce que le serveur accepte — sans quoi
+  // l'écran promettrait un compte que l'inscription rejette.
+  const [role, setRole] = useState<"parent" | "student">("parent");
   const [aiConsent, setAiConsent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -120,14 +122,11 @@ export default function RegisterPage() {
         <label className="block text-sm font-medium mb-1">Rôle</label>
         <select
           value={role}
-          onChange={(e) =>
-            setRole(e.target.value as "parent" | "student" | "professeur")
-          }
+          onChange={(e) => setRole(e.target.value as "parent" | "student")}
           className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500"
         >
           <option value="parent">Parent / Tuteur</option>
           <option value="student">Élève</option>
-          <option value="professeur">Professeur</option>
         </select>
       </div>
 

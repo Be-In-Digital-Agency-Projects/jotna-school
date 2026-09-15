@@ -192,6 +192,42 @@ export const create = mutation({
 });
 
 /** Delete a PDF upload and its associated exercises. */
+/**
+ * Relance l'extraction d'un import qui a échoué.
+ *
+ * ELLE EXISTE PARCE QUE L'ÉCRAN RECRÉAIT UN IMPORT, et que ce raccourci est
+ * devenu un défaut le jour où `create` a cessé de recevoir `adminId` : l'auteur
+ * venant désormais de la SESSION, un administrateur qui relançait l'import d'un
+ * professeur s'en attribuait la copie — et le professeur perdait l'accès à ses
+ * propres exercices, `listByTeacher` et `getById` filtrant sur `adminId`.
+ *
+ * Relancer sur la ligne EXISTANTE ferme trois choses à la fois : l'auteur reste
+ * celui qui est écrit dans le document et non celui qui clique ; aucune ligne
+ * jumelle n'apparaît ; et les deux ne partagent plus un même `storageId`, ce
+ * qui faisait qu'une suppression de l'une emportait le fichier de l'autre.
+ *
+ * Garde de LIEN comme le reste du module : son propre import, ou administrateur.
+ */
+export const retryExtraction = mutation({
+  args: { id: v.id("pdfUploads") },
+  handler: async (ctx, { id }) => {
+    const staff = await callerStaffProfile(ctx);
+    if (!staff) throw new ConvexError("Rôle non autorisé");
+
+    const upload = await ctx.db.get(id);
+    if (!upload || !staffOwnsUpload(staff, upload)) {
+      throw new ConvexError("Import introuvable");
+    }
+
+    // L'erreur précédente s'efface : la laisser ferait afficher un échec
+    // pendant que l'extraction retourne.
+    await ctx.db.patch(id, { extractedRaw: undefined });
+    await ctx.scheduler.runAfter(0, internal.pdfUploadsExtract.extract, {
+      uploadId: id,
+    });
+  },
+});
+
 /** Exercices lus au plus pour la suppression d'un import. */
 const UPLOAD_EXERCISES_LIMIT = 200;
 

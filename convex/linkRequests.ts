@@ -9,6 +9,7 @@ import { v, ConvexError } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { internal } from "./_generated/api";
+import { secureRandomString } from "./secureRandom";
 
 const TOKEN_TTL_MS = 48 * 60 * 60 * 1000; // 48 hours
 
@@ -264,12 +265,19 @@ export const resolveByToken = internalMutation({
 // Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Le jeton d'une demande de rattachement — 48 symboles, tirés SÛREMENT.
+ *
+ * DÉFAUT PRÉEXISTANT, corrigé en passant. Il était tiré à `Math.random()`, dont
+ * l'état interne se reconstitue à partir de quelques sorties : qui obtenait
+ * deux jetons — en ouvrant deux demandes pour ses propres enfants — pouvait
+ * calculer ceux tirés entre les deux, et se rattacher à l'enfant d'un autre.
+ * CodeQL ne l'a pas signalé parce qu'il est hors du diff ; c'est exactement le
+ * même défaut que celui qu'il a signalé deux fichiers plus loin, et le
+ * corriger tient en une ligne maintenant que l'outil existe.
+ */
 function generateToken(): string {
   const chars =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  let token = "";
-  for (let i = 0; i < 48; i++) {
-    token += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return token;
+  return secureRandomString(48, chars);
 }

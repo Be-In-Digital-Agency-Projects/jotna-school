@@ -51,6 +51,7 @@ import type * as streak from "../streak.js";
 import type * as studentCredentials from "../studentCredentials.js";
 import type * as studentImport from "../studentImport.js";
 import type * as studentImportRun from "../studentImportRun.js";
+import type * as secureRandom from "../secureRandom.js";
 import type * as students from "../students.js";
 import type * as subjects from "../subjects.js";
 import type * as testSeeds from "../testSeeds.js";
@@ -106,6 +107,7 @@ declare const fullApi: ApiFromModules<{
   studentCredentials: typeof studentCredentials;
   studentImport: typeof studentImport;
   studentImportRun: typeof studentImportRun;
+  secureRandom: typeof secureRandom;
   students: typeof students;
   subjects: typeof subjects;
   testSeeds: typeof testSeeds;

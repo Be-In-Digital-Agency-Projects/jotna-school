@@ -8,6 +8,7 @@ import {
 } from "@convex-dev/auth/server";
 import type { Id } from "./_generated/dataModel";
 import { buildLoginCode, normalizeCode } from "./importCodes";
+import { secureRandomInt } from "./secureRandom";
 
 // ---------------------------------------------------------------------------
 // RÉINITIALISATION DU CODE D'UN ÉLÈVE — spec §6.2.
@@ -241,7 +242,7 @@ export const resetStudentLoginCode = action({
       const candidate = buildLoginCode(
         target.level,
         target.label,
-        (min, max) => min + Math.floor(Math.random() * (max - min + 1)),
+        secureRandomInt,
       );
       const taken = await ctx.runQuery(internal.studentCredentials.codeTaken, {
         code: normalizeCode(candidate),

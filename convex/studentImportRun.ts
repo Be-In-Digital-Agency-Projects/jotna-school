@@ -7,6 +7,11 @@ import {
   buildParentCode,
   normalizeCode,
 } from "./importCodes";
+// CES CODES SONT DES SECRETS : le code de connexion est à la fois
+// l'identifiant et le mot de passe de l'enfant, et le code parent ouvre son
+// dossier scolaire. `Math.random()` les rendait prédictibles — voir
+// `convex/secureRandom.ts`.
+import { secureRandomInt } from "./secureRandom";
 
 // ---------------------------------------------------------------------------
 // LE TRAVAIL PROPREMENT DIT — spec §6.1, étape 4.
@@ -69,14 +74,6 @@ function initialPassword(loginCode: string): string {
   return loginCode;
 }
 
-/** Tirage uniforme, bornes comprises. */
-function randomInt(minInclusive: number, maxInclusive: number): number {
-  return (
-    minInclusive +
-    Math.floor(Math.random() * (maxInclusive - minInclusive + 1))
-  );
-}
-
 export const processBatch = internalAction({
   args: { jobId: v.id("studentImportJobs") },
   handler: async (ctx, args): Promise<void> => {
@@ -100,7 +97,7 @@ export const processBatch = internalAction({
       }
 
       const loginCode = await drawFreeCode(
-        () => buildLoginCode(row.level, row.label, randomInt),
+        () => buildLoginCode(row.level, row.label, secureRandomInt),
         (candidate) =>
           ctx.runQuery(internal.studentImport.loginCodeTaken, {
             code: candidate,
@@ -116,7 +113,7 @@ export const processBatch = internalAction({
       }
 
       const parentCode = await drawFreeCode(
-        () => buildParentCode(randomInt),
+        () => buildParentCode(secureRandomInt),
         (candidate) =>
           ctx.runQuery(internal.studentImport.parentCodeTaken, {
             code: candidate,

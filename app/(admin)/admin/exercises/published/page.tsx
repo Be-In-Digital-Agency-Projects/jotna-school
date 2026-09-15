@@ -72,7 +72,7 @@ export default function PublishedPage() {
       {error && (
         <div
           role="alert"
-          className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700"
+          className="sticky top-2 z-20 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700 shadow-sm"
         >
           {error}
         </div>

@@ -152,15 +152,23 @@ export const listByTeacher = query({
 //
 // `ConvexError` et non `Error` : la règle du dépôt (en-têtes de `topics.ts`,
 // `subjects.ts`, `badges.ts` ; `lib/refusalMessage.ts`) veut cette classe pour
-// ce qu'un LECTEUR AFFICHE. RÉSERVE ASSUMÉE, ET C'EST UNE DETTE, PAS UN
-// ACQUIS : aucun des écrans appelants ne lit encore `refusalMessage`. Quatre
-// n'ont aucune capture — un refus y est un rejet de promesse non géré, donc un
-// bouton qui ne fait rien, sans un mot — et le cinquième affiche un texte codé
-// en dur. La classe est donc posée en avance sur ses lecteurs ; elle ne change
-// rien de visible tant qu'ils ne sont pas réparés, ce qui vaut aussi pour les
-// refus antérieurs (« Exercice introuvable », « des tentatives y sont
-// associées »).
+// ce qu'un LECTEUR AFFICHE. ELLE EST MÉRITÉE ICI : les cinq écrans appelants
+// lisent `refusalMessage` et rendent une bannière, sur leurs NEUF
+// gestionnaires. NE PAS RÉTROGRADER EN `Error` — ces refus retomberaient tous
+// sur les textes de repli génériques des écrans, silencieusement : `err.data`
+// cesserait d'être une chaîne, aucun test ni `tsc` ne le verrait, et les
+// phrases écrites ici (« des tentatives y sont associées », « Exercice
+// introuvable ») disparaîtraient de l'interface.
 // ---------------------------------------------------------------------------
+
+/**
+ * Exercices lus au plus pour un import PDF donné.
+ *
+ * Même valeur que `pdfUploads.getById`, à dessein : ce que l'écran montre doit
+ * être exactement ce que `publishAllFromUpload` publie. Deux bornes
+ * différentes, et le compte annoncé cesse d'être le compte publié.
+ */
+const UPLOAD_EXERCISES_LIMIT = 200;
 
 /**
  * Ce membre du personnel a-t-il quelque chose à voir avec cet exercice ?
@@ -325,10 +333,28 @@ export const publishAllFromUpload = mutation({
     if (!target || (staff.role !== "admin" && target.adminId !== staff._id)) {
       throw new ConvexError("Import introuvable");
     }
-    const allExercises = await ctx.db.query("exercises").take(1000);
-    const relevant = allExercises.filter(
-      (ex) => ex.sourcePdfUploadId === uploadId && ex.status === "draft",
-    );
+    // FILTRER PUIS PRENDRE, ET NON L'INVERSE. Ce code lisait
+    // `query("exercises").take(1000)` — donc les MILLE PLUS ANCIENS exercices
+    // de toute la table — avant de filtrer en mémoire sur l'import. L'écran,
+    // lui, filtre AVANT de prendre (`pdfUploads.getById`), si bien que les
+    // deux divergeaient dès que la table dépassait mille documents : l'écran
+    // affichait douze brouillons, la mutation n'en voyait aucun, n'en publiait
+    // aucun, marquait tout de même l'import « publié », et rendait
+    // `{ published: 0 }` — que l'écran annonçait en VERT comme une réussite.
+    //
+    // Le seuil n'a rien de théorique : `paliers/index.ts` insère un exercice à
+    // chaque génération et régénération de palier, donc la table grandit avec
+    // l'usage ÉLÈVE, pas seulement avec les imports.
+    //
+    // Même borne que l'écran (`.take(200)`), pour que ce qu'il montre soit
+    // exactement ce que ceci publie. Pas d'index sur `sourcePdfUploadId` : le
+    // dépôt l'assume déjà pour la lecture de l'écran, et le commentaire de
+    // `pdfUploads.getById` le dit.
+    const fromUpload = await ctx.db
+      .query("exercises")
+      .filter((q) => q.eq(q.field("sourcePdfUploadId"), uploadId))
+      .take(UPLOAD_EXERCISES_LIMIT);
+    const relevant = fromUpload.filter((ex) => ex.status === "draft");
     const now = Date.now();
     for (const ex of relevant) {
       await ctx.db.patch(ex._id, {

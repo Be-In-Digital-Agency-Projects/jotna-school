@@ -308,8 +308,13 @@ export default function TeacherPdfUploadDetailPage({
           setPublishError(null);
           try {
             const res = await publishAll({ uploadId: id as Id<"pdfUploads"> });
+            // À L'ARRIVÉE AUSSI, et pas seulement au départ : deux
+            // gestionnaires qui se chevaucheraient laisseraient sinon coexister
+            // un bandeau vert et un rouge, qui se contrediraient à l'écran.
+            setPublishError(null);
             setPublishMsg(`${res.published} exercice(s) publié(s) avec succès.`);
           } catch (err) {
+            setPublishMsg(null);
             setPublishError(
               refusalMessage(err, "Erreur lors de la publication."),
             );
@@ -325,6 +330,7 @@ export default function TeacherPdfUploadDetailPage({
           try {
             await publishExercise({ id: exerciseId });
           } catch (err) {
+            setPublishMsg(null);
             setPublishError(
               refusalMessage(
                 err,
@@ -351,7 +357,7 @@ export default function TeacherPdfUploadDetailPage({
                 <button
                   type="button"
                   onClick={handlePublishAll}
-                  disabled={publishing === "all"}
+                  disabled={publishing !== null}
                   className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {publishing === "all" ? (
@@ -373,7 +379,7 @@ export default function TeacherPdfUploadDetailPage({
             {publishError && (
               <div
                 role="alert"
-                className="border-b border-red-100 bg-red-50 px-6 py-3 text-sm text-red-700"
+                className="sticky top-2 z-20 border-b border-red-100 bg-red-50 px-6 py-3 text-sm text-red-700 shadow-sm"
               >
                 {publishError}
               </div>
@@ -421,7 +427,7 @@ export default function TeacherPdfUploadDetailPage({
                       <button
                         type="button"
                         onClick={() => handlePublishOne(exercise._id)}
-                        disabled={publishing === exercise._id}
+                        disabled={publishing !== null}
                         className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
                       >
                         {publishing === exercise._id ? (

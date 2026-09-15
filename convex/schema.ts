@@ -162,6 +162,12 @@ export default defineSchema({
   })
     .index("by_studentId_exerciseId", ["studentId", "exerciseId"])
     .index("by_studentId", ["studentId"])
+    // Répond à « cet exercice a-t-il été tenté ? » SANS connaître l'élève.
+    // Les trois autres index commencent par `studentId`, donc aucun ne sait le
+    // faire. `topics.removeWithExercises` en a besoin pour refuser d'effacer un
+    // exercice sur lequel un enfant a travaillé : sans lui, la question ne
+    // pouvait se poser qu'en balayant la table, ce que le code faisait — mal.
+    .index("by_exerciseId", ["exerciseId"])
     .index("by_palierAttemptId", ["palierAttemptId"])
     .index("by_palierAttempt_exercise", ["palierAttemptId", "exerciseId"]),
 
@@ -259,7 +265,11 @@ export default defineSchema({
     weaknesses: v.array(v.string()),
     frequentMistakes: v.array(v.string()),
     emailSentAt: v.optional(v.number()),
-  }).index("by_studentId_topicId", ["studentId", "topicId"]),
+  })
+    .index("by_studentId_topicId", ["studentId", "topicId"])
+    // Même raison : « cette thématique porte-t-elle un bulletin ? », sans
+    // connaître l'élève.
+    .index("by_topicId", ["topicId"]),
 
   // ===========================================================================
   // v2 NEW TABLES

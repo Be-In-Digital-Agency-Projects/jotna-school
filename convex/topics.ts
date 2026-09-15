@@ -167,6 +167,9 @@ export const remove = mutation({
  * `Id<"topics">` suffisait à effacer un chapitre, jusqu'à 500 de ses
  * exercices, toutes les tentatives des élèves dessus et leur progression.
  */
+/** Exercices lus au plus pour une suppression en cascade. */
+const TOPIC_EXERCISES_LIMIT = 500;
+
 export const removeWithExercises = mutation({
   args: { id: v.id("topics") },
   handler: async (ctx, { id }) => {
@@ -175,41 +178,72 @@ export const removeWithExercises = mutation({
     const topic = await ctx.db.get(id);
     if (!topic) throw new ConvexError("Thématique introuvable");
 
-    // 1. Exercises in this topic
+    // CETTE CASCADE N'EFFACE PLUS AUCUN DOSSIER D'ÉLÈVE, et c'est ce qui la
+    // rend sûre. Elle supprimait auparavant les tentatives, les progressions et
+    // les bulletins avec les exercices — contournant en gros la règle
+    // qu'`exercises.remove` applique un cran plus bas : « impossible de
+    // supprimer cet exercice car des tentatives y sont associées ». Un
+    // professeur ne pouvait pas effacer UN exercice joué, mais pouvait en
+    // effacer cinq cents d'un clic, avec l'historique des enfants.
+    //
+    // ELLE S'Y EFFAÇAIT MAL, DE SURCROÎT. La boucle lisait
+    // `query("attempts").take(500)` — les cinq cents tentatives LES PLUS
+    // ANCIENNES de toute la table — une fois PAR exercice, puis filtrait en
+    // mémoire. Passé cinq cents tentatives, celles des exercices supprimés
+    // survivaient en pointant vers un exercice effacé. Même méprise sur
+    // `studentTopicProgress` et `topicReports`. La fonction ne faisait donc pas
+    // ce que son nom promet : elle laissait des orphelines, en silence.
+    //
+    // La règle est désormais la MÊME qu'un cran plus bas, ce qui règle aussi la
+    // question du rôle : `callerIsStaff` suffit à nettoyer un import qui n'a
+    // servi à personne, et plus rien ici ne peut détruire le travail d'un
+    // enfant.
     const exercises = await ctx.db
       .query("exercises")
       .withIndex("by_topicId", (q) => q.eq("topicId", id))
-      .take(500);
+      .take(TOPIC_EXERCISES_LIMIT + 1);
 
-    // 2. Attempts on those exercises
-    // No index by exerciseId alone, so scan bounded batches per exercise.
-    for (const ex of exercises) {
-      const attempts = await ctx.db
+    // La ligne de plus distingue « exactement à la borne » de « au-delà ». Une
+    // suppression partielle laisserait une thématique vidée à moitié, pire que
+    // pas de suppression du tout.
+    if (exercises.length > TOPIC_EXERCISES_LIMIT) {
+      throw new ConvexError(
+        `Cette thématique contient plus de ${TOPIC_EXERCISES_LIMIT} exercices et ne peut pas être supprimée d'un seul geste.`,
+      );
+    }
+
+    for (const exercise of exercises) {
+      const attempt = await ctx.db
         .query("attempts")
-        .take(500);
-      for (const a of attempts) {
-        if (a.exerciseId === ex._id) await ctx.db.delete(a._id);
+        .withIndex("by_exerciseId", (q) => q.eq("exerciseId", exercise._id))
+        .first();
+      if (attempt) {
+        throw new ConvexError(
+          "Impossible de supprimer cette thématique car des élèves ont déjà travaillé sur ses exercices.",
+        );
       }
-      await ctx.db.delete(ex._id);
     }
 
-    // 3. Student progress for this topic
-    const progressRows = await ctx.db
-      .query("studentTopicProgress")
-      .take(500);
-    for (const p of progressRows) {
-      if (p.topicId === id) await ctx.db.delete(p._id);
-    }
-
-    // 4. Topic reports
-    const reports = await ctx.db
+    const report = await ctx.db
       .query("topicReports")
-      .take(500);
-    for (const r of reports) {
-      if (r.topicId === id) await ctx.db.delete(r._id);
+      .withIndex("by_topicId", (q) => q.eq("topicId", id))
+      .first();
+    if (report) {
+      throw new ConvexError(
+        "Impossible de supprimer cette thématique car elle porte déjà un bulletin d'élève.",
+      );
     }
 
-    // 5. Finally, the topic itself
+    // `studentTopicProgress` N'A PAS BESOIN D'ÊTRE VÉRIFIÉE, et ce n'est pas un
+    // oubli : ses deux seuls écrivains sont dans `convex/attempts.ts`, et tous
+    // deux exigent une tentative — `submit` l'insère juste après en avoir créé
+    // une, `markAttemptCorrectByAI` en relit une existante. Une progression sur
+    // cette thématique implique donc une tentative sur l'un de ses exercices,
+    // que la boucle ci-dessus vient d'exclure. Si un troisième écrivain
+    // apparaissait, ce raisonnement tomberait et il faudrait un contrôle ici.
+    for (const exercise of exercises) {
+      await ctx.db.delete(exercise._id);
+    }
     await ctx.db.delete(id);
 
     return { deletedExercises: exercises.length };

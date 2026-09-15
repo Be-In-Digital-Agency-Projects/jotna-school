@@ -203,29 +203,45 @@ function verifyShortAnswer(
 export const submit = mutation({
   args: {
     exerciseId: v.id("exercises"),
-    studentId: v.id("profiles"),
     submittedAnswer: v.string(),
     attemptNumber: v.number(),
     hintsUsedCount: v.number(),
     timeSpentMs: v.number(),
   },
   handler: async (ctx, args) => {
-    // Paywall (spec §5.4) — cette mutation ne résolvait jusqu'ici aucun
-    // profil : elle prenait `studentId` en argument sans jamais vérifier
-    // l'appelant. On dérive le profil de L'APPELANT (getAuthUserId, comme
-    // partout ailleurs dans le repo) et on contrôle SON droit — pas celui
-    // de args.studentId, qu'un appelant non authentifié pourrait usurper
-    // pour écrire au nom d'un élève couvert. Effet de bord assumé : cette
-    // mutation exige désormais une authentification, ce qu'elle ne faisait
-    // pas. Une mutation lève, l'appelant attrape.
+    // L'ÉLÈVE EST L'APPELANT, ET IL N'EST PLUS UN ARGUMENT.
+    //
+    // Cette mutation contrôlait le droit d'accès de l'appelant puis écrivait
+    // quatre fois sous `args.studentId` : la tentative, la progression du
+    // sujet, sa création, et la planification des badges. N'importe quel
+    // compte authentifié couvert par un abonnement pouvait donc fabriquer des
+    // tentatives et faire décerner des badges AU NOM D'UN AUTRE — le garde
+    // regardait une personne, les écritures en désignaient une autre. Un droit
+    // vérifié sur l'appelant n'autorise que ce que l'appelant fait pour
+    // lui-même ; dès qu'une écriture nomme quelqu'un d'autre, il faut soit une
+    // autorisation sur CETTE personne, soit cesser de la nommer. On cesse : le
+    // profil vient de la session et l'argument disparaît, ce qui rend
+    // l'usurpation INEXPRIMABLE plutôt que refusée.
+    //
+    // ET IL DOIT ÊTRE UN ÉLÈVE, comme `badges.markBadgesSeen` l'exige déjà.
+    // `attempts` et `studentTopicProgress` sont des tables de parcours
+    // pédagogique, lues par les bulletins et les badges ; une ligne portant un
+    // profil de parent ou de professeur n'y a pas de sens, et rien en aval ne
+    // sait l'écarter. Un professeur qui essaie un exercice ne produit donc
+    // aucune trace, ce qui est le comportement voulu.
+    //
+    // Paywall (spec §5.4) — une mutation lève, l'appelant attrape.
     const callerUserId = await getAuthUserId(ctx);
     if (!callerUserId) throw new Error("Non authentifié");
     const callerProfile = await ctx.db
       .query("profiles")
       .withIndex("by_userId", (q) => q.eq("userId", callerUserId as string))
       .unique();
-    if (!callerProfile) throw new Error("Profil introuvable");
+    if (!callerProfile || callerProfile.role !== "student") {
+      throw new Error("Profil élève introuvable");
+    }
     await requireAccess(ctx, callerProfile);
+    const studentId = callerProfile._id;
 
     const exercise = await ctx.db.get(args.exerciseId);
     if (!exercise) {
@@ -256,7 +272,7 @@ export const submit = mutation({
 
     // Create the attempt record
     const attemptId = await ctx.db.insert("attempts", {
-      studentId: args.studentId,
+      studentId,
       exerciseId: args.exerciseId,
       submittedAnswer: args.submittedAnswer,
       isCorrect,
@@ -276,7 +292,7 @@ export const submit = mutation({
       const progress = await ctx.db
         .query("studentTopicProgress")
         .withIndex("by_studentId_topicId", (q) =>
-          q.eq("studentId", args.studentId).eq("topicId", exercise.topicId),
+          q.eq("studentId", studentId).eq("topicId", exercise.topicId),
         )
         .first();
 
@@ -288,7 +304,7 @@ export const submit = mutation({
         });
       } else {
         await ctx.db.insert("studentTopicProgress", {
-          studentId: args.studentId,
+          studentId,
           topicId: exercise.topicId,
           completedExercises: 1,
           correctExercises: 1,
@@ -299,7 +315,7 @@ export const submit = mutation({
 
       // Check and award badges in real-time
       await ctx.scheduler.runAfter(0, internal.badges.checkAndAward, {
-        studentId: args.studentId,
+        studentId,
       });
     }
 

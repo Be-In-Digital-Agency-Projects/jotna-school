@@ -170,7 +170,6 @@ export default function ExercisePlayer({
     try {
       let result = await submitAttempt({
         exerciseId: currentExercise._id as Id<"exercises">,
-        studentId: studentId as Id<"profiles">,
         submittedAnswer: answer,
         attemptNumber: newAttemptCount,
         hintsUsedCount: hintsRevealed,

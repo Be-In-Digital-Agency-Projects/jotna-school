@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { decideProfileUpdate } from "../profileRules";
+import { decideProfileUpdate, wantsReportEmail } from "../profileRules";
 
 describe("decideProfileUpdate", () => {
   it("n'écrit que les champs fournis", () => {
@@ -95,5 +95,47 @@ describe("decideProfileUpdate", () => {
       "name",
       "preferences",
     ]);
+  });
+});
+
+describe("wantsReportEmail", () => {
+  it("ABSENT vaut OUI — c'est ce qui rend le correctif sûr", () => {
+    // Le champ n'existe sur aucun profil créé avant lui, et l'écran parent
+    // affiche la case cochée dans ce cas. Traiter l'absence comme un refus
+    // couperait en silence les bulletins de tous les parents existants,
+    // pendant que leur écran leur dirait qu'ils y sont abonnés.
+    expect(wantsReportEmail(undefined)).toBe(true);
+    expect(wantsReportEmail({})).toBe(true);
+    expect(wantsReportEmail({ streak: { current: 3 } })).toBe(true);
+  });
+
+  it("seul un `false` explicite arrête l'envoi", () => {
+    expect(wantsReportEmail({ receiveReports: false })).toBe(false);
+    expect(wantsReportEmail({ receiveReports: true })).toBe(true);
+  });
+
+  it("ne s'arrête sur rien qui ne soit pas `false`", () => {
+    // `preferences` est `v.any()` : une valeur abîmée ne doit priver personne
+    // de ses bulletins. Seul le booléen compte, pas ce qui lui ressemble.
+    for (const junk of ["false", 0, null, "", [], {}]) {
+      expect(wantsReportEmail({ receiveReports: junk })).toBe(true);
+    }
+  });
+
+  it("ignore des préférences qui ne sont pas un objet", () => {
+    for (const junk of ["abc", 42, true, ["a"], null, undefined]) {
+      expect(wantsReportEmail(junk)).toBe(true);
+    }
+  });
+
+  it("lit la clé qu'écrit `decideProfileUpdate`, et pas une autre", () => {
+    // Les deux moitiés de la préférence vivent dans le même module pour
+    // qu'elles ne puissent pas diverger. Ce test le vérifie plutôt que de le
+    // supposer : on écrit par l'une, on relit par l'autre.
+    const d = decideProfileUpdate({ receiveReports: false }, {});
+    expect(d.ok && wantsReportEmail(d.patch.preferences)).toBe(false);
+
+    const back = decideProfileUpdate({ receiveReports: true }, {});
+    expect(back.ok && wantsReportEmail(back.patch.preferences)).toBe(true);
   });
 });

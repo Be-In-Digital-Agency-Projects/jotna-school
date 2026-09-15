@@ -4,7 +4,6 @@ import {
   blockedStudent,
   callerHasProfile,
   callerIsAdmin,
-  callerIsStaff,
 } from "./access";
 
 // ---------------------------------------------------------------------------
@@ -68,10 +67,21 @@ export const getById = query({
 // Les cinq écritures ci-dessous créent, modifient et suppriment le curriculum
 // lui-même. Elles n'ont rien à voir avec le droit d'accès d'un élève :
 // `blockedStudent` et `requireAccess` jugent un abonnement, pas la qualité de
-// l'appelant. `admin` pour les quatre premières, dont les appelants sont les
-// écrans `app/(admin)/admin/subjects/*` ; `removeWithExercises` est la seule
-// exception, appelée par `app/(teacher)/teacher/exercises/page.tsx`, d'où
-// `callerIsStaff` (professeur + admin).
+// l'appelant.
+//
+// `callerIsAdmin` POUR LES CINQ, SANS EXCEPTION. Le curriculum est le bien
+// commun de la plateforme : une thématique n'appartient à personne — `topics`
+// n'a aucun champ de propriétaire — donc il n'existe ici aucune garde de LIEN
+// capable de dire « celle-ci est à vous ». Faute de pouvoir restreindre la
+// cible, on restreint l'appelant, et au rôle le plus étroit.
+//
+// `removeWithExercises` FUT L'EXCEPTION, en `callerIsStaff`, au motif que son
+// unique appelant est un écran professeur. L'argument était faux dans les deux
+// sens. Une garde ne protège pas un écran, elle protège une fonction : la
+// mutation est appelable directement, et le rôle `professeur` ouvrait le
+// pouvoir le PLUS destructeur du module à qui `topics.remove` — qui n'efface
+// qu'une thématique VIDE — refusait déjà. Le pouvoir le plus large portait la
+// garde la plus faible.
 //
 // Une mutation peut lever, et le garde est la toute première instruction :
 // rien n'est lu avant d'avoir établi le rôle. Un seul message pour tous les
@@ -162,14 +172,24 @@ export const remove = mutation({
  * effaçait mal, et incomplètement. Le commentaire détaillé se trouve sur la
  * mutation elle-même, plus bas.
  *
- * Elle sert l'espace professeur, qui supprime un dossier thématique indésirable
- * — par exemple un « Général » auto-créé par une extraction hâtive.
+ * CE QU'ELLE SERT : écarter un dossier thématique indésirable — typiquement un
+ * « Général » auto-créé par une extraction hâtive. Ce besoin est né dans
+ * l'espace professeur, d'où son unique appelant ; il n'y appartient pas pour
+ * autant, et c'est l'administrateur qui le porte désormais.
  *
- * `callerIsStaff` et non `callerIsAdmin` : son unique appelant est l'écran
- * professeur, que restreindre à `admin` casserait. C'était la pire des onze
- * écritures ouvertes — publique et sans aucune authentification, un simple
- * `Id<"topics">` suffisait à effacer un chapitre, jusqu'à 500 de ses exercices
- * et le travail des élèves dessus.
+ * C'était la pire des onze écritures ouvertes — publique et sans aucune
+ * authentification, un simple `Id<"topics">` suffisait à effacer un chapitre,
+ * jusqu'à 500 de ses exercices et le travail des élèves dessus. Elle est
+ * désormais `callerIsAdmin`, comme les quatre autres écritures du module ; le
+ * raisonnement est dans le bloc d'en-tête des mutations.
+ *
+ * CE QUE CE RESSERREMENT COÛTE, mesuré et non supposé : rien aujourd'hui.
+ * L'écran professeur qui l'appelle liste `exercises.listByTeacher`, laquelle
+ * filtre sur `exercise.reviewedBy` — un champ que le schéma déclare et que RIEN
+ * dans le dépôt n'écrit. La liste est donc vide pour tout le monde, et le
+ * bouton de suppression ne s'affiche jamais. Il est en outre réservé aux
+ * administrateurs côté écran, pour que la règle se voie au lieu de se
+ * découvrir par un refus.
  */
 /** Exercices lus au plus pour une suppression. */
 const TOPIC_EXERCISES_LIMIT = 500;
@@ -228,7 +248,7 @@ const TOPIC_EXERCISES_LIMIT = 500;
 export const removeWithExercises = mutation({
   args: { id: v.id("topics") },
   handler: async (ctx, { id }) => {
-    if (!(await callerIsStaff(ctx))) throw new ConvexError("Rôle non autorisé");
+    if (!(await callerIsAdmin(ctx))) throw new ConvexError("Rôle non autorisé");
 
     const topic = await ctx.db.get(id);
     if (!topic) throw new ConvexError("Thématique introuvable");

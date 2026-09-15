@@ -1,6 +1,7 @@
 /**
- * Ce qu'une modification de profil a le droit d'écrire — fonction pure, sans
- * aucun import, alimentée par `profiles.updateProfile` en documents déjà lus.
+ * Les règles du profil — ce qu'une modification a le droit d'écrire, et ce que
+ * les préférences écrites commandent. Fonctions pures, sans aucun import,
+ * alimentées en documents déjà lus par leurs enveloppes Convex.
  *
  * Le découpage est celui d'`accessRules`, `linkRules` et `roleRules`, et pour
  * la même raison : ce dépôt n'utilise pas `convex-test` et vitest tourne en
@@ -87,4 +88,30 @@ export function decideProfileUpdate(
   }
 
   return { ok: true, patch };
+}
+
+/**
+ * Ce tuteur veut-il recevoir les bulletins par courriel ?
+ *
+ * LE LECTEUR VIT À CÔTÉ DE SON ÉCRIVAIN, À DESSEIN. `decideProfileUpdate`
+ * ci-dessus est la seule chose du dépôt qui ÉCRIT `receiveReports` ; cette
+ * fonction est la seule qui le LIT pour décider d'un envoi. Les deux moitiés
+ * d'une même préférence dans un même fichier ne peuvent pas diverger sans que
+ * ça se voie.
+ *
+ * ABSENT VAUT OUI, et ce n'est pas un détail de confort : c'est ce qui rend le
+ * correctif sûr. Le champ n'existe sur aucun profil créé avant lui, et l'écran
+ * parent affiche la case COCHÉE dans ce cas (`prefs?.receiveReports ?? true`).
+ * Traiter l'absence comme un refus couperait donc en silence les bulletins de
+ * tous les parents existants, pendant que leur écran continuerait de leur dire
+ * qu'ils y sont abonnés — un mensonge d'interface pire que le défaut corrigé.
+ * Seul un `false` EXPLICITE, que seul un décochage délibéré produit, arrête
+ * l'envoi.
+ *
+ * Tout ce qui n'est ni un objet ni un booléen est ignoré et vaut oui : `v.any()`
+ * n'impose aucune forme, et une valeur abîmée ne doit pas priver quelqu'un de
+ * ses bulletins.
+ */
+export function wantsReportEmail(preferences: unknown): boolean {
+  return objectPreferences(preferences).receiveReports !== false;
 }

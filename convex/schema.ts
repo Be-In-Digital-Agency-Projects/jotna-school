@@ -143,7 +143,17 @@ export default defineSchema({
     .index("by_topicId", ["topicId"])
     .index("by_palierId", ["palierId"])
     .index("by_palierAttemptId", ["palierAttemptId"])
-    .index("by_personalizedFor", ["personalizedFor"]),
+    .index("by_personalizedFor", ["personalizedFor"])
+    // Les trois fonctions du parcours PDF qui interrogent un import le
+    // filtraient SANS index, contre la consigne explicite des guidelines du
+    // dépôt. `.filter()` chez Convex est un prédicat appliqué PENDANT le
+    // parcours, pas une réduction : `.take(200)` borne le RÉSULTAT, jamais le
+    // nombre de documents lus. Les exercices d'un import récent vivant en fin
+    // de table, la requête lisait tout ce qui précède — et `exercises` grandit
+    // avec l'usage ÉLÈVE, `paliers/index.ts` y insérant un document à chaque
+    // génération. Passé le plafond de lecture par transaction, ces trois
+    // fonctions ne ralentissent pas : elles LÈVENT.
+    .index("by_sourcePdfUploadId", ["sourcePdfUploadId"]),
 
   // ---------------------------------------------------------------------------
   // attempts — added gradedScore + palierAttemptId (Decisions 12, 51, 52)
@@ -238,7 +248,11 @@ export default defineSchema({
     currentTier: v.optional(v.number()),
     lastTierUpAt: v.optional(v.number()),
     progressValue: v.optional(v.number()),
-  }).index("by_studentId", ["studentId"]),
+  })
+    .index("by_studentId", ["studentId"])
+    // `badges.remove` demande « un élève a-t-il déjà ce badge ? ». Sans index,
+    // la question se posait en parcourant toute la table.
+    .index("by_badgeId", ["badgeId"]),
 
   // ---------------------------------------------------------------------------
   // pdfUploads (legacy — kept while admin PDF flow is wound down)
@@ -315,7 +329,7 @@ export default defineSchema({
     shuffleSeed: v.optional(v.string()), // Decision 75 — server-side deterministic shuffle seed prefix
     preGenerated: v.optional(v.boolean()), // Decision 73 — tagged by J0 pre-gen script
     generatedAt: v.number(),
-    expiresAt: v.number(), // generatedAt + 7d
+    expiresAt: v.number(), // generatedAt + PALIER_TTL_MS (un trimestre)
     generationTraceId: v.optional(v.string()),
   })
     .index("by_bucket", ["subjectId", "class", "topicId", "palierIndex"])

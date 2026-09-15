@@ -20,6 +20,7 @@ import {
   ResponsiveContainer,
   CartesianGrid,
 } from "recharts";
+import { refusalMessage } from "@/lib/refusalMessage";
 
 /**
  * Admin AI Settings (Decisions 4, 45, 56, 69, 70, 76, 95).
@@ -125,7 +126,7 @@ export default function AdminAiSettingsPage() {
       });
       setSavedAt(Date.now());
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Erreur sauvegarde");
+      alert(refusalMessage(err, "Erreur lors de la sauvegarde."));
     } finally {
       setSaving(false);
     }

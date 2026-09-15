@@ -123,11 +123,15 @@ export const getById = query({
 
     const subject = await ctx.db.get(upload.subjectId);
 
-    // Count exercises generated from this upload (no index on sourcePdfUploadId,
-    // bounded scan with take)
+    // Exercices produits par cet import, PAR INDEX. Ce commentaire disait
+    // « no index on sourcePdfUploadId, bounded scan with take » : la borne
+    // portait sur le résultat, pas sur le parcours, et cette lecture d'écran
+    // devenait un parcours de toute la table `exercises`.
     const exercises = await ctx.db
       .query("exercises")
-      .filter((q) => q.eq(q.field("sourcePdfUploadId"), id))
+      .withIndex("by_sourcePdfUploadId", (q) =>
+        q.eq("sourcePdfUploadId", id),
+      )
       .take(200);
 
     return {
@@ -207,6 +211,28 @@ export const create = mutation({
  * qui faisait qu'une suppression de l'une emportait le fichier de l'autre.
  *
  * Garde de LIEN comme le reste du module : son propre import, ou administrateur.
+ *
+ * ELLE REFUSE SI L'EXTRACTION N'A PAS ÉCHOUÉ, et cette garde-là n'est pas du
+ * zèle. `pdfUploadsExtract.extract` n'est PAS idempotente : elle rappelle
+ * `createDraftExercises`, qui INSÈRE une ligne par exercice extrait. Relancée
+ * sur un import déjà extrait, elle refacturait donc une extraction gpt-4o
+ * entière — l'appel le plus cher du dépôt, plafonné à 16 000 jetons de sortie —
+ * et doublait les brouillons, sans que rien ne s'y oppose. Le seul obstacle
+ * était que l'écran n'affiche le bouton qu'en cas d'échec ; la règle D24 de
+ * cette branche dit exactement pourquoi cela ne suffit pas.
+ *
+ * L'ÉCHEC SE LIT DANS `extractedRaw.error`, que `markError` est seule à écrire
+ * et que toute sortie en erreur d'`extract` traverse — son `catch` englobe
+ * l'appel, l'analyse de la réponse et la création des brouillons. C'est donc
+ * l'état d'échec lui-même qui autorise la relance, pas un statut approchant.
+ *
+ * FENÊTRE CONNUE, NON FERMÉE ICI : si `markExtracted` a réussi et que
+ * `createDraftExercises` a échoué juste après, l'import porte à la fois des
+ * brouillons et une erreur ; la relance est alors légitime et redoublera ce qui
+ * avait été créé. La fermer demande une idempotence dans
+ * `createDraftExercises`, pas une garde de plus ici — et surtout pas un
+ * effacement préalable des brouillons, qui emporterait ceux qu'un relecteur a
+ * déjà corrigés ou publiés.
  */
 export const retryExtraction = mutation({
   args: { id: v.id("pdfUploads") },
@@ -217,6 +243,17 @@ export const retryExtraction = mutation({
     const upload = await ctx.db.get(id);
     if (!upload || !staffOwnsUpload(staff, upload)) {
       throw new ConvexError("Import introuvable");
+    }
+
+    const raw = upload.extractedRaw;
+    const failed =
+      typeof raw === "object" && raw !== null && "error" in raw;
+    if (!failed) {
+      throw new ConvexError(
+        "Cet import n'est pas en erreur : il n'y a rien à relancer. " +
+          "Relancer une extraction réussie la referait payer et créerait un " +
+          "second jeu de brouillons.",
+      );
     }
 
     // L'erreur précédente s'efface : la laisser ferait afficher un échec
@@ -262,7 +299,9 @@ export const remove = mutation({
     // table entière. La ligne de plus distingue « à la borne » de « au-delà ».
     const exercises = await ctx.db
       .query("exercises")
-      .filter((q) => q.eq(q.field("sourcePdfUploadId"), id))
+      .withIndex("by_sourcePdfUploadId", (q) =>
+        q.eq("sourcePdfUploadId", id),
+      )
       .take(UPLOAD_EXERCISES_LIMIT + 1);
 
     if (exercises.length > UPLOAD_EXERCISES_LIMIT) {

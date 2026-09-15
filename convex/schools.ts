@@ -78,23 +78,36 @@ const STAFF_PER_PROFILE_LIMIT = 20;
 const CLASSES_LIMIT = 50;
 
 /**
- * Classes lues pour UN professeur — il en enseigne quelques-unes.
+ * Classes désaffectées au retrait d'un membre du personnel.
  *
- * Même valeur que `TEACHER_CLASSES_LIMIT` dans `access.ts`, délibérément :
- * `removeStaff` doit vider exactement l'ensemble de classes que
- * `studentIdsTaughtBy` énumère pour ouvrir la vue d'un enseignant. Une borne
- * plus basse ici laisserait une classe affectée — donc un accès — hors de
- * portée du retrait.
+ * ELLE VALAIT 20, ALIGNÉE SUR `TEACHER_CLASSES_LIMIT` D'`access.ts`, ET
+ * C'ÉTAIT UN RAISONNEMENT FAUX. Il tenait à ceci : `removeStaff` n'a qu'à
+ * vider l'ensemble que `studentIdsTaughtBy` énumère, puisque au-delà de sa
+ * fenêtre un enseignant ne voit rien de toute façon. Mais `studentIdsTaughtBy`
+ * n'est pas le seul chemin de lecture : la quatrième branche de
+ * `callerMayReadStudent` part de L'ÉLÈVE — inscription active, puis classe,
+ * puis `teacherId === appelant` — et ne consulte jamais la liste des classes de
+ * l'enseignant. Aucune fenêtre de 20 ne la borne. Une classe laissée affectée
+ * au-delà de la vingtième servait donc encore les dossiers de ses élèves à un
+ * membre retiré.
+ *
+ * ELLE COUVRE DÉSORMAIS LE MAXIMUM ATTEIGNABLE : `createClass` autorise
+ * `CLASSES_LIMIT` classes par niveau sur six niveaux, soit 300 par école, et un
+ * professeur ne peut pas en tenir plus que l'école n'en a. Au-delà — ce qui
+ * supposerait un enseignant rattaché à plusieurs écoles très grandes —
+ * `removeStaff` REFUSE au lieu de tronquer : un retrait partiel est un retrait
+ * de façade, et l'administrateur doit pouvoir le voir plutôt que le croire fait.
  */
-const CLASSES_PER_TEACHER_LIMIT = 20;
+const STAFF_UNASSIGN_LIMIT = CLASSES_LIMIT * 6;
 
 /**
  * Élèves lus par classe.
  *
- * Même valeur que `CLASS_STUDENTS_LIMIT` dans `access.ts`, délibérément : le
- * nombre affiché par `listClasses` est exactement celui que le chemin
- * professeur sert. Un effectif affiché plus grand que la liste réellement
- * énumérable serait un mensonge d'écran.
+ * Même valeur que `CLASS_STUDENTS_LIMIT` dans `access.ts`, délibérément : ce que
+ * `listClassStudents` énumère est exactement ce que le chemin professeur sert.
+ * Une liste plus longue d'un côté que de l'autre serait un mensonge d'écran —
+ * et l'effectif affiché, désormais dérivé de cette même liste, ne peut plus la
+ * contredire.
  */
 const CLASS_STUDENTS_LIMIT = 60;
 
@@ -396,18 +409,20 @@ export const listClasses = query({
       .withIndex("by_school", (q) => q.eq("schoolId", args.schoolId))
       .take(CLASSES_LIMIT);
 
+    // ELLE NE COMPTE PLUS LES ÉLÈVES, et c'est un retrait, pas un oubli. Elle
+    // lisait les inscriptions actives de CHAQUE classe pour n'en tirer qu'un
+    // nombre — exactement la plage que `listClassStudents` relit ensuite, une
+    // fois par carte de classe affichée. Une école de douze classes ouvrait
+    // treize abonnements et lisait deux fois les mêmes lignes.
+    //
+    // Le nombre se déduit désormais de la liste que la carte affiche déjà. Cela
+    // ferme au passage la fenêtre où l'en-tête et la liste se contredisaient :
+    // deux lectures de la même question finissent toujours par diverger.
     const rows = await Promise.all(
       classes.map(async (schoolClass) => {
         const teacher = schoolClass.teacherId
           ? await ctx.db.get(schoolClass.teacherId)
           : null;
-
-        const students = await ctx.db
-          .query("schoolMemberships")
-          .withIndex("by_class_status", (q) =>
-            q.eq("schoolClassId", schoolClass._id).eq("status", "active"),
-          )
-          .take(CLASS_STUDENTS_LIMIT);
 
         return {
           _id: schoolClass._id,
@@ -415,7 +430,6 @@ export const listClasses = query({
           label: schoolClass.label,
           teacherId: schoolClass.teacherId ?? null,
           teacherName: teacher?.name ?? null,
-          studentCount: students.length,
         };
       }),
     );
@@ -1992,11 +2006,13 @@ export const addStaff = mutation({
  * `schoolClasses` n'a pas de champ année, rien ne supprime ni n'archive une
  * classe, et `createClass` autorise 50 classes PAR NIVEAU, soit 300 par école.
  * Bornée à 50 classes d'école, la boucle laissait la 51e garder son
- * `teacherId` : `studentIdsTaughtBy` et la quatrième branche de
- * `callerMayReadStudent` continuaient de servir les dossiers d'élèves à un
- * membre retiré, et l'invariant se dégradait en silence à mesure que l'école
- * grandissait. Bornée à ce qu'un professeur enseigne, la complétude ne dépend
- * plus de la taille de l'école.
+ * `teacherId`, et l'invariant se dégradait à mesure que l'école grandissait.
+ *
+ * LA DÉSAFFECTATION EST COMPLÈTE OU ELLE REFUSE — voir `STAFF_UNASSIGN_LIMIT`.
+ * Une fenêtre alignée sur celle d'une LECTURE ne suffisait pas : la quatrième
+ * branche de `callerMayReadStudent` part de l'élève et ne consulte aucune liste
+ * de classes, donc rien ne la borne. Ici la complétude n'est pas un confort,
+ * c'est l'invariant lui-même.
  *
  * Bornée aux classes de CETTE école : un enseignant rattaché à deux écoles ne
  * perd que les classes de celle qu'il quitte. Le cadrage se fait par filtre,
@@ -2010,10 +2026,20 @@ export const removeStaff = mutation({
     const staff = await ctx.db.get(args.staffId);
     if (!staff) throw new ConvexError("Membre du personnel introuvable");
 
+    // La ligne de plus distingue « exactement à la borne » de « au-delà ».
     const classes = await ctx.db
       .query("schoolClasses")
       .withIndex("by_teacher", (q) => q.eq("teacherId", staff.profileId))
-      .take(CLASSES_PER_TEACHER_LIMIT);
+      .take(STAFF_UNASSIGN_LIMIT + 1);
+
+    if (classes.length > STAFF_UNASSIGN_LIMIT) {
+      throw new ConvexError(
+        `Ce membre est affecté à plus de ${STAFF_UNASSIGN_LIMIT} classes. ` +
+          "Le retrait est refusé plutôt que partiel : réaffectez d'abord une " +
+          "partie de ses classes, sans quoi il garderait accès aux dossiers " +
+          "des élèves de celles qui resteraient affectées.",
+      );
+    }
 
     let unassigned = 0;
     for (const schoolClass of classes) {

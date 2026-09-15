@@ -138,10 +138,9 @@ export const listByTeacher = query({
 // suivant, une règle tient :
 //
 //  1. Une écriture qu'un membre du PERSONNEL fait sur ce qui est À LUI passe
-//     par une garde de LIEN (`staffMayTouchExercise` plus bas) : le rôle ne
-//     suffit pas, parce que `professeur` s'obtient par auto-inscription
-//     (`convex/auth.ts`) — donc gratuitement, sans affiliation. Un garde de
-//     rôle seul rétrécirait le trou au lieu de le fermer.
+//     par une garde de LIEN (`staffMayTouchExercise` plus bas) : un rôle ne
+//     dit rien de ce sur quoi on a le droit d'agir. Deux professeurs d'une même
+//     école portent le même rôle ; seul le lien distingue leurs exercices.
 //  2. Une écriture qui n'appartient à personne en particulier — créer,
 //     dépublier, supprimer — est réservée à l'ADMINISTRATEUR. Ce sont des
 //     actes sur le catalogue lui-même, pas sur le travail de quelqu'un.
@@ -173,12 +172,20 @@ const UPLOAD_EXERCISES_LIMIT = 200;
 /**
  * Ce membre du personnel a-t-il quelque chose à voir avec cet exercice ?
  *
- * GARDE DE LIEN, et non de rôle, parce que `professeur` N'EST PAS UN RÔLE DE
- * CONFIANCE : `convex/auth.ts` l'accepte à l'auto-inscription, sans affiliation
- * ni validation. Un `callerIsStaff` seul laisserait donc n'importe quel compte
- * créé en trente secondes réécrire le `answerKey` de n'importe quel exercice —
- * y compris ceux qu'un palier a générés et que des élèves payants jouent. Le
- * trou serait rétréci, pas fermé.
+ * GARDE DE LIEN, ET NON DE RÔLE. Un `callerIsStaff` seul laisserait TOUT
+ * professeur réécrire le `answerKey` de N'IMPORTE QUEL exercice, y compris ceux
+ * d'une autre école et ceux qu'un palier a générés pour des élèves payants : le
+ * trou serait rétréci, pas fermé. Un rôle dit ce qu'on est, jamais sur quoi on
+ * a le droit d'agir.
+ *
+ * L'ARGUMENT D'ORIGINE ÉTAIT PLUS ÉTROIT, ET IL A CESSÉ D'ÊTRE VRAI : il
+ * disait que `professeur` n'est pas un rôle de confiance parce que
+ * `convex/auth.ts` l'accepte à l'auto-inscription. Cette branche a fermé cette
+ * porte (`roleRules.decideSignupRole` refuse les trois rôles d'autorité). La
+ * garde reste néanmoins juste — pour la raison ci-dessus, qui ne dépend
+ * d'aucune porte d'inscription. Une justification périmée est plus dangereuse
+ * qu'absente : le prochain lecteur vérifie la prémisse, la trouve fausse, et
+ * conclut que la garde ne sert plus.
  *
  * Le lien EXISTE DÉJÀ dans les données : `sourcePdfUploadId` est posé par
  * `pdfUploads.createDraftExercises`, et `pdfUploads.adminId` nomme qui a
@@ -347,12 +354,20 @@ export const publishAllFromUpload = mutation({
     // l'usage ÉLÈVE, pas seulement avec les imports.
     //
     // Même borne que l'écran (`.take(200)`), pour que ce qu'il montre soit
-    // exactement ce que ceci publie. Pas d'index sur `sourcePdfUploadId` : le
-    // dépôt l'assume déjà pour la lecture de l'écran, et le commentaire de
-    // `pdfUploads.getById` le dit.
+    // exactement ce que ceci publie.
+    //
+    // PAR INDEX, ET NON PAR `.filter()`. La première correction de ce bloc
+    // s'était arrêtée à mi-chemin : elle rétablissait le bon ENSEMBLE — 200
+    // exercices de cet import, au lieu des 200 plus anciens de la table filtrés
+    // ensuite — mais laissait le parcours entier, `.filter()` étant chez Convex
+    // un prédicat appliqué pendant la lecture. Le défaut de correction était
+    // guéri, celui d'échelle restait, et le second finit en refus de
+    // transaction plutôt qu'en lenteur.
     const fromUpload = await ctx.db
       .query("exercises")
-      .filter((q) => q.eq(q.field("sourcePdfUploadId"), uploadId))
+      .withIndex("by_sourcePdfUploadId", (q) =>
+        q.eq("sourcePdfUploadId", uploadId),
+      )
       .take(UPLOAD_EXERCISES_LIMIT);
     const relevant = fromUpload.filter((ex) => ex.status === "draft");
     const now = Date.now();
@@ -384,10 +399,15 @@ export const remove = mutation({
       throw new ConvexError("Exercice introuvable");
     }
 
-    // Check if any attempts reference this exercise
+    // Check if any attempts reference this exercise.
+    // `by_exerciseId` : cette branche l'ajoute au schéma et l'utilise déjà dans
+    // `topics.removeWithExercises` et `pdfUploads.remove` — ce site-ci avait été
+    // manqué. En `.filter()`, `.first()` ne court-circuite que sur une
+    // CORRESPONDANCE : quand l'exercice n'a aucune tentative — le cas qui
+    // autorise la suppression — la requête parcourait toute la table.
     const attempt = await ctx.db
       .query("attempts")
-      .filter((q) => q.eq(q.field("exerciseId"), args.id))
+      .withIndex("by_exerciseId", (q) => q.eq("exerciseId", args.id))
       .first();
     if (attempt) {
       throw new ConvexError(

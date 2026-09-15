@@ -256,6 +256,28 @@ export async function blockedStudent(ctx: QueryCtx): Promise<boolean> {
   return !access.ok;
 }
 
+/**
+ * L'appelant peut-il lire le CATALOGUE partagé — matières, thématiques, badges ?
+ *
+ * Réunit en une seule lecture de profil les deux gardes que ces sept requêtes
+ * posaient l'une après l'autre : `callerHasProfile` puis `blockedStudent`.
+ * Chacune appelait `currentProfile`, donc chaque abonnement au catalogue
+ * résolvait le profil DEUX FOIS — et doublait aussi sa surface
+ * d'invalidation, `profiles.preferences` étant réécrit à chaque série, badge ou
+ * réglage de son.
+ *
+ * La décision est identique, branche pour branche : pas de profil → non ;
+ * personnel → oui, jamais bloqué par le paywall (spec §5.6 et §5.8) ; élève →
+ * son droit d'accès tranche. Les deux gardes d'origine restent exportées, elles
+ * servent ailleurs.
+ */
+export async function catalogReadable(ctx: QueryCtx): Promise<boolean> {
+  const profile = await currentProfile(ctx);
+  if (!profile) return false;
+  if (profile.role !== "student") return true;
+  return (await checkAccess(ctx, profile)).ok;
+}
+
 /** Rôle de l'appelant, ou null s'il n'est pas authentifié ou n'a pas de profil. */
 async function callerRole(
   ctx: QueryCtx,
@@ -360,10 +382,14 @@ export async function callerAdminProfile(
  *
  * C'est la doctrine que ce fichier énonce déjà plus haut pour toute fonction
  * qui reçoit un identifiant en argument — un garde de rôle y laisse tout le
- * personnel agir sur le document de n'importe qui. Elle vaut ici d'autant plus
- * que `professeur` n'est PAS un rôle de confiance dans ce dépôt :
- * `convex/auth.ts` l'accepte à l'auto-inscription, sans affiliation ni
- * validation. « Membre du personnel » y veut dire « a coché Professeur ».
+ * personnel agir sur le document de n'importe qui.
+ *
+ * UNE VERSION ANTÉRIEURE DE CE BLOC L'APPUYAIT SUR UNE PRÉMISSE QUI N'EST PLUS
+ * VRAIE : que `professeur` s'obtient par auto-inscription, si bien que
+ * « membre du personnel » voudrait dire « a coché Professeur ». Cette branche a
+ * fermé cette porte. La doctrine tient sans elle, et c'est le point : deux
+ * professeurs légitimes d'une même école portent le même rôle, donc le rôle ne
+ * peut pas dire lequel des deux a le droit d'agir sur un document donné.
  *
  * Le remplace, ne s'y ajoute pas : appeler `callerIsStaff` en plus relirait
  * `profiles` pour une réponse déjà connue.

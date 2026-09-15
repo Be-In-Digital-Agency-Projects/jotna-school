@@ -14,6 +14,15 @@ import {
 } from "./registry";
 import { evaluateBudget } from "./budget";
 import { dayKey, endOfDayUtc, evaluateQuota, type QuotaScope } from "./quota";
+// UNE SEULE DÉFINITION DE LA CLÉ DE MOIS. Ce fichier en gardait une copie
+// privée, `currentMonthKey`, alors qu'il est l'ÉCRIVAIN de `aiUsage.month`
+// et que `readMonthSpend` — le lecteur qui décide du plafond — s'appuie sur
+// `monthKey`. Les deux étaient identiques au caractère près, donc d'accord
+// par coïncidence : toute retouche de l'une aurait scindé l'agrégat en deux
+// seaux de mois et rendu le plafond de nouveau inopérant, sans rien casser
+// de visible. `settings/index.ts` avait déjà été migré vers la version
+// partagée dans cette même branche ; la migration s'arrêtait à mi-chemin.
+import { monthKey } from "./spendShards";
 
 // ---------------------------------------------------------------------------
 // Validators
@@ -67,7 +76,7 @@ export const generate = internalAction({
     // entrer ici.
     const purpose = args.purpose;
     const cfg = getPurposeConfig(purpose);
-    const month = currentMonthKey();
+    const month = monthKey();
     const dKey = dayKey();
     const scope: QuotaScope | "system" = args.quotaScope ?? "system";
 
@@ -369,11 +378,6 @@ export const generate = internalAction({
     };
   },
 });
-
-function currentMonthKey(): string {
-  const d = new Date();
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-}
 
 function sleep(ms: number) {
   return new Promise<void>((r) => setTimeout(r, ms));

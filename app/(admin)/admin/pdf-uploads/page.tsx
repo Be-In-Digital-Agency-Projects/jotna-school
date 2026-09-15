@@ -124,9 +124,7 @@ export default function PdfUploadsPage() {
         fileInputRef.current.value = "";
       }
     } catch (err) {
-      const message =
-        err instanceof Error ? err.message : "Erreur lors de l'envoi.";
-      setError(message);
+      setError(refusalMessage(err, "Erreur lors de l'envoi."));
     } finally {
       setIsUploading(false);
       setUploadProgress(null);

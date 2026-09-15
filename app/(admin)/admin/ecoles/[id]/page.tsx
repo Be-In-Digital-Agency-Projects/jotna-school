@@ -1854,10 +1854,12 @@ function ClassCard({
             {schoolClass.class} {schoolClass.label}
           </h3>
           <p className="text-sm text-gray-500">
-            {schoolClass.studentCount} élève
-            {schoolClass.studentCount !== 1 ? "s" : ""} inscrit
-            {schoolClass.studentCount !== 1 ? "s" : ""} ·{" "}
-            {schoolClass.teacherName ?? "aucun professeur affecté"}
+            {/* Dérivé de la liste que cette carte affiche déjà : `listClasses`
+                ne relit plus les inscriptions pour n'en tirer qu'un nombre. */}
+            {students === undefined
+              ? "Chargement des inscrits…"
+              : `${students.length} élève${students.length !== 1 ? "s" : ""} inscrit${students.length !== 1 ? "s" : ""}`}{" "}
+            · {schoolClass.teacherName ?? "aucun professeur affecté"}
           </p>
         </div>
         <div>

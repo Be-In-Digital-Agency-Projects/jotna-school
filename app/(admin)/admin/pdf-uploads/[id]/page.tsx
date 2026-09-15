@@ -3,6 +3,7 @@
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { type Id } from "@/convex/_generated/dataModel";
+import { refusalMessage } from "@/lib/refusalMessage";
 import { use, useState } from "react";
 import Link from "next/link";
 import {
@@ -119,9 +120,7 @@ export default function PdfUploadDetailPage({
       // celui qui a déposé le PDF, pas celui qui clique ici.
       await retryExtraction({ id: id as Id<"pdfUploads"> });
     } catch (err) {
-      setRetryError(
-        err instanceof Error ? err.message : "Erreur lors de la relance.",
-      );
+      setRetryError(refusalMessage(err, "Erreur lors de la relance."));
     } finally {
       setIsRetrying(false);
     }

@@ -127,9 +127,7 @@ export default function TeacherPdfUploadsPage() {
       // progress and review/publish the generated exercises.
       router.push(`/teacher/pdf-uploads/${uploadId}`);
     } catch (err) {
-      const message =
-        err instanceof Error ? err.message : "Erreur lors de l'envoi.";
-      setError(message);
+      setError(refusalMessage(err, "Erreur lors de l'envoi."));
     } finally {
       setIsUploading(false);
       setUploadProgress(null);

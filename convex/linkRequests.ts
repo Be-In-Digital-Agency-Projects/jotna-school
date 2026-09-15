@@ -5,7 +5,7 @@ import {
   internalMutation,
   internalQuery,
 } from "./_generated/server";
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { internal } from "./_generated/api";
@@ -167,12 +167,12 @@ export const createRequest = mutation({
       .withIndex("by_userId", (q) => q.eq("userId", userId))
       .unique();
     if (!parentProfile || parentProfile.role !== "parent") {
-      throw new Error("Seuls les parents peuvent envoyer une demande");
+      throw new ConvexError("Seuls les parents peuvent envoyer une demande");
     }
 
     const student = await ctx.db.get(args.studentId);
     if (!student || student.role !== "student") {
-      throw new Error("Profil eleve introuvable");
+      throw new ConvexError("Profil eleve introuvable");
     }
 
     const existing = await ctx.db
@@ -184,7 +184,7 @@ export const createRequest = mutation({
         (r) => r.studentId === args.studentId && r.status === "pending",
       )
     ) {
-      throw new Error("Une demande est deja en attente pour cet eleve");
+      throw new ConvexError("Une demande est deja en attente pour cet eleve");
     }
 
     const alreadyLinked = await ctx.db

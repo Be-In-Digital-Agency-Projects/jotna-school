@@ -4,8 +4,8 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { internal } from "./_generated/api";
 import { readStudentPreferences, type StudentPreferences } from "./students";
 import {
+  catalogReadable,
   blockedStudent,
-  callerHasProfile,
   callerIsAdmin,
   requireAccess,
 } from "./access";
@@ -59,19 +59,26 @@ export function getConditionText(condition: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// `list` et `getById` — DEUX gardes qui se cumulent, dans cet ordre.
+// `list` et `getById` — IDENTITÉ ET DROIT D'ACCÈS, en une seule décision.
 //
-// 1. `callerHasProfile` établit l'IDENTITÉ. Nécessaire parce que
-//    `blockedStudent` rend false pour un appelant NON authentifié, par
-//    conception : il ne doit bloquer ni un adulte ni un visiteur. Seul, il se
-//    contournait en retirant simplement le jeton de session.
-// 2. `blockedStudent` établit le DROIT D'ACCÈS (paywall, spec §5.4). Lecture
-//    partagée avec l'administration : il ne bloque qu'un élève sans droit
-//    valide, jamais un adulte.
+// `catalogReadable` (`access.ts`) réunit les deux, et c'est bien DEUX questions
+// qu'il pose, pas une :
 //
-// Le premier ne remplace pas le second — un élève impayé a bien un profil.
+// 1. L'IDENTITÉ. Le paywall seul ne suffit pas : `blockedStudent` rend false
+//    pour un appelant NON authentifié, par conception — il ne doit bloquer ni
+//    un adulte ni un visiteur. Sans exigence de profil, il se contournait en
+//    RETIRANT simplement le jeton de session.
+// 2. Le DROIT D'ACCÈS (paywall, spec §5.4). Lecture partagée avec
+//    l'administration : seul un élève sans droit valide est bloqué.
+//
+// La première ne remplace pas la seconde — un élève impayé a bien un profil.
 // Tous les appelants sont des écrans authentifiés (élève, admin) ; `getById`
 // n'en a aucun.
+//
+// LES DEUX SE POSAIENT EN DEUX APPELS, donc en DEUX résolutions du profil par
+// abonnement, et en deux fois la surface d'invalidation — `profiles.preferences`
+// est réécrit à chaque série, badge ou réglage de son. Une lecture, deux
+// questions, même réponse qu'avant.
 //
 // Une requête ne lève jamais : même valeur vide que le chemin nominal.
 // C'est le même couple que `listMyEarned` plus bas, qui établit son identité
@@ -81,9 +88,8 @@ export function getConditionText(condition: string): string {
 export const list = query({
   args: {},
   handler: async (ctx) => {
-    // Identité puis paywall — voir l'en-tête : les deux se cumulent.
-    if (!(await callerHasProfile(ctx))) return [];
-    if (await blockedStudent(ctx)) return [];
+    // Identité ET paywall en une lecture — voir `catalogReadable`.
+    if (!(await catalogReadable(ctx))) return [];
 
     const rows = await ctx.db.query("badges").take(100);
     return rows.map((b) => ({
@@ -97,9 +103,8 @@ export const list = query({
 export const getById = query({
   args: { id: v.id("badges") },
   handler: async (ctx, args) => {
-    // Identité puis paywall — voir l'en-tête : les deux se cumulent.
-    if (!(await callerHasProfile(ctx))) return null;
-    if (await blockedStudent(ctx)) return null;
+    // Identité ET paywall en une lecture — voir `catalogReadable`.
+    if (!(await catalogReadable(ctx))) return null;
 
     return await ctx.db.get(args.id);
   },
@@ -253,10 +258,13 @@ export const remove = mutation({
       throw new ConvexError("Badge introuvable");
     }
 
-    // Check if any earnedBadges reference this badge
+    // Check if any earnedBadges reference this badge.
+    // Par `by_badgeId` : en `.filter()`, `.first()` ne court-circuite que sur
+    // une correspondance, donc le cas qui AUTORISE la suppression — aucun élève
+    // ne l'a obtenu — était précisément celui qui parcourait toute la table.
     const earned = await ctx.db
       .query("earnedBadges")
-      .filter((q) => q.eq(q.field("badgeId"), args.id))
+      .withIndex("by_badgeId", (q) => q.eq("badgeId", args.id))
       .first();
     if (earned) {
       throw new ConvexError(

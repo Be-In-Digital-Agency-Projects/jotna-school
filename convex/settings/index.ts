@@ -10,7 +10,7 @@
  * Auth: every mutation requires role=admin. Queries return null if not admin.
  */
 
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { mutation, query } from "../_generated/server";
 import type { DatabaseReader } from "../_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -66,15 +66,15 @@ export const updateSettings = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Non authentifié");
     const admin = await loadAdminProfile(ctx, userId as string);
-    if (!admin) throw new Error("Accès refusé (admin uniquement)");
+    if (!admin) throw new ConvexError("Accès refusé (admin uniquement)");
 
     if (args.dailyMoreLimitPerKid !== undefined) {
       if (args.dailyMoreLimitPerKid < 1 || args.dailyMoreLimitPerKid > 10) {
-        throw new Error("dailyMoreLimitPerKid hors plage (1..10)");
+        throw new ConvexError("dailyMoreLimitPerKid hors plage (1..10)");
       }
     }
     if (args.aiMonthlyBudgetUsd !== undefined && args.aiMonthlyBudgetUsd < 0) {
-      throw new Error("Budget négatif refusé");
+      throw new ConvexError("Budget négatif refusé");
     }
 
     const existing = await ctx.db

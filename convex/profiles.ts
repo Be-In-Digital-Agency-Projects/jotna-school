@@ -303,7 +303,10 @@ export const createChildAccount = action({
     }
 
     if (args.password.length < 6) {
-      throw new Error("Le mot de passe doit contenir au moins 6 caractères.");
+      // Un parent lit cette phrase sur l'écran d'ajout d'enfant.
+      throw new ConvexError(
+        "Le mot de passe doit contenir au moins 6 caractères.",
+      );
     }
 
     const { user } = await createAccount(ctx, {

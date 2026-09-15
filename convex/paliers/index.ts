@@ -594,7 +594,6 @@ export const getBucket = action({
     class: classValidator,
     topicId: v.id("topics"),
     palierIndex: v.number(),
-    forceRegenerate: v.optional(v.boolean()),
   },
   handler: async (ctx, args): Promise<{
     palierId: Id<"paliers">;
@@ -626,17 +625,14 @@ export const getBucket = action({
     }
 
     if (args.palierIndex > 1) {
-      const authUserId = await getAuthUserId(ctx);
-      if (!authUserId) throw new Error("Non authentifié");
-      const profile = await ctx.runQuery(
-        internal.paliers.index.getProfileByUserId,
-        { userId: authUserId as string },
-      );
-      if (!profile) throw new Error("Profil introuvable");
+      // `callerProfile` est déjà résolu ci-dessus : ce bloc refaisait
+      // `getAuthUserId` + `getProfileByUserId` pour la MÊME session, soit une
+      // résolution d'identité et un aller-retour de requête en trop sur le
+      // chemin élève le plus chaud.
       const blocked = await ctx.runQuery(
         internal.paliers.index.checkPalierProgression,
         {
-          profileId: profile._id,
+          profileId: callerProfile._id,
           subjectId: args.subjectId,
           class: args.class,
           topicId: args.topicId,
@@ -644,7 +640,11 @@ export const getBucket = action({
         },
       );
       if (blocked) {
-        throw new Error(
+        // `ConvexError` : cette phrase est écrite POUR L'ENFANT. En `Error`,
+        // Convex l'occultait hors développement et l'écran n'en recevait qu'une
+        // enveloppe — au point qu'il s'était doté d'une expression régulière
+        // pour tenter de la désenvelopper. La rustine est partie avec la cause.
+        throw new ConvexError(
           `Tu dois d'abord valider le palier ${blocked.blockedAt} avant de passer au suivant.`,
         );
       }
@@ -657,12 +657,21 @@ export const getBucket = action({
       palierIndex: args.palierIndex,
     });
     const now = Date.now();
-    if (
-      existing &&
-      existing.status === "cached" &&
-      existing.expiresAt > now &&
-      args.forceRegenerate !== true
-    ) {
+    // `forceRegenerate` A DISPARU DES ARGUMENTS, il n'a pas été gardé.
+    //
+    // C'était un booléen PUBLIC qu'aucun écran n'envoyait : il n'existait que
+    // comme surface d'attaque. Posé à `true`, il rendait cette branche de cache
+    // INATTEIGNABLE, donc chaque appel relançait une génération `palier_base`
+    // complète — l'appel le plus cher du produit. Avec `palierIndex: 1`, le
+    // contrôle de progression est sauté par ailleurs, et rien ne limitait la
+    // cadence : un seul compte en règle pouvait épuiser le budget IA MENSUEL de
+    // toutes les écoles, le plafond budgétaire n'étant pas segmenté par école.
+    //
+    // Le régénérer à dessein reste possible et le restera : c'est `expiresAt`
+    // qui décide, et la régénération personnalisée a sa propre voie
+    // (`quotaScope: "system_regen"`, plus bas). Une fraîcheur ne se pilote pas
+    // depuis le client.
+    if (existing && existing.status === "cached" && existing.expiresAt > now) {
       return {
         palierId: existing._id,
         cacheHit: true,
@@ -706,6 +715,20 @@ export const getBucket = action({
       prompt: userPrompt,
       systemPrompt,
       expectJson: true,
+      // `userId` MANQUAIT, et c'est le plus gros dépensier du produit.
+      //
+      // `aiGateway.generate` saute son verrou d'accès quand `userId` est absent
+      // — « aucun élève à vérifier, on laisse passer » — et n'impute alors la
+      // dépense à personne, laissant `by_user_month` vide pour la génération de
+      // paliers. Le paywall est bien contrôlé en tête de cette action, mais un
+      // verrou qui ne couvre pas le plus gros dépensier ne vaut pas ce que sa
+      // documentation promet.
+      //
+      // PAS DE `quotaScope` POUR AUTANT, à dessein : `kid_initiated` plafonne à
+      // `dailyMoreLimitPerKid` (3 par jour), ce qui interdirait à un élève
+      // d'ouvrir un quatrième palier dans sa journée. La cadence de CE chemin
+      // est déjà bornée par le cache, pas par un quota.
+      userId: callerProfile._id,
       metadata: {
         subjectId: args.subjectId,
         topicId: args.topicId,

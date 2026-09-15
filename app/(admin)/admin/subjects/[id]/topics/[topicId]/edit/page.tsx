@@ -7,6 +7,7 @@ import { use } from "react";
 import Link from "next/link";
 import { ArrowLeft, Save, Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { refusalMessage } from "@/lib/refusalMessage";
 
 export default function TopicEditPage({
   params,
@@ -49,7 +50,7 @@ export default function TopicEditPage({
       router.push(`/admin/subjects/${id}`);
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Erreur lors de la mise à jour",
+        refusalMessage(err, "Erreur lors de la mise à jour"),
       );
     } finally {
       setIsSubmitting(false);

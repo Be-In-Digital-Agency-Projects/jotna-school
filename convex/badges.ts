@@ -1,5 +1,5 @@
 import { query, mutation, internalMutation } from "./_generated/server";
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { internal } from "./_generated/api";
 import { readStudentPreferences, type StudentPreferences } from "./students";
@@ -173,22 +173,23 @@ export const listMyEarned = query({
 //
 // Une mutation peut lever, et le garde est la toute première instruction :
 // rien n'est lu avant d'avoir établi le rôle. Un seul message pour tous les
-// refus de rôle, comme `profiles.linkChild`, et une `Error` ordinaire suffit
-// à CELUI-LÀ : il ne dit rien qu'un administrateur puisse suivre, et le repli
-// de l'écran le vaut.
+// refus de rôle, comme `profiles.linkChild`.
 //
-// NE PAS ÉTENDRE CETTE PHRASE AUX AUTRES REFUS DU MODULE. Ceux qui expliquent
-// un échec de suppression nomment, eux, une action à suivre — et elle
-// n'arrive pas : l'écran attrape en `err instanceof Error`, test que TOUTE
-// erreur passe puisque `ConvexError` étend `Error`, si bien que son repli est
-// inatteignable et que l'administrateur lit le `message` enveloppé par le
-// client Convex, occulté hors développement. C'est un MANQUE, pas un choix :
-// la bascule que `convex/schools.ts` a déjà reçue reste à faire ici.
+// CES REFUS SONT DES `ConvexError`, PARCE QU'UN LECTEUR LES AFFICHE. La règle
+// se juge au LECTEUR, jamais au module : hors développement Convex occulte le
+// `message` d'une erreur, et seul `data` est transmis TEL QUEL, donc un refus
+// qu'un écran montre doit voyager par là. Les écrans le lisent avec
+// `refusalMessage` (`lib/refusalMessage.ts`). Sans cette bascule leur repli
+// serait INATTEIGNABLE — ils attrapent en `err instanceof Error`, test que
+// toute erreur passe puisque `ConvexError` étend `Error` — et l'administrateur
+// lirait un message enveloppé et vidé à la place de la phrase écrite ici.
 //
-// `ConvexError` sert à ce qui doit ARRIVER à l'écran, son champ `data` étant
-// le seul transmis TEL QUEL : le CODE d'un refus de paywall — levé par les
-// modules qui interrogent la couche d'accès, jamais par `accessRules.ts`, pur
-// et sans un seul `throw` — et le TEXTE des refus de `convex/schools.ts`.
+// `markBadgesSeen` est l'exception, et elle confirme la règle : elle n'a PAS de
+// lecteur — `void markBadgesSeen(…)`, sans capture — et c'est un ÉLÈVE qui
+// l'appelle, à qui la spec §5.4 interdit de montrer un motif technique. Ses
+// deux refus restent donc des `Error` ordinaires. Son paywall, lui, lève bien
+// un `ConvexError` : c'est un CODE que le client traduit en mots d'enfant, pas
+// une phrase à afficher.
 //
 // `markBadgesSeen` plus bas est le cas inverse et garde son `requireAccess` :
 // c'est l'élève lui-même qui écrit, sur son propre profil.
@@ -203,7 +204,7 @@ export const create = mutation({
     subjectId: v.optional(v.id("subjects")),
   },
   handler: async (ctx, args) => {
-    if (!(await callerIsAdmin(ctx))) throw new Error("Rôle non autorisé");
+    if (!(await callerIsAdmin(ctx))) throw new ConvexError("Rôle non autorisé");
 
     return await ctx.db.insert("badges", {
       name: args.name,
@@ -225,12 +226,12 @@ export const update = mutation({
     subjectId: v.optional(v.id("subjects")),
   },
   handler: async (ctx, args) => {
-    if (!(await callerIsAdmin(ctx))) throw new Error("Rôle non autorisé");
+    if (!(await callerIsAdmin(ctx))) throw new ConvexError("Rôle non autorisé");
 
     const { id, ...fields } = args;
     const existing = await ctx.db.get(id);
     if (!existing) {
-      throw new Error("Badge introuvable");
+      throw new ConvexError("Badge introuvable");
     }
     const updates: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(fields)) {
@@ -245,11 +246,11 @@ export const update = mutation({
 export const remove = mutation({
   args: { id: v.id("badges") },
   handler: async (ctx, args) => {
-    if (!(await callerIsAdmin(ctx))) throw new Error("Rôle non autorisé");
+    if (!(await callerIsAdmin(ctx))) throw new ConvexError("Rôle non autorisé");
 
     const existing = await ctx.db.get(args.id);
     if (!existing) {
-      throw new Error("Badge introuvable");
+      throw new ConvexError("Badge introuvable");
     }
 
     // Check if any earnedBadges reference this badge
@@ -258,7 +259,7 @@ export const remove = mutation({
       .filter((q) => q.eq(q.field("badgeId"), args.id))
       .first();
     if (earned) {
-      throw new Error(
+      throw new ConvexError(
         "Impossible de supprimer ce badge car des élèves l'ont déjà obtenu.",
       );
     }

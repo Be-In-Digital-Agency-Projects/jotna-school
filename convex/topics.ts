@@ -1,5 +1,5 @@
 import { query, mutation } from "./_generated/server";
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import {
   blockedStudent,
   callerHasProfile,
@@ -75,22 +75,16 @@ export const getById = query({
 //
 // Une mutation peut lever, et le garde est la toute première instruction :
 // rien n'est lu avant d'avoir établi le rôle. Un seul message pour tous les
-// refus de rôle, comme `profiles.linkChild`, et une `Error` ordinaire suffit
-// à CELUI-LÀ : il ne dit rien qu'un administrateur puisse suivre, et le repli
-// de l'écran le vaut.
+// refus de rôle, comme `profiles.linkChild`.
 //
-// NE PAS ÉTENDRE CETTE PHRASE AUX AUTRES REFUS DU MODULE. Ceux qui expliquent
-// un échec de suppression nomment, eux, une action à suivre — et elle
-// n'arrive pas : l'écran attrape en `err instanceof Error`, test que TOUTE
-// erreur passe puisque `ConvexError` étend `Error`, si bien que son repli est
-// inatteignable et que l'administrateur lit le `message` enveloppé par le
-// client Convex, occulté hors développement. C'est un MANQUE, pas un choix :
-// la bascule que `convex/schools.ts` a déjà reçue reste à faire ici.
-//
-// `ConvexError` sert à ce qui doit ARRIVER à l'écran, son champ `data` étant
-// le seul transmis TEL QUEL : le CODE d'un refus de paywall — levé par les
-// modules qui interrogent la couche d'accès, jamais par `accessRules.ts`, pur
-// et sans un seul `throw` — et le TEXTE des refus de `convex/schools.ts`.
+// CES REFUS SONT DES `ConvexError`, PARCE QU'UN LECTEUR LES AFFICHE. La règle
+// se juge au LECTEUR, jamais au module : hors développement Convex occulte le
+// `message` d'une erreur, et seul `data` est transmis TEL QUEL, donc un refus
+// qu'un écran montre doit voyager par là. Les écrans le lisent avec
+// `refusalMessage` (`lib/refusalMessage.ts`). Sans cette bascule leur repli
+// serait INATTEIGNABLE — ils attrapent en `err instanceof Error`, test que
+// toute erreur passe puisque `ConvexError` étend `Error` — et l'administrateur
+// lirait un message enveloppé et vidé à la place de la phrase écrite ici.
 // ---------------------------------------------------------------------------
 
 export const create = mutation({
@@ -101,12 +95,12 @@ export const create = mutation({
     order: v.number(),
   },
   handler: async (ctx, args) => {
-    if (!(await callerIsAdmin(ctx))) throw new Error("Rôle non autorisé");
+    if (!(await callerIsAdmin(ctx))) throw new ConvexError("Rôle non autorisé");
 
     // Verify subject exists
     const subject = await ctx.db.get(args.subjectId);
     if (!subject) {
-      throw new Error("Matière introuvable");
+      throw new ConvexError("Matière introuvable");
     }
     return await ctx.db.insert("topics", {
       subjectId: args.subjectId,
@@ -125,12 +119,12 @@ export const update = mutation({
     order: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    if (!(await callerIsAdmin(ctx))) throw new Error("Rôle non autorisé");
+    if (!(await callerIsAdmin(ctx))) throw new ConvexError("Rôle non autorisé");
 
     const { id, ...fields } = args;
     const existing = await ctx.db.get(id);
     if (!existing) {
-      throw new Error("Thématique introuvable");
+      throw new ConvexError("Thématique introuvable");
     }
     const updates: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(fields)) {
@@ -145,7 +139,7 @@ export const update = mutation({
 export const remove = mutation({
   args: { id: v.id("topics") },
   handler: async (ctx, args) => {
-    if (!(await callerIsAdmin(ctx))) throw new Error("Rôle non autorisé");
+    if (!(await callerIsAdmin(ctx))) throw new ConvexError("Rôle non autorisé");
 
     // Check if any exercises reference this topic
     const exercise = await ctx.db
@@ -153,7 +147,7 @@ export const remove = mutation({
       .withIndex("by_topicId", (q) => q.eq("topicId", args.id))
       .first();
     if (exercise) {
-      throw new Error(
+      throw new ConvexError(
         "Impossible de supprimer cette thématique car elle contient des exercices. Utilisez removeWithExercises pour supprimer en cascade.",
       );
     }
@@ -176,10 +170,10 @@ export const remove = mutation({
 export const removeWithExercises = mutation({
   args: { id: v.id("topics") },
   handler: async (ctx, { id }) => {
-    if (!(await callerIsStaff(ctx))) throw new Error("Rôle non autorisé");
+    if (!(await callerIsStaff(ctx))) throw new ConvexError("Rôle non autorisé");
 
     const topic = await ctx.db.get(id);
-    if (!topic) throw new Error("Thématique introuvable");
+    if (!topic) throw new ConvexError("Thématique introuvable");
 
     // 1. Exercises in this topic
     const exercises = await ctx.db

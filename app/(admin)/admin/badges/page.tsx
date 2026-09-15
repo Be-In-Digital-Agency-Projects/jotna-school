@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { refusalMessage } from "@/lib/refusalMessage";
 import {
   Award,
   Plus,
@@ -89,7 +90,7 @@ export default function AdminBadgesPage() {
       }
       resetForm();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Erreur lors de l'opération");
+      setError(refusalMessage(err, "Erreur lors de l'opération"));
     } finally {
       setIsSubmitting(false);
     }
@@ -102,7 +103,7 @@ export default function AdminBadgesPage() {
       setDeleteConfirm(null);
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Erreur lors de la suppression",
+        refusalMessage(err, "Erreur lors de la suppression"),
       );
       setDeleteConfirm(null);
     }

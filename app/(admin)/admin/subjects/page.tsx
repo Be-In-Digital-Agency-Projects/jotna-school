@@ -5,6 +5,7 @@ import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import Link from "next/link";
 import { BookOpen, Pencil, Trash2, Plus, Loader2 } from "lucide-react";
+import { refusalMessage } from "@/lib/refusalMessage";
 
 export default function SubjectsPage() {
   const subjects = useQuery(api.subjects.list);
@@ -32,7 +33,7 @@ export default function SubjectsPage() {
       setOrder(0);
       setShowForm(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Erreur lors de la création");
+      setError(refusalMessage(err, "Erreur lors de la création"));
     } finally {
       setIsSubmitting(false);
     }
@@ -44,7 +45,7 @@ export default function SubjectsPage() {
       await removeSubject({ id: id as any });
       setDeleteConfirm(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Erreur lors de la suppression");
+      setError(refusalMessage(err, "Erreur lors de la suppression"));
       setDeleteConfirm(null);
     }
   };

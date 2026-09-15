@@ -5,6 +5,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import Link from "next/link";
 import { useState } from "react";
+import { refusalMessage } from "@/lib/refusalMessage";
 import {
   Pencil,
   FileText,
@@ -63,8 +64,10 @@ export default function TeacherExercisesPage() {
     setDeletingTopic(topicId);
     try {
       await removeTopic({ id: topicId as Id<"topics"> });
-    } catch {
-      window.alert("Impossible de supprimer cette thématique.");
+    } catch (err) {
+      window.alert(
+        refusalMessage(err, "Impossible de supprimer cette thématique."),
+      );
     } finally {
       setDeletingTopic(null);
     }

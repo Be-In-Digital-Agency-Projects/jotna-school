@@ -156,20 +156,70 @@ export const remove = mutation({
 });
 
 /**
- * Cascade-delete a topic and every exercise + attempt + progress + report
- * attached to it. Used by the teacher space when a thematic folder must be
- * removed (for instance an auto-generated "Général" topic from an early
- * extraction that the teacher wants to clean up).
+ * NE PLUS DÉCRIRE CETTE FONCTION COMME UNE CASCADE. Ce bloc l'a fait — « every
+ * exercise + attempt + progress + report attached to it » — et c'est resté vrai
+ * du contrat exactement aussi longtemps que le contrat était faux : elle
+ * effaçait mal, et incomplètement. Le commentaire détaillé se trouve sur la
+ * mutation elle-même, plus bas.
+ *
+ * Elle sert l'espace professeur, qui supprime un dossier thématique indésirable
+ * — par exemple un « Général » auto-créé par une extraction hâtive.
  *
  * `callerIsStaff` et non `callerIsAdmin` : son unique appelant est l'écran
  * professeur, que restreindre à `admin` casserait. C'était la pire des onze
  * écritures ouvertes — publique et sans aucune authentification, un simple
- * `Id<"topics">` suffisait à effacer un chapitre, jusqu'à 500 de ses
- * exercices, toutes les tentatives des élèves dessus et leur progression.
+ * `Id<"topics">` suffisait à effacer un chapitre, jusqu'à 500 de ses exercices
+ * et le travail des élèves dessus.
  */
-/** Exercices lus au plus pour une suppression en cascade. */
+/** Exercices lus au plus pour une suppression. */
 const TOPIC_EXERCISES_LIMIT = 500;
 
+/**
+ * Supprime une thématique et ses exercices — et REFUSE si quoi que ce soit
+ * d'autre les référence.
+ *
+ * CE N'EST PLUS UNE CASCADE, ET C'EST DÉLIBÉRÉ. Elle en fut une, et elle
+ * mentait deux fois. D'abord sur ce qu'elle effaçait : sa boucle lisait
+ * `query("attempts").take(500)` — les cinq cents tentatives LES PLUS ANCIENNES
+ * de toute la table — une fois PAR exercice, puis filtrait en mémoire, si bien
+ * qu'au-delà de cinq cents tentatives celles des exercices supprimés
+ * survivaient en pointant vers un exercice effacé. Ensuite sur sa complétude :
+ * elle ne connaissait que trois des tables qui référencent une thématique ou
+ * ses exercices, sur les huit que porte le schéma.
+ *
+ * ET UNE CASCADE COMPLÈTE N'EST PAS ATTEIGNABLE ICI. Le graphe n'a aucune
+ * intégrité référentielle, et chaque arête suivie en découvre une autre :
+ * supprimer les `paliers` d'une thématique orphelinerait les `palierAttempts`
+ * qui les désignent, dont ceux qu'un enfant vient d'ouvrir sans avoir encore
+ * répondu. Une suppression transitive correcte est un travail de migration,
+ * pas un bouton d'écran.
+ *
+ * LA FONCTION NE DÉTRUIT DONC QUE CE QU'ELLE PEUT PROUVER ISOLÉ : les
+ * exercices de la thématique, et la thématique. Tout le reste la fait refuser.
+ * C'est exact par construction, et c'est vérifiable en relisant le schéma —
+ * là où une cascade demande de faire confiance à une liste.
+ *
+ * LES CINQ REFUS COUVRENT LES HUIT RÉFÉRENCES, et voici pourquoi :
+ *   - `attempts.exerciseId`, `topicReports.topicId`, `paliers.topicId`,
+ *     `studentTopicProgress.topicId`, `exerciseExplanations.exerciseId` sont
+ *     contrôlés directement, un par un.
+ *   - `palierAttempts.failedExerciseIds` ne peut exister sans un `paliers` de
+ *     cette thématique, que le troisième refus exclut déjà.
+ *   - `exercises.originalExerciseId` désigne une variation, créée avec le
+ *     `topicId` de son original (`paliers/index.ts`) : les deux partent donc
+ *     ensemble.
+ *   - `exerciseReports.exerciseId` n'a AUCUN écrivain dans le dépôt — table
+ *     morte. Le jour où elle en gagne un, il faudra un sixième refus ici.
+ *
+ * `studentTopicProgress` EST CONTRÔLÉE, et l'ancienne version de ce
+ * commentaire prétendait à tort que c'était inutile. Le raisonnement était :
+ * ses deux seuls écrivains exigent une tentative, donc le refus sur les
+ * tentatives la couvre. Il est faux, parce qu'une progression peut SURVIVRE à
+ * son exercice — `pdfUploads.remove` efface des exercices sans toucher aux
+ * tentatives ni aux progressions. La boucle ci-dessous n'itère que sur les
+ * exercices ENCORE présents ; une progression rattachée à un exercice déjà
+ * effacé passait donc entre les mailles.
+ */
 export const removeWithExercises = mutation({
   args: { id: v.id("topics") },
   handler: async (ctx, { id }) => {
@@ -178,26 +228,6 @@ export const removeWithExercises = mutation({
     const topic = await ctx.db.get(id);
     if (!topic) throw new ConvexError("Thématique introuvable");
 
-    // CETTE CASCADE N'EFFACE PLUS AUCUN DOSSIER D'ÉLÈVE, et c'est ce qui la
-    // rend sûre. Elle supprimait auparavant les tentatives, les progressions et
-    // les bulletins avec les exercices — contournant en gros la règle
-    // qu'`exercises.remove` applique un cran plus bas : « impossible de
-    // supprimer cet exercice car des tentatives y sont associées ». Un
-    // professeur ne pouvait pas effacer UN exercice joué, mais pouvait en
-    // effacer cinq cents d'un clic, avec l'historique des enfants.
-    //
-    // ELLE S'Y EFFAÇAIT MAL, DE SURCROÎT. La boucle lisait
-    // `query("attempts").take(500)` — les cinq cents tentatives LES PLUS
-    // ANCIENNES de toute la table — une fois PAR exercice, puis filtrait en
-    // mémoire. Passé cinq cents tentatives, celles des exercices supprimés
-    // survivaient en pointant vers un exercice effacé. Même méprise sur
-    // `studentTopicProgress` et `topicReports`. La fonction ne faisait donc pas
-    // ce que son nom promet : elle laissait des orphelines, en silence.
-    //
-    // La règle est désormais la MÊME qu'un cran plus bas, ce qui règle aussi la
-    // question du rôle : `callerIsStaff` suffit à nettoyer un import qui n'a
-    // servi à personne, et plus rien ici ne peut détruire le travail d'un
-    // enfant.
     const exercises = await ctx.db
       .query("exercises")
       .withIndex("by_topicId", (q) => q.eq("topicId", id))
@@ -222,6 +252,16 @@ export const removeWithExercises = mutation({
           "Impossible de supprimer cette thématique car des élèves ont déjà travaillé sur ses exercices.",
         );
       }
+
+      const explanation = await ctx.db
+        .query("exerciseExplanations")
+        .withIndex("by_exercise", (q) => q.eq("exerciseId", exercise._id))
+        .first();
+      if (explanation) {
+        throw new ConvexError(
+          "Impossible de supprimer cette thématique car un élève a demandé une explication sur l'un de ses exercices.",
+        );
+      }
     }
 
     const report = await ctx.db
@@ -234,13 +274,27 @@ export const removeWithExercises = mutation({
       );
     }
 
-    // `studentTopicProgress` N'A PAS BESOIN D'ÊTRE VÉRIFIÉE, et ce n'est pas un
-    // oubli : ses deux seuls écrivains sont dans `convex/attempts.ts`, et tous
-    // deux exigent une tentative — `submit` l'insère juste après en avoir créé
-    // une, `markAttemptCorrectByAI` en relit une existante. Une progression sur
-    // cette thématique implique donc une tentative sur l'un de ses exercices,
-    // que la boucle ci-dessus vient d'exclure. Si un troisième écrivain
-    // apparaissait, ce raisonnement tomberait et il faudrait un contrôle ici.
+    const progress = await ctx.db
+      .query("studentTopicProgress")
+      .withIndex("by_topicId", (q) => q.eq("topicId", id))
+      .first();
+    if (progress) {
+      throw new ConvexError(
+        "Impossible de supprimer cette thématique car elle porte déjà la progression d'un élève.",
+      );
+    }
+
+    // `by_topic_class` commence par `topicId`, donc il répond sans la classe.
+    const palier = await ctx.db
+      .query("paliers")
+      .withIndex("by_topic_class", (q) => q.eq("topicId", id))
+      .first();
+    if (palier) {
+      throw new ConvexError(
+        "Impossible de supprimer cette thématique car des paliers ont été générés pour elle.",
+      );
+    }
+
     for (const exercise of exercises) {
       await ctx.db.delete(exercise._id);
     }

@@ -163,8 +163,11 @@ export default defineSchema({
     .index("by_studentId_exerciseId", ["studentId", "exerciseId"])
     .index("by_studentId", ["studentId"])
     // Répond à « cet exercice a-t-il été tenté ? » SANS connaître l'élève.
-    // Les trois autres index commencent par `studentId`, donc aucun ne sait le
-    // faire. `topics.removeWithExercises` en a besoin pour refuser d'effacer un
+    // Aucun des quatre autres ne sait le faire : deux commencent par
+    // `studentId`, et les deux autres par `palierAttemptId` — dont
+    // `by_palierAttempt_exercise`, qui porte bien `exerciseId` mais en SECOND,
+    // donc exige une égalité sur la tentative de palier avant de pouvoir le
+    // contraindre. `topics.removeWithExercises` en a besoin pour refuser d'effacer un
     // exercice sur lequel un enfant a travaillé : sans lui, la question ne
     // pouvait se poser qu'en balayant la table, ce que le code faisait — mal.
     .index("by_exerciseId", ["exerciseId"])
@@ -184,7 +187,12 @@ export default defineSchema({
     completedAt: v.optional(v.number()),
   })
     .index("by_studentId", ["studentId"])
-    .index("by_studentId_topicId", ["studentId", "topicId"]),
+    .index("by_studentId_topicId", ["studentId", "topicId"])
+    // « Cette thématique porte-t-elle une progression ? », sans connaître
+    // l'élève. Nécessaire parce qu'une progression peut SURVIVRE à son
+    // exercice : `pdfUploads.remove` efface des exercices sans toucher aux
+    // tentatives ni aux progressions.
+    .index("by_topicId", ["topicId"]),
 
   // ---------------------------------------------------------------------------
   // badges

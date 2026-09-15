@@ -148,7 +148,7 @@ export const remove = mutation({
       .first();
     if (exercise) {
       throw new ConvexError(
-        "Impossible de supprimer cette thématique car elle contient des exercices. Utilisez removeWithExercises pour supprimer en cascade.",
+        "Impossible de supprimer cette thématique car elle contient des exercices. Supprimez-les d'abord, depuis la liste des exercices.",
       );
     }
     await ctx.db.delete(args.id);

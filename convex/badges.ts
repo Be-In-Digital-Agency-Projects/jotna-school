@@ -187,12 +187,12 @@ export const listMyEarned = query({
 // `markBadgesSeen` est l'exception, et elle confirme la règle : elle n'a PAS de
 // lecteur — `void markBadgesSeen(…)`, sans capture — et c'est un ÉLÈVE qui
 // l'appelle, à qui la spec §5.4 interdit de montrer un motif technique. Ses
-// deux refus restent donc des `Error` ordinaires. Son paywall, lui, lève bien
-// un `ConvexError` : c'est un CODE que le client traduit en mots d'enfant, pas
-// une phrase à afficher.
-//
-// `markBadgesSeen` plus bas est le cas inverse et garde son `requireAccess` :
-// c'est l'élève lui-même qui écrit, sur son propre profil.
+// deux refus restent donc des `Error` ordinaires, et elle garde son
+// `requireAccess` : c'est l'élève lui-même qui écrit, sur son propre profil.
+// Ce paywall lève un `ConvexError` par cohérence avec les autres appelants de
+// `requireAccess`, non parce qu'un lecteur le traduirait — ICI PERSONNE NE LE
+// LIT. Les mots d'enfant existent bien (`kidMessages`, via `isAccessDenied`),
+// mais sur l'écran de session, pas sur ce chemin-ci.
 // ---------------------------------------------------------------------------
 
 export const create = mutation({

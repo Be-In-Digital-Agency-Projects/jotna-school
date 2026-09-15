@@ -320,16 +320,21 @@ export async function callerIsAdmin(ctx: QueryCtx): Promise<boolean> {
  *
  * Même garde que `callerIsAdmin` — mêmes refus, exactement — mais qui rend
  * l'auteur au lieu de le jeter. Destiné aux mutations qui doivent NOMMER
- * celui qui agit : les trois actes sur l'inscription d'un élève
- * (`schools.enrollStudent`, `releaseStudent`, `transferStudent`) écrivent une
- * ligne `schoolMembershipEvents` portant `actorProfileId`.
+ * celui qui agit. CINQ mutations de `schools.ts` l'appellent, et chacune écrit
+ * une ligne de journal portant `actorProfileId` : les trois actes sur
+ * l'inscription d'un élève (`enrollStudent`, `releaseStudent`,
+ * `transferStudent` → `schoolMembershipEvents`), l'avenant de sièges
+ * (`amendSeats` → `subscriptionAmendments`) et l'activation d'un contrat
+ * (`activateSubscription` → `subscriptionActivations`). Le compte a bougé deux
+ * fois sans que ce commentaire suive ; il dit désormais la RÈGLE — qui nomme
+ * un auteur appelle cette garde — plutôt qu'un nombre qui se périme.
  *
  * Il REMPLACE `callerIsAdmin` dans ces mutations-là, il ne s'y ajoute pas :
  * `callerIsAdmin` résout le profil puis n'en garde que le rôle, donc l'appeler
  * en plus relirait `profiles` une seconde fois pour une réponse déjà connue.
  * Un seul appel sert ici à la fois de garde et de source de l'auteur.
  *
- * `callerIsAdmin` reste en place et INCHANGÉ : les onze autres fonctions de
+ * `callerIsAdmin` reste en place et INCHANGÉ : toutes les autres fonctions de
  * `schools.ts` n'ont besoin que du booléen, et un profil complet là où une
  * réponse par oui ou non suffit invite à s'en servir pour autre chose que la
  * garde.

@@ -1110,7 +1110,14 @@ export const createSchool = mutation({
  * doit lire le nombre payé, sans quoi l'école paierait des sièges qu'elle ne
  * pourrait pas occuper.
  *
- * SEPT REFUS, et la raison de chacun :
+ * SEPT REFUS SUR LES ARGUMENTS, et la raison de chacun. Le handler en lève un
+ * huitième, plus bas et à part : l'ALERTE, qui refuse un contrat dont les
+ * sièges passeraient sous l'effectif déjà inscrit. Il ne figure pas dans cette
+ * liste parce qu'il ne juge pas la saisie mais l'ÉTAT de l'école — et il a
+ * besoin de lire la base, là où les sept ci-dessous se décident sur les seuls
+ * arguments. Le compte disait « six » puis « sept » en ignorant l'alerte à
+ * chaque fois : il est dit ici pour ce qu'il est.
+ *
  *
  *   - sièges : entier strictement positif. `readSeatState` passe ce nombre à
  *     `.take()`, qui LÈVE sur un argument non entier — un contrat à 12,5

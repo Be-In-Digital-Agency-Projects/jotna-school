@@ -29,6 +29,7 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { UserMenu } from "@/components/ui/user-menu";
+import { RoleGate } from "@/components/RoleGate";
 
 const sidebarLinks = [
   { href: "/parent/dashboard", label: "Tableau de bord", icon: LayoutDashboard },
@@ -60,64 +61,68 @@ export default function ParentLayout({
 
   const roleLabel = "Parent";
 
+  // L'espace parent. `tuteur` n'est pas un rôle mais une RELATION
+  // (`studentGuardians.relation`) : un tuteur légal porte le rôle `parent`.
   return (
-    <SidebarProvider>
-      <Sidebar>
-        <SidebarHeader>
-          <div className="flex items-center gap-2 px-2 py-2">
-            <Brand size="sm" />
-            <span className="ml-auto rounded bg-lime-100 px-2 py-0.5 text-xs font-medium text-lime-800">
-              {roleLabel}
-            </span>
-          </div>
-        </SidebarHeader>
+    <RoleGate allow={["parent", "admin"]}>
+      <SidebarProvider>
+        <Sidebar>
+          <SidebarHeader>
+            <div className="flex items-center gap-2 px-2 py-2">
+              <Brand size="sm" />
+              <span className="ml-auto rounded bg-lime-100 px-2 py-0.5 text-xs font-medium text-lime-800">
+                {roleLabel}
+              </span>
+            </div>
+          </SidebarHeader>
 
-        <SidebarContent>
-          <SidebarGroup>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {sidebarLinks.map((link) => {
-                  const isActive =
-                    pathname === link.href ||
-                    pathname.startsWith(`${link.href}/`);
-                  const Icon = link.icon;
-                  return (
-                    <SidebarMenuItem key={link.href}>
-                      <SidebarMenuButton
-                        isActive={isActive}
-                        render={<Link href={link.href} />}
-                        className={isActive ? "bg-lime-50 text-lime-800 font-semibold border-r-2 border-lime-600 rounded-none transition-all duration-200" : ""}
-                      >
-                        <Icon className={isActive ? "text-lime-600" : ""} />
-                        <span>{link.label}</span>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  );
-                })}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-        </SidebarContent>
+          <SidebarContent>
+            <SidebarGroup>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {sidebarLinks.map((link) => {
+                    const isActive =
+                      pathname === link.href ||
+                      pathname.startsWith(`${link.href}/`);
+                    const Icon = link.icon;
+                    return (
+                      <SidebarMenuItem key={link.href}>
+                        <SidebarMenuButton
+                          isActive={isActive}
+                          render={<Link href={link.href} />}
+                          className={isActive ? "bg-lime-50 text-lime-800 font-semibold border-r-2 border-lime-600 rounded-none transition-all duration-200" : ""}
+                        >
+                          <Icon className={isActive ? "text-lime-600" : ""} />
+                          <span>{link.label}</span>
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                    );
+                  })}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          </SidebarContent>
 
-        <SidebarFooter>
-          <UserMenu
-            profileHref="/parent/settings"
-            settingsHref="/parent/settings"
-            fallbackLabel={roleLabel}
-          />
-        </SidebarFooter>
-      </Sidebar>
+          <SidebarFooter>
+            <UserMenu
+              profileHref="/parent/settings"
+              settingsHref="/parent/settings"
+              fallbackLabel={roleLabel}
+            />
+          </SidebarFooter>
+        </Sidebar>
 
-      <SidebarInset>
-        <header className="flex h-16 items-center gap-2 border-b bg-background px-4">
-          <SidebarTrigger />
-          <div className="text-sm font-medium text-gray-500">Espace {roleLabel.toLowerCase()}</div>
-          <div className="ml-auto">
-            <KidSwitcher />
-          </div>
-        </header>
-        <main className="flex-1 p-4 lg:p-8">{children}</main>
-      </SidebarInset>
-    </SidebarProvider>
+        <SidebarInset>
+          <header className="flex h-16 items-center gap-2 border-b bg-background px-4">
+            <SidebarTrigger />
+            <div className="text-sm font-medium text-gray-500">Espace {roleLabel.toLowerCase()}</div>
+            <div className="ml-auto">
+              <KidSwitcher />
+            </div>
+          </header>
+          <main className="flex-1 p-4 lg:p-8">{children}</main>
+        </SidebarInset>
+      </SidebarProvider>
+    </RoleGate>
   );
 }

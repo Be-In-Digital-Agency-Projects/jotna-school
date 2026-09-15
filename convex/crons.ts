@@ -62,4 +62,22 @@ crons.cron(
   {},
 );
 
+// Spec §8.6 — les tranches échues, une fois par jour.
+//
+// 02:30 UTC : une heure creuse au Sénégal (UTC+0), et à l'écart des deux autres
+// tâches pour qu'aucune ne se dispute une transaction avec les suivantes.
+//
+// UNE FOIS PAR JOUR SUFFIT, et plus serait faux : la grâce se compte en jours
+// (vingt et un), et une école qui passe en retard à 2 h 30 plutôt qu'à l'instant
+// exact de son échéance ne perd rien — c'est même dans son sens.
+//
+// `crons.cron` et non les helpers `daily`/`weekly`, que les guidelines
+// interdisent et que ce fichier évite déjà.
+crons.cron(
+  "mark overdue installments",
+  "30 2 * * *",
+  internal.billing.markOverdueInstallments,
+  {},
+);
+
 export default crons;

@@ -1,10 +1,10 @@
 "use client";
 
 import { use, useState } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, useAction } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import { api } from "@/convex/_generated/api";
-import type { Doc } from "@/convex/_generated/dataModel";
+import type { Doc, Id } from "@/convex/_generated/dataModel";
 // Le barème est un module PUR, sans import ni accès à la base : l'écran peut
 // donc montrer le montant AVANT validation sans un aller-retour par serveur —
 // celui d'un contrat neuf comme celui d'un avenant, proratisé. Ces totaux
@@ -33,8 +33,12 @@ import {
   UserMinus,
   UserPlus,
   GraduationCap,
+  KeyRound,
+  Upload,
   AlertTriangle,
   Unlock,
+  CreditCard,
+  ExternalLink,
 } from "lucide-react";
 
 /** Les types viennent des fonctions Convex : aucune forme n'est recopiée. */
@@ -62,6 +66,11 @@ type SeatAmendmentRow = FunctionReturnType<
  * borne. L'écran doit le RELAYER : sans lui, « Aucun profil disponible » se lit
  * comme « ce profil n'existe pas » alors qu'il veut dire « je n'ai pas tout lu ».
  */
+type BillingScheduleView = NonNullable<
+  FunctionReturnType<typeof api.billing.getSchedule>
+>;
+type ScheduleRow = BillingScheduleView["installments"][number];
+type PaymentRow = BillingScheduleView["payments"][number];
 type CandidateList = FunctionReturnType<typeof api.schools.listStaffCandidates>;
 type EnrollableList = FunctionReturnType<
   typeof api.schools.listEnrollableStudents
@@ -116,13 +125,15 @@ const SUBSCRIPTION_STATUS_LABEL: Record<SubscriptionStatus, string> = {
  * Les DEUX statuts qu'une personne pose — et ce qui est arrivé aux quatre
  * autres.
  *
- * `past_due` viendra du suivi des tranches, `expired` se déduit de la date de
- * fin à chaque lecture, et « résilié » dit la FIN d'un contrat existant que
- * rien ne sait encore prononcer. La table a trois écrivains — l'insertion de
- * `recordSubscription`, l'avenant de sièges d'`amendSeats` qui ne touche ni le
- * statut ni les dates, et `activateSubscription` qui n'écrit qu'une seule
- * valeur de statut, « actif » — donc aucune ligne ne peut devenir résiliée ni
- * impayée. Les quatre sont refusés par la mutation, et le formulaire n'a pas à
+ * `past_due` vient du suivi des tranches — le cron quotidien, et lui seul —,
+ * `expired` se déduit de la date de fin à chaque lecture, et « résilié » dit la
+ * FIN d'un contrat existant que rien ne sait encore prononcer. La table a cinq
+ * écrivains — l'insertion de `recordSubscription`, l'avenant de sièges
+ * d'`amendSeats` qui ne touche ni le statut ni les dates, `activateSubscription`
+ * et `billing.applyPayment` qui n'écrivent qu'« actif », et
+ * `billing.markOverdueInstallments` qui n'écrit qu'« impayé » depuis « actif » —
+ * donc aucune ligne ne peut devenir résiliée, et aucune personne ne pose
+ * « impayé ». Les quatre sont refusés par la mutation, et le formulaire n'a pas à
  * proposer ce qui sera refusé : c'est pourquoi aucun encart n'annonce leur
  * refus, à la différence d'« actif » daté du futur ou du plafond de sièges,
  * que le menu peut encore produire.
@@ -1319,6 +1330,8 @@ function SchoolDetail({ school }: { school: Doc<"schools"> }) {
 
       <SubscriptionSection schoolId={school._id} outlook={outlook} />
 
+      <BillingSection schoolId={school._id} />
+
       <StaffSection
         schoolId={school._id}
         staff={staff}
@@ -1332,6 +1345,302 @@ function SchoolDetail({ school }: { school: Doc<"schools"> }) {
         enrollable={enrollable}
         outlook={outlook}
       />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ENCAISSEMENT — l'échéancier du contrat, et le bouton qui ouvre une facture.
+//
+// SOUS LE CONTRAT, ET PAS AILLEURS : ce qu'une école doit se lit contre ce
+// qu'elle a signé. Les deux portent sur le MÊME contrat — `billing.getSchedule`
+// passe par `currentSchoolSubscription`, la même sélection que le paywall, le
+// plafond de sièges et la fiche du dessus.
+// ---------------------------------------------------------------------------
+
+/** Les quatre états d'une tranche, dits en français. */
+const INSTALLMENT_STATUS_LABEL: Record<ScheduleRow["status"], string> = {
+  pending: "À payer",
+  paid: "Réglée",
+  overdue: "En retard",
+  failed: "Échec",
+};
+
+const INSTALLMENT_STATUS_STYLE: Record<ScheduleRow["status"], string> = {
+  pending: "bg-gray-100 text-gray-700",
+  paid: "bg-green-100 text-green-800",
+  overdue: "bg-red-100 text-red-800",
+  failed: "bg-amber-100 text-amber-800",
+};
+
+/** Les quatre états d'un paiement, dits en français. */
+const PAYMENT_STATUS_LABEL: Record<PaymentRow["status"], string> = {
+  initiated: "Facture ouverte",
+  completed: "Encaissé",
+  failed: "Échoué",
+  cancelled: "Annulé",
+};
+
+/**
+ * L'échéancier, et le paiement d'une tranche.
+ *
+ * LE MONTANT N'EST PAS UN ARGUMENT. Le bouton n'envoie que l'identifiant de la
+ * tranche : le serveur relit le montant dû et l'envoie lui-même à PayDunya. Une
+ * facture dont le prix viendrait du navigateur serait une facture que n'importe
+ * qui pourrait ramener à cent francs — c'est la même règle que pour le prix
+ * d'un contrat, et elle pèse plus lourd ici, la somme partant chez un tiers.
+ *
+ * L'URL S'AFFICHE, ELLE NE S'OUVRE PAS TOUTE SEULE. Une fenêtre ouverte depuis
+ * une réponse asynchrone est bloquée par la plupart des navigateurs, et le
+ * directeur croirait que le bouton ne marche pas. Un lien qu'il clique lui-même
+ * s'ouvre toujours — et il voit le montant avant de quitter la page.
+ *
+ * ELLE NE DIT JAMAIS « c'est payé » d'elle-même : l'accès s'ouvre par le
+ * webhook, pas par le retour du navigateur. La liste est réactive, donc la
+ * tranche passe à « Réglée » quand PayDunya nous l'a confirmé, et pas avant.
+ */
+function BillingSection({ schoolId }: { schoolId: Doc<"schools">["_id"] }) {
+  const schedule = useQuery(api.billing.getSchedule, { schoolId });
+  const openInvoice = useAction(api.billingPaydunya.openInvoice);
+  const settleOffline = useMutation(api.billing.settleInstallmentOffline);
+
+  const [pendingId, setPendingId] = useState<Id<"installments"> | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [invoice, setInvoice] = useState<{
+    installmentId: Id<"installments">;
+    url: string;
+  } | null>(null);
+  // La tranche dont le règlement hors ligne attend confirmation. Constater est
+  // SANS RETOUR — rien ne défait un règlement déclaré à tort — donc le geste ne
+  // tient pas en un seul clic.
+  const [confirmingId, setConfirmingId] = useState<Id<"installments"> | null>(
+    null,
+  );
+
+  // `undefined` = en cours de chargement, `null` = aucun contrat à facturer.
+  // Le second cas n'a rien à dire : la section du dessus annonce déjà qu'il n'y
+  // a pas de contrat, et un second encart vide ne ferait que répéter.
+  if (schedule === undefined || schedule === null) return null;
+
+  const handlePay = async (installmentId: Id<"installments">) => {
+    setPendingId(installmentId);
+    setError(null);
+    setInvoice(null);
+    try {
+      const { paymentUrl } = await openInvoice({ installmentId });
+      setInvoice({ installmentId, url: paymentUrl });
+    } catch (err) {
+      setError(
+        refusalMessage(err, "Erreur lors de l'ouverture de la facture"),
+      );
+    } finally {
+      setPendingId(null);
+    }
+  };
+
+  const handleSettle = async (installmentId: Id<"installments">) => {
+    setPendingId(installmentId);
+    setError(null);
+    try {
+      await settleOffline({ installmentId });
+      setConfirmingId(null);
+    } catch (err) {
+      setError(refusalMessage(err, "Erreur lors du constat de règlement"));
+    } finally {
+      setPendingId(null);
+    }
+  };
+
+  const unscheduled = schedule.totalFcfa - schedule.scheduledFcfa;
+
+  return (
+    <div className="mb-6 rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+      <div className="mb-4 flex items-center gap-2">
+        <CreditCard className="h-5 w-5 text-gray-400" />
+        <h2 className="text-lg font-semibold text-gray-900">Échéancier</h2>
+      </div>
+
+      {error && (
+        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          {error}
+        </div>
+      )}
+
+      <div className="mb-4 flex flex-wrap gap-x-6 gap-y-1 text-sm">
+        <span className="text-gray-700">
+          Contrat : <strong>{formatFcfa(schedule.totalFcfa)}</strong>
+        </span>
+        <span className="text-gray-700">
+          Réglé : <strong>{formatFcfa(schedule.paidFcfa)}</strong>
+        </span>
+        <span className="text-gray-700">
+          Reste dû :{" "}
+          <strong>
+            {formatFcfa(schedule.scheduledFcfa - schedule.paidFcfa)}
+          </strong>
+        </span>
+      </div>
+
+      {/* La somme des tranches DOIT égaler le total du contrat. L'écart est
+          affiché plutôt que corrigé en silence : il ne peut venir que d'une
+          ligne écrite hors des deux chemins qui en créent, et le réparer sans
+          le dire ferait disparaître la seule trace du défaut. */}
+      {unscheduled !== 0 && (
+        <div className="mb-4 flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            L&apos;échéancier ne couvre pas le contrat :{" "}
+            {formatFcfa(Math.abs(unscheduled))}{" "}
+            {unscheduled > 0 ? "manquent" : "en trop"}. Signalez-le avant
+            d&apos;encaisser quoi que ce soit.
+          </span>
+        </div>
+      )}
+
+      {schedule.installments.length === 0 ? (
+        <p className="text-sm text-gray-500">
+          Ce contrat n&apos;a pas d&apos;échéancier : il a été enregistré avant
+          la mise en service de l&apos;encaissement. Les tranches d&apos;un
+          contrat sont créées avec lui.
+        </p>
+      ) : (
+        <ul className="space-y-2">
+          {schedule.installments.map((row: ScheduleRow) => (
+            <li
+              key={row.installmentId}
+              className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-100 bg-gray-50 p-3"
+            >
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-gray-900">
+                  Tranche {row.index} · {formatFcfa(row.amountFcfa)}
+                </p>
+                <p className="text-xs text-gray-500">
+                  {row.status === "paid" && row.paidAt
+                    ? `Réglée le ${formatDay(row.paidAt)}`
+                    : `Exigible le ${formatDay(row.dueAt)}`}
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <span
+                  className={`rounded-full px-2.5 py-1 text-xs font-medium ${INSTALLMENT_STATUS_STYLE[row.status]}`}
+                >
+                  {INSTALLMENT_STATUS_LABEL[row.status]}
+                </span>
+
+                {row.status !== "paid" && (
+                  <button
+                    type="button"
+                    onClick={() => handlePay(row.installmentId)}
+                    disabled={pendingId !== null}
+                    className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                  >
+                    {pendingId === row.installmentId ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <CreditCard className="h-3.5 w-3.5" />
+                    )}
+                    Payer
+                  </button>
+                )}
+
+                {row.status !== "paid" &&
+                  (confirmingId === row.installmentId ? (
+                    <span className="inline-flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleSettle(row.installmentId)}
+                        disabled={pendingId !== null}
+                        className="rounded-lg bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50 transition-colors"
+                      >
+                        Confirmer le règlement
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmingId(null)}
+                        className="text-xs text-gray-500 hover:text-gray-700 transition-colors"
+                      >
+                        Annuler
+                      </button>
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmingId(row.installmentId)}
+                      disabled={pendingId !== null}
+                      className="text-xs text-gray-500 underline decoration-dotted hover:text-gray-700 disabled:opacity-50 transition-colors"
+                    >
+                      Déjà réglée hors ligne
+                    </button>
+                  ))}
+              </div>
+
+              {confirmingId === row.installmentId && (
+                <p className="w-full text-xs text-gray-500">
+                  Ne confirmez que si le virement, le chèque ou les espèces sont
+                  bien arrivés : la tranche sera tenue pour réglée, l&apos;accès
+                  des élèves peut s&apos;en trouver ouvert, et rien ne défait ce
+                  constat.
+                </p>
+              )}
+
+              {invoice && invoice.installmentId === row.installmentId && (
+                <a
+                  href={invoice.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex w-full items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 transition-colors"
+                >
+                  <ExternalLink className="h-4 w-4" />
+                  Ouvrir la page de paiement PayDunya —{" "}
+                  {formatFcfa(row.amountFcfa)}
+                </a>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {schedule.truncated && <PartialListNotice subject="tranches" />}
+
+      {schedule.payments.length > 0 && (
+        <div className="mt-4 border-t border-gray-100 pt-3">
+          <div className="mb-2 flex items-center gap-2">
+            <Receipt className="h-4 w-4 text-gray-400" />
+            <h3 className="text-sm font-semibold text-gray-900">
+              Paiements enregistrés
+            </h3>
+          </div>
+          <ul className="space-y-1.5">
+            {schedule.payments.map((row: PaymentRow) => (
+              <li
+                key={row.paymentId}
+                className="flex flex-wrap items-baseline gap-x-2 text-xs"
+              >
+                <span className="font-medium text-gray-900">
+                  {formatFcfa(row.amountFcfa)}
+                </span>
+                <span className="text-gray-700">
+                  {PAYMENT_STATUS_LABEL[row.status]}
+                </span>
+                <span className="text-gray-500">
+                  {row.provider === "manual" ? "constaté" : "PayDunya"}
+                </span>
+                <span className="text-gray-400">
+                  {formatEventMoment(row.completedAt ?? row.createdAt)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <p className="mt-3 text-xs text-gray-400">
+        L&apos;accès des élèves s&apos;ouvre quand PayDunya nous confirme le
+        règlement, pas au retour du navigateur : une facture réglée dont
+        l&apos;onglet est fermé est encaissée quand même. Une tranche oubliée
+        laisse vingt et un jours avant que l&apos;accès ne se referme.
+      </p>
     </div>
   );
 }
@@ -1588,6 +1897,13 @@ function ClassesSection({
       <div className="mb-4 flex items-center gap-2">
         <GraduationCap className="h-5 w-5 text-gray-400" />
         <h2 className="text-lg font-semibold text-gray-900">Classes</h2>
+        <Link
+          href={`/admin/ecoles/${schoolId}/import`}
+          className="ml-auto inline-flex items-center gap-2 rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+        >
+          <Upload className="h-4 w-4" />
+          Importer des élèves
+        </Link>
       </div>
 
       {error && (
@@ -1701,9 +2017,17 @@ function ClassCard({
   const enrollStudent = useMutation(api.schools.enrollStudent);
   const releaseStudent = useMutation(api.schools.releaseStudent);
   const transferStudent = useMutation(api.schools.transferStudent);
+  const resetLoginCode = useAction(
+    api.studentCredentials.resetStudentLoginCode,
+  );
 
   const [studentId, setStudentId] = useState("");
   const [isEnrolling, setIsEnrolling] = useState(false);
+  const [resettingFor, setResettingFor] = useState<string | null>(null);
+  const [newCode, setNewCode] = useState<{
+    name: string;
+    code: string;
+  } | null>(null);
   const [releaseConfirm, setReleaseConfirm] = useState<string | null>(null);
   const [transferFor, setTransferFor] = useState<string | null>(null);
   const [historyFor, setHistoryFor] = useState<string | null>(null);
@@ -1811,6 +2135,29 @@ function ClassCard({
     setTransferFor(row.membershipId);
   };
 
+  /**
+   * Redonne un code à un élève, et le montre UNE fois.
+   *
+   * Le code n'est lisible qu'à cet instant : le secret est haché à
+   * l'enregistrement, donc ni un administrateur ni cet écran ne pourront le
+   * relire. D'où le panneau qui reste ouvert jusqu'à ce qu'on le ferme, au lieu
+   * d'un message qui s'efface.
+   */
+  const handleResetCode = async (row: { studentId: string; name: string }) => {
+    setError(null);
+    setResettingFor(row.studentId);
+    try {
+      const result = await resetLoginCode({
+        studentId: row.studentId as Id<"profiles">,
+      });
+      setNewCode({ name: result.studentName, code: result.loginCode });
+    } catch (err) {
+      setError(refusalMessage(err, "Le code n'a pas pu être réinitialisé."));
+    } finally {
+      setResettingFor(null);
+    }
+  };
+
   const openHistory = (row: ClassStudentRow) => {
     setError(null);
     setReleaseConfirm(null);
@@ -1884,6 +2231,33 @@ function ClassCard({
       {error && (
         <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
           {error}
+        </div>
+      )}
+
+      {/* IL RESTE JUSQU'À CE QU'ON LE FERME, et ce n'est pas une négligence
+          d'ergonomie : le secret est haché à l'enregistrement, donc ce code
+          n'est lisible qu'ici et qu'une fois. Un message qui s'efface tout
+          seul enfermerait l'élève dehors. */}
+      {newCode && (
+        <div className="mt-4 rounded-lg border border-amber-300 bg-amber-50 p-4">
+          <p className="text-sm font-medium text-amber-900">
+            Nouveau code de {newCode.name}
+          </p>
+          <p className="mt-1 font-mono text-xl tracking-wider text-gray-900">
+            {newCode.code}
+          </p>
+          <p className="mt-2 text-xs text-amber-800">
+            Notez-le maintenant : il ne sera plus jamais affiché. Il sert à la
+            fois d&apos;identifiant et de mot de passe. L&apos;ancien code ne
+            fonctionne plus, et les sessions ouvertes ont été fermées.
+          </p>
+          <button
+            type="button"
+            onClick={() => setNewCode(null)}
+            className="mt-3 rounded-lg border border-amber-300 px-3 py-1.5 text-sm font-medium text-amber-900 hover:bg-amber-100"
+          >
+            J&apos;ai noté ce code
+          </button>
         </div>
       )}
 
@@ -2032,6 +2406,21 @@ function ClassCard({
                           Changer de classe
                         </button>
                       )}
+                      {/* Un élève importé n'a pas de boîte mail : « mot de
+                          passe oublié » ne peut pas lui servir, c'est l'adulte
+                          de son école qui lui redonne un code (spec §6.2). */}
+                      <button
+                        onClick={() => handleResetCode(row)}
+                        disabled={resettingFor === row.studentId}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100 disabled:opacity-50 transition-colors"
+                      >
+                        {resettingFor === row.studentId ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <KeyRound className="h-3.5 w-3.5" />
+                        )}
+                        Nouveau code
+                      </button>
                       <button
                         onClick={() => openRelease(row)}
                         className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50 transition-colors"

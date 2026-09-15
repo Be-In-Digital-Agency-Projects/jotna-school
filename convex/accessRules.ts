@@ -100,18 +100,20 @@ export function decideAccess(input: AccessInput): AccessState {
       // paywall ne doit pas accorder un accès illimité sur des données
       // incohérentes.
       //
-      // Ce raisonnement tient MOT POUR MOT depuis que
-      // `schools.activateSubscription` existe : une personne écrit désormais
-      // `status`, mais elle n'écrit que `active`, et seulement depuis
-      // `pending_payment` (`convex/subscriptionRules.ts`). Aucune saisie
-      // humaine ne pose `past_due`, ici comme à l'enregistrement.
+      // Ce raisonnement tient MOT POUR MOT depuis que `status` a des
+      // écrivains : `schools.activateSubscription` et `billing.applyPayment`
+      // n'écrivent qu'`active`, et AUCUNE saisie humaine ne pose `past_due` —
+      // ni ici, ni à l'enregistrement, qui le refuse explicitement.
       //
-      // INVARIANTE QUE LE PLAN 3 DOIT TENIR — le cron qui fera basculer un
-      // abonnement en `past_due` doit, DANS LA MÊME TRANSACTION, créer ou
-      // marquer la tranche échue qui ancre la grâce. S'il pose le statut sans
-      // l'ancre, cette branche coupera l'école immédiatement au lieu de lui
-      // laisser ses 21 jours. C'est le prix de fermer le trou, et il se paie
-      // là-bas, pas ici.
+      // L'INVARIANTE EST DÉSORMAIS TENUE, et par un seul endroit :
+      // `billing.markOverdueInstallments` est le seul écrivain de `past_due`,
+      // et il marque la tranche qui ancre la grâce DANS LA MÊME TRANSACTION
+      // que le statut. La règle qui le lui commande est pure et testée
+      // (`billingRules.decideOverdue`) : elle rend les deux décisions ensemble,
+      // et la seconde ne peut pas être vraie sans la première. Un statut posé
+      // sans son ancre couperait l'école immédiatement au lieu de lui laisser
+      // ses 21 jours — c'était le prix à payer pour fermer ce trou, et il a été
+      // payé là-bas, pas ici.
       if (input.oldestOverdueDueAt === null) {
         return { ok: false, reason: "past_due" };
       }

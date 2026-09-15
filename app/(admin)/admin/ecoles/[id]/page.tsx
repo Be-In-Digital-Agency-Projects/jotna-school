@@ -1,10 +1,10 @@
 "use client";
 
 import { use, useState } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, useAction } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import { api } from "@/convex/_generated/api";
-import type { Doc } from "@/convex/_generated/dataModel";
+import type { Doc, Id } from "@/convex/_generated/dataModel";
 // Le barème est un module PUR, sans import ni accès à la base : l'écran peut
 // donc montrer le montant AVANT validation sans un aller-retour par serveur —
 // celui d'un contrat neuf comme celui d'un avenant, proratisé. Ces totaux
@@ -33,6 +33,8 @@ import {
   UserMinus,
   UserPlus,
   GraduationCap,
+  KeyRound,
+  Upload,
   AlertTriangle,
   Unlock,
 } from "lucide-react";
@@ -1588,6 +1590,13 @@ function ClassesSection({
       <div className="mb-4 flex items-center gap-2">
         <GraduationCap className="h-5 w-5 text-gray-400" />
         <h2 className="text-lg font-semibold text-gray-900">Classes</h2>
+        <Link
+          href={`/admin/ecoles/${schoolId}/import`}
+          className="ml-auto inline-flex items-center gap-2 rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+        >
+          <Upload className="h-4 w-4" />
+          Importer des élèves
+        </Link>
       </div>
 
       {error && (
@@ -1701,9 +1710,17 @@ function ClassCard({
   const enrollStudent = useMutation(api.schools.enrollStudent);
   const releaseStudent = useMutation(api.schools.releaseStudent);
   const transferStudent = useMutation(api.schools.transferStudent);
+  const resetLoginCode = useAction(
+    api.studentCredentials.resetStudentLoginCode,
+  );
 
   const [studentId, setStudentId] = useState("");
   const [isEnrolling, setIsEnrolling] = useState(false);
+  const [resettingFor, setResettingFor] = useState<string | null>(null);
+  const [newCode, setNewCode] = useState<{
+    name: string;
+    code: string;
+  } | null>(null);
   const [releaseConfirm, setReleaseConfirm] = useState<string | null>(null);
   const [transferFor, setTransferFor] = useState<string | null>(null);
   const [historyFor, setHistoryFor] = useState<string | null>(null);
@@ -1811,6 +1828,29 @@ function ClassCard({
     setTransferFor(row.membershipId);
   };
 
+  /**
+   * Redonne un code à un élève, et le montre UNE fois.
+   *
+   * Le code n'est lisible qu'à cet instant : le secret est haché à
+   * l'enregistrement, donc ni un administrateur ni cet écran ne pourront le
+   * relire. D'où le panneau qui reste ouvert jusqu'à ce qu'on le ferme, au lieu
+   * d'un message qui s'efface.
+   */
+  const handleResetCode = async (row: { studentId: string; name: string }) => {
+    setError(null);
+    setResettingFor(row.studentId);
+    try {
+      const result = await resetLoginCode({
+        studentId: row.studentId as Id<"profiles">,
+      });
+      setNewCode({ name: result.studentName, code: result.loginCode });
+    } catch (err) {
+      setError(refusalMessage(err, "Le code n'a pas pu être réinitialisé."));
+    } finally {
+      setResettingFor(null);
+    }
+  };
+
   const openHistory = (row: ClassStudentRow) => {
     setError(null);
     setReleaseConfirm(null);
@@ -1884,6 +1924,33 @@ function ClassCard({
       {error && (
         <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
           {error}
+        </div>
+      )}
+
+      {/* IL RESTE JUSQU'À CE QU'ON LE FERME, et ce n'est pas une négligence
+          d'ergonomie : le secret est haché à l'enregistrement, donc ce code
+          n'est lisible qu'ici et qu'une fois. Un message qui s'efface tout
+          seul enfermerait l'élève dehors. */}
+      {newCode && (
+        <div className="mt-4 rounded-lg border border-amber-300 bg-amber-50 p-4">
+          <p className="text-sm font-medium text-amber-900">
+            Nouveau code de {newCode.name}
+          </p>
+          <p className="mt-1 font-mono text-xl tracking-wider text-gray-900">
+            {newCode.code}
+          </p>
+          <p className="mt-2 text-xs text-amber-800">
+            Notez-le maintenant : il ne sera plus jamais affiché. Il sert à la
+            fois d&apos;identifiant et de mot de passe. L&apos;ancien code ne
+            fonctionne plus, et les sessions ouvertes ont été fermées.
+          </p>
+          <button
+            type="button"
+            onClick={() => setNewCode(null)}
+            className="mt-3 rounded-lg border border-amber-300 px-3 py-1.5 text-sm font-medium text-amber-900 hover:bg-amber-100"
+          >
+            J&apos;ai noté ce code
+          </button>
         </div>
       )}
 
@@ -2032,6 +2099,21 @@ function ClassCard({
                           Changer de classe
                         </button>
                       )}
+                      {/* Un élève importé n'a pas de boîte mail : « mot de
+                          passe oublié » ne peut pas lui servir, c'est l'adulte
+                          de son école qui lui redonne un code (spec §6.2). */}
+                      <button
+                        onClick={() => handleResetCode(row)}
+                        disabled={resettingFor === row.studentId}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100 disabled:opacity-50 transition-colors"
+                      >
+                        {resettingFor === row.studentId ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <KeyRound className="h-3.5 w-3.5" />
+                        )}
+                        Nouveau code
+                      </button>
                       <button
                         onClick={() => openRelease(row)}
                         className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50 transition-colors"

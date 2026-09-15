@@ -547,7 +547,7 @@ export const listEnrollableStudents = query({
  * de montrer un chiffre faux — c'est précisément le cas d'une école dont le
  * contrat a été réduit sous son effectif déjà inscrit.
  */
-type SeatState = {
+export type SeatState = {
   /** Sièges ouverts par le contrat courant. */
   purchased: number;
   /** Inscriptions actives comptées — voir `atLeast`. */
@@ -629,6 +629,32 @@ async function readSeatState(
 }
 
 /**
+ * L'état des sièges d'une école — LE point d'entrée, contrat compris.
+ *
+ * `currentSchoolSubscription` PUIS `readSeatState` : ces deux appels vont
+ * toujours ensemble, et les séparer serait la faute que D18 décrit. Deux
+ * fonctions qui posent la même question — « reste-t-il un siège ? » — en
+ * lisant des contrats différents finissent par se contredire, et le jour où
+ * cela arrive, c'est un enfant qui perd son accès ou une école qui dépasse son
+ * contrat sans qu'on s'en aperçoive. Exporté pour que `studentImport` compte
+ * comme `enrollStudent` compte, par construction et non par ressemblance.
+ *
+ * `null` quand l'école n'a aucun abonnement : aucun contrat, aucun plafond.
+ */
+export async function seatStateForSchool(
+  ctx: QueryCtx | MutationCtx,
+  schoolId: Id<"schools">,
+  now: number,
+): Promise<SeatState | null> {
+  const subscription = await currentSchoolSubscription(ctx, schoolId, now);
+  return await readSeatState(
+    ctx,
+    schoolId,
+    subscription ? subscription.seatsPurchased : null,
+  );
+}
+
+/**
  * Le contrat qu'un AVENANT ferait grossir : celui EN VIGUEUR, ou à défaut le
  * PROCHAIN à commencer.
  *
@@ -706,7 +732,7 @@ async function amendableSubscription(
 }
 
 /** Accord du pluriel : les refus de ce module sont lus par un adulte. */
-function pluralCount(n: number, singular: string, plural: string): string {
+export function pluralCount(n: number, singular: string, plural: string): string {
   return `${n} ${n === 1 ? singular : plural}`;
 }
 
@@ -2231,15 +2257,10 @@ export const enrollStudent = mutation({
     // assis sur un autre contrat surveillerait le mauvais. Aucun abonnement ⇒
     // aucun plafond : l'école peut légitimement inscrire avant de payer,
     // l'élève tombera simplement sur le paywall, ce que l'écran annonce déjà.
-    const subscription = await currentSchoolSubscription(
+    const seats = await seatStateForSchool(
       ctx,
       schoolClass.schoolId,
       Date.now(),
-    );
-    const seats = await readSeatState(
-      ctx,
-      schoolClass.schoolId,
-      subscription ? subscription.seatsPurchased : null,
     );
     if (seats && seats.full) {
       // « au moins » quand le décompte a buté sur sa borne : l'école dépasse

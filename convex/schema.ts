@@ -870,7 +870,12 @@ export default defineSchema({
     studentId: v.optional(v.id("profiles")), // rempli après création → idempotence
     loginCode: v.optional(v.string()),
     failureReason: v.optional(v.string()),
-  }).index("by_job_status", ["jobId", "status"]),
+  })
+    .index("by_job_status", ["jobId", "status"])
+    // La ligne d'import porte le code IMPRIMÉ. `studentCredentials` doit la
+    // retrouver depuis l'élève pour qu'une réinitialisation ne laisse pas
+    // l'écran des billets proposer de réimprimer un billet mort.
+    .index("by_student", ["studentId"]),
 
   parentLinkCodes: defineTable({
     studentId: v.id("profiles"),

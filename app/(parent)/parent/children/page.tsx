@@ -4,6 +4,7 @@ import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import Link from "next/link";
 import {
+  Ticket,
   Users,
   BookOpen,
   Trophy,
@@ -52,6 +53,13 @@ export default function ParentChildrenPage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <Link
+            href="/parent/children/code"
+            className="inline-flex items-center gap-2 rounded-lg border border-teal-600 px-4 py-2 text-sm font-medium text-teal-600 hover:bg-teal-50"
+          >
+            <Ticket className="h-4 w-4" />
+            J&apos;ai un code de l&apos;école
+          </Link>
           <Link
             href="/parent/children/link"
             className="inline-flex items-center gap-2 rounded-lg border border-teal-600 px-4 py-2 text-sm font-medium text-teal-600 hover:bg-teal-50"
@@ -107,6 +115,13 @@ export default function ParentChildrenPage() {
             Aucun enfant ajouté pour le moment.
           </p>
           <div className="mt-4 flex flex-wrap justify-center gap-2">
+            <Link
+              href="/parent/children/code"
+              className="inline-flex items-center gap-2 rounded-lg border border-teal-600 px-4 py-2 text-sm font-medium text-teal-600 hover:bg-teal-50"
+            >
+              <Ticket className="h-4 w-4" />
+              J&apos;ai un code de l&apos;école
+            </Link>
             <Link
               href="/parent/children/link"
               className="inline-flex items-center gap-2 rounded-lg border border-teal-600 px-4 py-2 text-sm font-medium text-teal-600 hover:bg-teal-50"

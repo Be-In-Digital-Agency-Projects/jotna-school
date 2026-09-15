@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import {
   mutation,
   query,
@@ -34,9 +34,31 @@ import {
  * TOUT ici est réservé à l'`admin` (`callerIsAdmin`, ou `callerAdminProfile`
  * là où l'auteur de l'acte doit être nommé : même garde, mêmes refus). Les
  * requêtes ne lèvent jamais et rendent leur valeur vide — `[]`, `null`, ou
- * `{ items: [] }` pour les deux listes qui signalent leur troncature ; les
- * mutations lèvent `new Error("Rôle non autorisé")` — pas de `ConvexError`,
- * que le client réserve au refus de paywall (`accessRules.ts`).
+ * `{ items: [] }` pour les deux listes qui signalent leur troncature.
+ *
+ * LES MUTATIONS LÈVENT UNE `ConvexError` DONT LA DONNÉE EST LA PHRASE ELLE-
+ * MÊME, et c'est ce qui la fait ARRIVER. Les 48 refus de ce module expliquent
+ * pourquoi ils tombent et quoi faire ensuite ; avec `new Error`, aucun
+ * n'atteignait l'administrateur. Le client Convex reconstruit l'erreur de son
+ * côté : son `message` part du texte que le déploiement a bien voulu renvoyer
+ * — occulté hors développement, `lib/accessCopy.ts` le documente — et se
+ * retrouve de toute façon enveloppé d'un `[CONVEX M(schools:…)]` et d'un
+ * « Called by client » (`createHybridErrorStacktrace`). Le champ `data`, lui,
+ * est recopié tel quel sur l'erreur relancée (`forwardData`, dans
+ * `convex/dist/esm/browser/logging.js`), sans que rien de ce chemin ne
+ * regarde l'environnement. C'est donc `data` qui voyage, et lui seul. Le
+ * lecteur d'en face est `lib/refusalMessage.ts` : les deux moitiés ne valent
+ * qu'ensemble, basculer les jets sans lui n'aurait rien changé.
+ *
+ * DEUX FORMES DE `ConvexError` COEXISTENT DANS LE DÉPÔT, et le partage est
+ * net. Un CODE STRUCTURÉ — `{ code: "ACCESS_DENIED", reason }`, dans
+ * `access.ts`, `attemptsVerify.ts`, `attemptsExplain.ts`, `paliers/index.ts` —
+ * quand c'est le CLIENT qui met les mots : le même refus se dit autrement à un
+ * enfant et à un adulte (spec §5.8), donc le serveur n'envoie que le motif. Une
+ * CHAÎNE ici, parce que le texte est déjà rédigé, pour un administrateur, et
+ * qu'aucun écran n'a à le reformuler. Envoyer un code depuis ce module
+ * obligerait à recopier 48 phrases côté client ; envoyer une chaîne depuis
+ * l'autre ferait choisir au serveur les mots qu'un enfant lit.
  *
  * Ce module est le PREMIER écrivain de ces tables : rien d'autre dans le dépôt
  * n'y insère une ligne. Ses invariants sont donc les seules garanties dont
@@ -1070,7 +1092,7 @@ export const createSchool = mutation({
     ninea: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    if (!(await callerIsAdmin(ctx))) throw new Error("Rôle non autorisé");
+    if (!(await callerIsAdmin(ctx))) throw new ConvexError("Rôle non autorisé");
 
     return await ctx.db.insert("schools", {
       name: args.name,
@@ -1207,26 +1229,26 @@ export const recordSubscription = mutation({
     status: subscriptionStatusValidator,
   },
   handler: async (ctx, args) => {
-    if (!(await callerIsAdmin(ctx))) throw new Error("Rôle non autorisé");
+    if (!(await callerIsAdmin(ctx))) throw new ConvexError("Rôle non autorisé");
 
     const school = await ctx.db.get(args.schoolId);
-    if (!school) throw new Error("École introuvable");
+    if (!school) throw new ConvexError("École introuvable");
 
     if (!Number.isInteger(args.seatsPurchased) || args.seatsPurchased <= 0) {
-      throw new Error(
+      throw new ConvexError(
         "Le nombre de sièges doit être un entier strictement positif",
       );
     }
 
     if (args.endsAt <= args.startsAt) {
-      throw new Error(
+      throw new ConvexError(
         "La fin du contrat doit tomber après son début : " +
           `${formatDay(args.startsAt)} → ${formatDay(args.endsAt)}`,
       );
     }
 
     if (args.status === "past_due" || args.status === "expired") {
-      throw new Error(
+      throw new ConvexError(
         "Ce statut est posé par une machine, pas par une personne : " +
           "« impayé » viendra du suivi des tranches, et « échu » se déduit de " +
           "la date de fin du contrat à chaque lecture. Enregistrez ce contrat " +
@@ -1235,7 +1257,7 @@ export const recordSubscription = mutation({
     }
 
     if (args.status === "cancelled") {
-      throw new Error(
+      throw new ConvexError(
         "Résilier n'est pas enregistrer : « résilié » dit la FIN d'un contrat " +
           "existant, et rien ici ne sait encore la prononcer — cette mutation " +
           "insère, elle ne modifie aucune ligne. Saisi d'emblée, ce statut " +
@@ -1252,7 +1274,7 @@ export const recordSubscription = mutation({
     // accord), ni supprimé, ni redaté, et il occupe sa période contre tout
     // autre contrat.
     if (args.status === "draft") {
-      throw new Error(
+      throw new ConvexError(
         "« Brouillon » n'est plus enregistrable, et c'est pour protéger " +
           "l'école : un contrat en brouillon serait IMMOBILE. Il n'ouvre aucun " +
           "accès, rien ne sait le faire avancer — l'activation ne part que " +
@@ -1270,7 +1292,7 @@ export const recordSubscription = mutation({
     const now = Date.now();
 
     if (args.status === "active" && args.startsAt > now) {
-      throw new Error(
+      throw new ConvexError(
         "Un contrat ne se déclare pas en vigueur avant d'avoir commencé : " +
           `celui-ci débute le ${formatDay(args.startsAt)}. Marqué actif dès ` +
           "aujourd'hui, il ouvrirait l'accès pour une année qui n'a pas " +
@@ -1364,7 +1386,7 @@ export const recordSubscription = mutation({
       .first();
 
     if (candidate !== null && candidate.endsAt > args.startsAt) {
-      throw new Error(
+      throw new ConvexError(
         "Cette école a déjà un contrat sur cette période : du " +
           `${formatDay(candidate.startsAt)} au ` +
           `${formatDay(candidate.endsAt)}, ` +
@@ -1406,7 +1428,7 @@ export const recordSubscription = mutation({
             `(${quote.seatsBilled} facturés, plancher de ` +
             `${PRICING_SCALE.seatFloor} sièges)`;
 
-      throw new Error(
+      throw new ConvexError(
         `Cette école compte ${enrolled} : un contrat de ${asked} la ` +
           "laisserait au-delà de son droit dès son enregistrement. Libérez " +
           "d'abord le siège des élèves en trop, ou enregistrez le contrat au " +
@@ -1554,13 +1576,13 @@ export const amendSeats = mutation({
     // qui engage l'école, comme les trois actes sur l'inscription d'un élève.
     // Un seul appel sert de garde et de source de l'auteur.
     const actor = await callerAdminProfile(ctx);
-    if (!actor) throw new Error("Rôle non autorisé");
+    if (!actor) throw new ConvexError("Rôle non autorisé");
 
     const school = await ctx.db.get(args.schoolId);
-    if (!school) throw new Error("École introuvable");
+    if (!school) throw new ConvexError("École introuvable");
 
     if (!Number.isInteger(args.seatsPurchased) || args.seatsPurchased <= 0) {
-      throw new Error(
+      throw new ConvexError(
         "Le nombre de sièges doit être un entier strictement positif",
       );
     }
@@ -1601,7 +1623,7 @@ export const amendSeats = mutation({
       // repli de `currentSchoolSubscription` rend un contrat dès qu'il en
       // existe un, commencé ou non.
       if (current === null) {
-        throw new Error(
+        throw new ConvexError(
           "Cette école n'a aucun contrat à amender : un avenant agrandit un " +
             "contrat existant, il n'en crée pas. Enregistrez d'abord un contrat.",
         );
@@ -1612,7 +1634,7 @@ export const amendSeats = mutation({
       // Le message d'origine devient donc VRAI : rien ne court ni ne
       // commencera, donc rien ne chevauche la période à venir, et
       // `recordSubscription` acceptera le contrat neuf qu'il conseille.
-      throw new Error(
+      throw new ConvexError(
         `Le dernier contrat de cette école s'est achevé le ` +
           `${formatDay(current.endsAt)} : il n'y a plus rien à amender. ` +
           "Agrandir un contrat terminé n'ouvrirait aucun accès — le paywall " +
@@ -1638,7 +1660,7 @@ export const amendSeats = mutation({
     // une hausse, et sûrement pas une baisse silencieuse.
     if (amendment.seatsAdded <= 0) {
       const held = pluralCount(target.seatsPurchased, "siège", "sièges");
-      throw new Error(
+      throw new ConvexError(
         `Un avenant ne fait qu'AJOUTER des sièges : ce contrat en ouvre déjà ` +
           `${held}, et vous en demandez ${args.seatsPurchased} au total — il ` +
           "n'y a rien à ajouter. Réduire le nombre de sièges en cours de " +
@@ -1842,10 +1864,10 @@ export const activateSubscription = mutation({
     // l'inscription d'un élève. Un seul appel sert de garde et de source de
     // l'auteur.
     const actor = await callerAdminProfile(ctx);
-    if (!actor) throw new Error("Rôle non autorisé");
+    if (!actor) throw new ConvexError("Rôle non autorisé");
 
     const school = await ctx.db.get(args.schoolId);
-    if (!school) throw new Error("École introuvable");
+    if (!school) throw new ConvexError("École introuvable");
 
     // Un seul `now` pour les TROIS usages : choisir le contrat, juger qu'il a
     // commencé et n'est pas fini, dater l'acte et sa trace.
@@ -1853,7 +1875,7 @@ export const activateSubscription = mutation({
 
     const current = await currentSchoolSubscription(ctx, args.schoolId, now);
     if (current === null) {
-      throw new Error(
+      throw new ConvexError(
         "Cette école n'a aucun contrat : il n'y a rien à activer. " +
           "Enregistrez d'abord un contrat — il s'activera le jour où il " +
           "commencera, ou tout de suite s'il a déjà commencé.",
@@ -1867,7 +1889,7 @@ export const activateSubscription = mutation({
       now,
     });
     if (!decision.ok) {
-      throw new Error(activationRefusal(decision.reason, current));
+      throw new ConvexError(activationRefusal(decision.reason, current));
     }
 
     // LE `PATCH` — un champ, et aucun autre. Ni les dates, ni les sièges, ni
@@ -1917,15 +1939,15 @@ export const addStaff = mutation({
     staffRole: v.union(v.literal("directeur"), v.literal("professeur")),
   },
   handler: async (ctx, args) => {
-    if (!(await callerIsAdmin(ctx))) throw new Error("Rôle non autorisé");
+    if (!(await callerIsAdmin(ctx))) throw new ConvexError("Rôle non autorisé");
 
     const school = await ctx.db.get(args.schoolId);
-    if (!school) throw new Error("École introuvable");
+    if (!school) throw new ConvexError("École introuvable");
 
     const profile = await ctx.db.get(args.profileId);
-    if (!profile) throw new Error("Profil introuvable");
+    if (!profile) throw new ConvexError("Profil introuvable");
     if (profile.role !== args.staffRole) {
-      throw new Error(
+      throw new ConvexError(
         "Le rôle du profil ne correspond pas au rôle demandé dans l'école",
       );
     }
@@ -1983,10 +2005,10 @@ export const addStaff = mutation({
 export const removeStaff = mutation({
   args: { staffId: v.id("schoolStaff") },
   handler: async (ctx, args) => {
-    if (!(await callerIsAdmin(ctx))) throw new Error("Rôle non autorisé");
+    if (!(await callerIsAdmin(ctx))) throw new ConvexError("Rôle non autorisé");
 
     const staff = await ctx.db.get(args.staffId);
-    if (!staff) throw new Error("Membre du personnel introuvable");
+    if (!staff) throw new ConvexError("Membre du personnel introuvable");
 
     const classes = await ctx.db
       .query("schoolClasses")
@@ -2021,13 +2043,13 @@ export const createClass = mutation({
     label: v.string(),
   },
   handler: async (ctx, args) => {
-    if (!(await callerIsAdmin(ctx))) throw new Error("Rôle non autorisé");
+    if (!(await callerIsAdmin(ctx))) throw new ConvexError("Rôle non autorisé");
 
     const school = await ctx.db.get(args.schoolId);
-    if (!school) throw new Error("École introuvable");
+    if (!school) throw new ConvexError("École introuvable");
 
     const label = args.label.trim();
-    if (label.length === 0) throw new Error("Le libellé est obligatoire");
+    if (label.length === 0) throw new ConvexError("Le libellé est obligatoire");
 
     // CONNU — sans année au schéma, ce refus interdit la rentrée suivante.
     //
@@ -2048,7 +2070,7 @@ export const createClass = mutation({
       )
       .take(CLASSES_LIMIT);
     if (siblings.some((s) => s.label === label)) {
-      throw new Error("Cette classe existe déjà dans cette école");
+      throw new ConvexError("Cette classe existe déjà dans cette école");
     }
 
     return await ctx.db.insert("schoolClasses", {
@@ -2079,10 +2101,10 @@ export const assignTeacher = mutation({
     teacherId: v.optional(v.id("profiles")),
   },
   handler: async (ctx, args) => {
-    if (!(await callerIsAdmin(ctx))) throw new Error("Rôle non autorisé");
+    if (!(await callerIsAdmin(ctx))) throw new ConvexError("Rôle non autorisé");
 
     const schoolClass = await ctx.db.get(args.schoolClassId);
-    if (!schoolClass) throw new Error("Classe introuvable");
+    if (!schoolClass) throw new ConvexError("Classe introuvable");
 
     if (args.teacherId === undefined) {
       await ctx.db.patch(schoolClass._id, { teacherId: undefined });
@@ -2102,7 +2124,7 @@ export const assignTeacher = mutation({
         row.status === "active",
     );
     if (!membership) {
-      throw new Error(
+      throw new ConvexError(
         "Ce professeur ne fait pas partie du personnel actif de cette école",
       );
     }
@@ -2148,15 +2170,15 @@ export const enrollStudent = mutation({
   },
   handler: async (ctx, args) => {
     const actor = await callerAdminProfile(ctx);
-    if (!actor) throw new Error("Rôle non autorisé");
+    if (!actor) throw new ConvexError("Rôle non autorisé");
 
     const schoolClass = await ctx.db.get(args.schoolClassId);
-    if (!schoolClass) throw new Error("Classe introuvable");
+    if (!schoolClass) throw new ConvexError("Classe introuvable");
 
     const student = await ctx.db.get(args.studentId);
-    if (!student) throw new Error("Profil introuvable");
+    if (!student) throw new ConvexError("Profil introuvable");
     if (student.role !== "student") {
-      throw new Error("Ce profil n'est pas un élève");
+      throw new ConvexError("Ce profil n'est pas un élève");
     }
 
     const active = await ctx.db
@@ -2166,7 +2188,7 @@ export const enrollStudent = mutation({
       )
       .first();
     if (active) {
-      throw new Error(
+      throw new ConvexError(
         "Cet élève a déjà une inscription active : libérez-la d'abord",
       );
     }
@@ -2199,7 +2221,7 @@ export const enrollStudent = mutation({
       // minimum vrai qu'un chiffre faux dans un message qui demande un acte.
       const counted = pluralCount(seats.used, "siège occupé", "sièges occupés");
       const occupied = seats.atLeast ? `au moins ${counted}` : counted;
-      throw new Error(
+      throw new ConvexError(
         `Cette école a atteint son plafond de sièges : ${occupied} pour ` +
           `${pluralCount(seats.purchased, "siège", "sièges")} au contrat. ` +
           `Libérez le siège d'un élève déjà inscrit, ou augmentez le nombre ` +
@@ -2258,10 +2280,10 @@ export const releaseStudent = mutation({
   args: { membershipId: v.id("schoolMemberships") },
   handler: async (ctx, args) => {
     const actor = await callerAdminProfile(ctx);
-    if (!actor) throw new Error("Rôle non autorisé");
+    if (!actor) throw new ConvexError("Rôle non autorisé");
 
     const membership = await ctx.db.get(args.membershipId);
-    if (!membership) throw new Error("Inscription introuvable");
+    if (!membership) throw new ConvexError("Inscription introuvable");
     // Le retour anticipé de l'idempotence passe AVANT l'écriture du journal,
     // et c'est tout ce qu'il faut pour qu'un second clic n'invente pas un
     // acte : il n'y a pas eu de libération, donc il n'y a rien à journaliser.
@@ -2390,29 +2412,29 @@ export const transferStudent = mutation({
   },
   handler: async (ctx, args) => {
     const actor = await callerAdminProfile(ctx);
-    if (!actor) throw new Error("Rôle non autorisé");
+    if (!actor) throw new ConvexError("Rôle non autorisé");
 
     const membership = await ctx.db.get(args.membershipId);
-    if (!membership) throw new Error("Inscription introuvable");
+    if (!membership) throw new ConvexError("Inscription introuvable");
     if (membership.status !== "active") {
-      throw new Error(
+      throw new ConvexError(
         "Cette inscription n'est plus active : réinscrivez cet élève dans " +
           "sa nouvelle classe",
       );
     }
 
     const target = await ctx.db.get(args.targetSchoolClassId);
-    if (!target) throw new Error("Classe introuvable");
+    if (!target) throw new ConvexError("Classe introuvable");
 
     if (target.schoolId !== membership.schoolId) {
-      throw new Error(
+      throw new ConvexError(
         "Cette classe appartient à une autre école : libérez le siège de " +
           "cet élève, puis réinscrivez-le dans sa nouvelle école",
       );
     }
 
     if (target._id === membership.schoolClassId) {
-      throw new Error("Cet élève est déjà dans cette classe");
+      throw new ConvexError("Cet élève est déjà dans cette classe");
     }
 
     const student = await ctx.db.get(membership.studentId);

@@ -15,6 +15,9 @@ import {
   quoteSeatAmendment,
   quoteSubscription,
 } from "@/convex/pricing";
+// Le texte d'un refus de `convex/schools.ts`, lu là où il voyage vraiment :
+// le champ `data` de la ConvexError, jamais `message`. Voir le module.
+import { refusalMessage } from "@/lib/refusalMessage";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -209,10 +212,6 @@ const OUTLOOK_REASON: Partial<Record<OutlookReason, string>> = {
 };
 
 const OUTLOOK_REASON_FALLBACK = "l'abonnement de cette école ne le couvre pas";
-
-function messageOf(err: unknown, fallback: string): string {
-  return err instanceof Error ? err.message : fallback;
-}
 
 /**
  * Dit qu'une liste est TRONQUÉE, au lieu de laisser conclure à l'absence.
@@ -505,7 +504,7 @@ function SubscriptionSection({
       });
       setSeats("");
     } catch (err) {
-      setError(messageOf(err, "Erreur lors de l'enregistrement du contrat"));
+      setError(refusalMessage(err, "Erreur lors de l'enregistrement du contrat"));
     } finally {
       setIsSubmitting(false);
     }
@@ -815,7 +814,7 @@ function ContractActivation({
     try {
       await activateSubscription({ schoolId });
     } catch (err) {
-      setError(messageOf(err, "Erreur lors de l'activation du contrat"));
+      setError(refusalMessage(err, "Erreur lors de l'activation du contrat"));
     } finally {
       setIsSubmitting(false);
     }
@@ -952,7 +951,7 @@ function SeatAmendmentForm({
       );
       setTarget("");
     } catch (err) {
-      setError(messageOf(err, "Erreur lors de l'avenant"));
+      setError(refusalMessage(err, "Erreur lors de l'avenant"));
     } finally {
       setIsSubmitting(false);
     }
@@ -1388,7 +1387,7 @@ function StaffSection({
       await addStaff({ schoolId, profileId: picked._id, staffRole });
       setProfileId("");
     } catch (err) {
-      setError(messageOf(err, "Erreur lors du rattachement"));
+      setError(refusalMessage(err, "Erreur lors du rattachement"));
     } finally {
       setIsSubmitting(false);
     }
@@ -1400,7 +1399,7 @@ function StaffSection({
       await removeStaff({ staffId: row._id });
       setRemoveConfirm(null);
     } catch (err) {
-      setError(messageOf(err, "Erreur lors du retrait"));
+      setError(refusalMessage(err, "Erreur lors du retrait"));
       setRemoveConfirm(null);
     }
   };
@@ -1578,7 +1577,7 @@ function ClassesSection({
       await createClass({ schoolId, class: level, label });
       setLabel("");
     } catch (err) {
-      setError(messageOf(err, "Erreur lors de la création de la classe"));
+      setError(refusalMessage(err, "Erreur lors de la création de la classe"));
     } finally {
       setIsSubmitting(false);
     }
@@ -1741,7 +1740,7 @@ function ClassCard({
     try {
       await assignTeacher({ schoolClassId: schoolClass._id, teacherId });
     } catch (err) {
-      setError(messageOf(err, "Erreur lors de l'affectation"));
+      setError(refusalMessage(err, "Erreur lors de l'affectation"));
     }
   };
 
@@ -1763,7 +1762,7 @@ function ClassCard({
       });
       setStudentId("");
     } catch (err) {
-      setError(messageOf(err, "Erreur lors de l'inscription"));
+      setError(refusalMessage(err, "Erreur lors de l'inscription"));
     } finally {
       setIsEnrolling(false);
     }
@@ -1785,7 +1784,7 @@ function ClassCard({
       await releaseStudent({ membershipId: row.membershipId });
       setReleaseConfirm(null);
     } catch (err) {
-      setError(messageOf(err, "Erreur lors de la libération"));
+      setError(refusalMessage(err, "Erreur lors de la libération"));
       setReleaseConfirm(null);
     }
   };
@@ -1841,7 +1840,7 @@ function ClassCard({
       setTransferFor(null);
       setTransferTarget("");
     } catch (err) {
-      setError(messageOf(err, "Erreur lors du changement de classe"));
+      setError(refusalMessage(err, "Erreur lors du changement de classe"));
     } finally {
       setIsTransferring(false);
     }

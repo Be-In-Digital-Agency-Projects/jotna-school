@@ -3,6 +3,10 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
+// `createSchool` refuse comme les dix autres mutations de `convex/schools.ts` :
+// par une ConvexError dont la donnée est la phrase. Sans ce lecteur, cet écran
+// montrerait « Erreur lors de la création » là où le serveur a écrit pourquoi.
+import { refusalMessage } from "@/lib/refusalMessage";
 import Link from "next/link";
 import { School, Plus, Loader2, ChevronRight, MapPin } from "lucide-react";
 
@@ -56,7 +60,7 @@ export default function SchoolsPage() {
       setNinea("");
       setShowForm(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Erreur lors de la création");
+      setError(refusalMessage(err, "Erreur lors de la création"));
     } finally {
       setIsSubmitting(false);
     }

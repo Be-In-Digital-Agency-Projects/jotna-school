@@ -75,8 +75,12 @@ export const getById = query({
 //
 // Une mutation peut lever, et le garde est la toute première instruction :
 // rien n'est lu avant d'avoir établi le rôle. Un seul message pour tous les
-// refus de rôle, comme `profiles.linkChild` — pas de `ConvexError`, que le
-// client réserve au refus de paywall.
+// refus de rôle, comme `profiles.linkChild` — et une `Error` ordinaire, non
+// une `ConvexError` : ce module ne promet aucun texte à l'écran, qui a déjà
+// son repli. `ConvexError` sert à ce qui doit y ARRIVER, puisque son champ
+// `data` est le seul transmis au client : le CODE d'un refus de paywall
+// (`accessRules.ts`), et le TEXTE des refus d'administration de
+// `convex/schools.ts`.
 // ---------------------------------------------------------------------------
 
 export const create = mutation({

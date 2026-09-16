@@ -890,12 +890,16 @@ export default defineSchema({
   // LES VERSEMENTS REÇUS — un par facture ouverte, plus un par règlement
   // constaté à la main.
   //
-  // `provider` A DEUX VALEURS, et la seconde n'est pas un pis-aller : une école
-  // sénégalaise règle souvent par virement ou en espèces, et sans `manual` le
-  // cron des échéances marquerait impayée une tranche déjà payée, puis
-  // couperait une école qui ne doit rien. `billing.settleInstallmentOffline`
-  // écrit ces lignes-là ; elles ne passent par aucun prestataire et ne
-  // déclenchent aucun webhook.
+  // `provider` A TROIS VALEURS. Deux prestataires, parce que le dépôt sait
+  // piloter les deux et que la bascule de l'un à l'autre ne doit pas rendre
+  // illisible l'historique déjà encaissé : une ligne dit chez QUI l'argent est
+  // passé, et une migration de prestataire ne réécrit pas le passé.
+  //
+  // Et `manual`, qui n'est pas un pis-aller : une école sénégalaise règle
+  // souvent par virement ou en espèces, et sans lui le cron des échéances
+  // marquerait impayée une tranche déjà payée, puis couperait une école qui ne
+  // doit rien. `billing.settleInstallmentOffline` écrit ces lignes-là ; elles ne
+  // passent par aucun prestataire et ne déclenchent aucun webhook.
   //
   // `providerToken` RESTE LA CLÉ D'IDEMPOTENCE : le jeton de PayDunya pour une
   // facture, et `manual:<id de tranche>` pour un règlement constaté — une
@@ -910,7 +914,11 @@ export default defineSchema({
   payments: defineTable({
     subscriptionId: v.id("subscriptions"),
     installmentId: v.optional(v.id("installments")),
-    provider: v.union(v.literal("paydunya"), v.literal("manual")),
+    provider: v.union(
+      v.literal("paydunya"),
+      v.literal("bictorys"),
+      v.literal("manual"),
+    ),
     providerToken: v.string(), // clé d'idempotence du webhook
     actorProfileId: v.optional(v.id("profiles")),
     amountFcfa: v.number(),

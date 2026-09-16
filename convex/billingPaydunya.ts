@@ -1,7 +1,11 @@
 import { ConvexError, v } from "convex/values";
-import { action, internalAction } from "./_generated/server";
+import { internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { sha512Hex } from "./billingRules";
+import {
+  paydunyaOutcome,
+  sha512Hex,
+  type ProviderOutcome,
+} from "./billingRules";
 
 // ---------------------------------------------------------------------------
 // LE SEUL MODULE DU DÉPÔT QUI PARLE À PAYDUNYA — spec §8.2 et §8.7.
@@ -127,7 +131,7 @@ const NOT_CONFIGURED =
  * navigateur — un paiement réussi dont l'utilisateur ferme l'onglet est encaissé
  * quand même.
  */
-export const openInvoice = action({
+export const openInvoice = internalAction({
   args: { installmentId: v.id("installments") },
   handler: async (ctx, args): Promise<{ paymentUrl: string }> => {
     const config = paydunyaConfig();
@@ -200,6 +204,7 @@ export const openInvoice = action({
     await ctx.runMutation(internal.billing.recordInitiatedPayment, {
       subscriptionId: target.subscriptionId,
       installmentId: target.installmentId,
+      provider: "paydunya",
       providerToken: body.token,
       amountFcfa: target.amountFcfa,
     });
@@ -210,8 +215,8 @@ export const openInvoice = action({
 
 /** Ce que PayDunya répond quand on lui redemande une facture. */
 export type InvoiceConfirmation = {
-  /** `completed`, `pending`, `cancelled`, `failed` — tel quel, jugé plus loin. */
-  status: string;
+  /** L'issue, DÉJÀ TRADUITE : la règle de décision ne lit aucun dialecte. */
+  outcome: ProviderOutcome;
   /** Le montant que PAYDUNYA dit avoir encaissé. Fait foi contre notre base. */
   amountFcfa: number;
   /**
@@ -290,6 +295,6 @@ export const confirmInvoice = internalAction({
     const custom = payload.custom_data?.installmentId;
     const installmentRef = typeof custom === "string" ? custom : null;
 
-    return { status, amountFcfa, installmentRef };
+    return { outcome: paydunyaOutcome(status), amountFcfa, installmentRef };
   },
 });

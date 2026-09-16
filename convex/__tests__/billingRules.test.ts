@@ -4,11 +4,13 @@ import {
   INSTALLMENT_COUNT,
   INSTALLMENT_STEP_MS,
   amendmentDueAt,
+  bictorysOutcome,
   constantTimeEquals,
   decideOverdue,
   decidePaymentApplication,
   decidePostPayment,
   installmentDueDates,
+  paydunyaOutcome,
   planInstallments,
   sha512Hex,
   splitInstallmentAmounts,
@@ -180,7 +182,7 @@ describe("sha512Hex", () => {
 describe("decidePaymentApplication", () => {
   const base: PaymentApplicationInput = {
     existingPaymentStatus: "initiated",
-    providerStatus: "completed",
+    providerOutcome: "completed",
     confirmedAmountFcfa: 416_668,
     dueAmountFcfa: 416_668,
     installmentStatus: "pending",
@@ -217,7 +219,7 @@ describe("decidePaymentApplication", () => {
       {
         ...base,
         existingPaymentStatus: "completed" as const,
-        providerStatus: "cancelled",
+        providerOutcome: "cancelled" as const,
       },
     ]) {
       expect(decidePaymentApplication(twisted)).toEqual({
@@ -252,7 +254,7 @@ describe("decidePaymentApplication", () => {
     // La facture vit encore : marquer `failed` ferait croire à un paiement
     // perdu, et PayDunya rappellera.
     expect(
-      decidePaymentApplication({ ...base, providerStatus: "pending" }),
+      decidePaymentApplication({ ...base, providerOutcome: "pending" }),
     ).toEqual({
       outcome: "not_completed",
       paymentStatus: null,
@@ -262,20 +264,13 @@ describe("decidePaymentApplication", () => {
 
   it("recopie les fins — annulé, échoué", () => {
     expect(
-      decidePaymentApplication({ ...base, providerStatus: "cancelled" })
+      decidePaymentApplication({ ...base, providerOutcome: "cancelled" })
         .paymentStatus,
     ).toBe("cancelled");
     expect(
-      decidePaymentApplication({ ...base, providerStatus: "failed" })
+      decidePaymentApplication({ ...base, providerOutcome: "failed" })
         .paymentStatus,
     ).toBe("failed");
-  });
-
-  it("accepte le statut du prestataire quelle que soit sa casse", () => {
-    expect(
-      decidePaymentApplication({ ...base, providerStatus: " Completed " })
-        .outcome,
-    ).toBe("credited");
   });
 
   it("n'attribue rien quand la tranche est introuvable", () => {
@@ -300,6 +295,61 @@ describe("decidePaymentApplication", () => {
       paymentStatus: "completed",
       creditsInstallment: false,
     });
+  });
+});
+
+describe("traducteurs de statut prestataire", () => {
+  it("PayDunya : « completed » est le seul succès", () => {
+    expect(paydunyaOutcome("completed")).toBe("completed");
+    expect(paydunyaOutcome("cancelled")).toBe("cancelled");
+    expect(paydunyaOutcome("failed")).toBe("failed");
+    expect(paydunyaOutcome("pending")).toBe("pending");
+  });
+
+  it("Bictorys : « succeeded » est le seul succès", () => {
+    // C'est LE piège de la bascule : PayDunya dit « completed », Bictorys dit
+    // « succeeded ». Une règle qui comparerait des chaînes brutes n'aurait
+    // jamais crédité un seul paiement Bictorys — silencieusement.
+    expect(bictorysOutcome("succeeded")).toBe("completed");
+    expect(bictorysOutcome("completed")).toBe("pending");
+  });
+
+  it("Bictorys : toute l'énumération de leur OpenAPI est couverte", () => {
+    const mapping: Record<string, string> = {
+      succeeded: "completed",
+      failed: "failed",
+      cancelled: "cancelled",
+      pending: "pending",
+      processing: "pending",
+      reversed: "failed",
+      authorized: "pending",
+    };
+    for (const [status, expected] of Object.entries(mapping)) {
+      expect(bictorysOutcome(status)).toBe(expected);
+    }
+  });
+
+  it("« autorisé » N'EST PAS un encaissement", () => {
+    // Un montant réservé sur une carte n'est pas un montant reçu : une
+    // autorisation non capturée expire, et l'école aurait eu l'accès sans
+    // qu'un franc arrive. Leur propre exemple d'intégration l'accepte ; nous
+    // non.
+    expect(bictorysOutcome("authorized")).toBe("pending");
+  });
+
+  it("un statut inconnu vaut ATTENTE, jamais un succès ni une fin", () => {
+    // Leur documentation demande explicitement de ne pas valider strictement
+    // les champs inconnus : un statut ajouté sans préavis ne doit ni créditer
+    // une tranche, ni marquer un paiement perdu.
+    for (const unknown of ["", "weird", "SETTLED", "en_cours"]) {
+      expect(bictorysOutcome(unknown)).toBe("pending");
+      expect(paydunyaOutcome(unknown)).toBe("pending");
+    }
+  });
+
+  it("la casse et les espaces ne changent rien", () => {
+    expect(paydunyaOutcome(" Completed ")).toBe("completed");
+    expect(bictorysOutcome(" SUCCEEDED ")).toBe("completed");
   });
 });
 

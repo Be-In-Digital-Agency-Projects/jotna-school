@@ -1373,6 +1373,21 @@ const INSTALLMENT_STATUS_STYLE: Record<ScheduleRow["status"], string> = {
   failed: "bg-amber-100 text-amber-800",
 };
 
+/**
+ * D'où vient l'argent — `Record` complet, pas `Partial` : un prestataire ajouté
+ * au schéma ne compilera pas tant qu'il n'aura pas son nom ici, et mieux vaut un
+ * écran qui refuse de se construire qu'une ligne de paiement anonyme.
+ *
+ * L'historique garde le prestataire de chaque versement : une école qui a payé
+ * chez PayDunya avant la bascule continue de le lire, et c'est ce qui permet de
+ * rapprocher une ligne d'un relevé.
+ */
+const PAYMENT_PROVIDER_LABEL: Record<PaymentRow["provider"], string> = {
+  paydunya: "PayDunya",
+  bictorys: "Bictorys",
+  manual: "constaté",
+};
+
 /** Les quatre états d'un paiement, dits en français. */
 const PAYMENT_STATUS_LABEL: Record<PaymentRow["status"], string> = {
   initiated: "Facture ouverte",
@@ -1401,7 +1416,10 @@ const PAYMENT_STATUS_LABEL: Record<PaymentRow["status"], string> = {
  */
 function BillingSection({ schoolId }: { schoolId: Doc<"schools">["_id"] }) {
   const schedule = useQuery(api.billing.getSchedule, { schoolId });
-  const openInvoice = useAction(api.billingPaydunya.openInvoice);
+  // Une seule fonction, quel que soit le prestataire : c'est le déploiement qui
+  // choisit (`billing.openPayment`), pas l'écran. Basculer de PayDunya à
+  // Bictorys ne touche donc pas une ligne d'interface.
+  const openInvoice = useAction(api.billing.openPayment);
   const settleOffline = useMutation(api.billing.settleInstallmentOffline);
 
   const [pendingId, setPendingId] = useState<Id<"installments"> | null>(null);
@@ -1592,8 +1610,7 @@ function BillingSection({ schoolId }: { schoolId: Doc<"schools">["_id"] }) {
                   className="inline-flex w-full items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 transition-colors"
                 >
                   <ExternalLink className="h-4 w-4" />
-                  Ouvrir la page de paiement PayDunya —{" "}
-                  {formatFcfa(row.amountFcfa)}
+                  Ouvrir la page de paiement — {formatFcfa(row.amountFcfa)}
                 </a>
               )}
             </li>
@@ -1624,7 +1641,7 @@ function BillingSection({ schoolId }: { schoolId: Doc<"schools">["_id"] }) {
                   {PAYMENT_STATUS_LABEL[row.status]}
                 </span>
                 <span className="text-gray-500">
-                  {row.provider === "manual" ? "constaté" : "PayDunya"}
+                  {PAYMENT_PROVIDER_LABEL[row.provider]}
                 </span>
                 <span className="text-gray-400">
                   {formatEventMoment(row.completedAt ?? row.createdAt)}
@@ -1636,8 +1653,8 @@ function BillingSection({ schoolId }: { schoolId: Doc<"schools">["_id"] }) {
       )}
 
       <p className="mt-3 text-xs text-gray-400">
-        L&apos;accès des élèves s&apos;ouvre quand PayDunya nous confirme le
-        règlement, pas au retour du navigateur : une facture réglée dont
+        L&apos;accès des élèves s&apos;ouvre quand le prestataire nous confirme
+        le règlement, pas au retour du navigateur : une facture réglée dont
         l&apos;onglet est fermé est encaissée quand même. Une tranche oubliée
         laisse vingt et un jours avant que l&apos;accès ne se referme.
       </p>

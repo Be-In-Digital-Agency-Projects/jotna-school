@@ -1,5 +1,6 @@
 import { ConvexError, v } from "convex/values";
 import {
+  action,
   internalMutation,
   internalQuery,
   mutation,
@@ -23,17 +24,45 @@ import {
 // ---------------------------------------------------------------------------
 // ENCAISSEMENT — la partie qui touche à la base. Spec §8.
 //
-// CE MODULE NE PARLE PAS À PAYDUNYA. Le réseau vit dans
-// `convex/billingPaydunya.ts` (une action) et la route du webhook dans
-// `convex/http.ts` (un `httpAction`) : ni l'un ni l'autre n'a de `ctx.db`,
-// c'est la règle 4 de §8.3. Ici, tout est transactionnel, et c'est ce qui rend
-// l'idempotence démontrable plutôt qu'espérée.
+// CE MODULE NE PARLE À AUCUN PRESTATAIRE. Le réseau vit dans les adaptateurs —
+// `convex/billingPaydunya.ts`, `convex/billingBictorys.ts` — et les routes de
+// webhook dans `convex/http.ts` : aucun d'eux n'a de `ctx.db`, c'est la règle 4
+// de §8.3. Ici, tout est transactionnel, et c'est ce qui rend l'idempotence
+// démontrable plutôt qu'espérée.
+//
+// ET IL NE CONNAÎT LE DIALECTE D'AUCUN D'EUX : les adaptateurs traduisent leurs
+// statuts en quatre issues communes (`billingRules.ProviderOutcome`) avant
+// d'arriver ici. Changer de prestataire ne touche donc pas une ligne de ce
+// fichier.
 //
 // ET IL NE DÉCIDE RIEN NON PLUS : les règles sont dans `convex/billingRules.ts`,
 // module pur et testé. Ce fichier lit des documents, appelle une règle, écrit ce
 // qu'elle rend. Même découpage que `access.ts` / `accessRules.ts` et
 // `schools.ts` / `pricing.ts`.
 // ---------------------------------------------------------------------------
+
+/**
+ * Les prestataires d'encaissement que le dépôt sait piloter.
+ *
+ * `manual` n'est PAS ici : un règlement constaté à la main n'ouvre aucune
+ * facture et n'a pas d'adaptateur. Il vit dans le schéma de `payments`, pas
+ * dans les arguments d'un appel réseau.
+ */
+const chargeProviderValidator = v.union(
+  v.literal("paydunya"),
+  v.literal("bictorys"),
+);
+
+/**
+ * L'issue normalisée que l'adaptateur a traduite depuis le dialecte de son
+ * prestataire (`billingRules.paydunyaOutcome`, `bictorysOutcome`).
+ */
+const providerOutcomeValidator = v.union(
+  v.literal("completed"),
+  v.literal("cancelled"),
+  v.literal("failed"),
+  v.literal("pending"),
+);
 
 /**
  * Tranches rendues à l'écran au plus.
@@ -64,8 +93,8 @@ export type ScheduleRow = {
 export type PaymentRow = {
   paymentId: Id<"payments">;
   installmentId: Id<"installments"> | null;
-  /** D'où vient l'argent : une facture PayDunya, ou un règlement constaté. */
-  provider: "paydunya" | "manual";
+  /** D'où vient l'argent : un prestataire, ou un règlement constaté à la main. */
+  provider: "paydunya" | "bictorys" | "manual";
   amountFcfa: number;
   status: "initiated" | "completed" | "failed" | "cancelled";
   createdAt: number;
@@ -161,6 +190,51 @@ export const getSchedule = query({
   },
 });
 
+/**
+ * LE PRESTATAIRE ACTIF, et le seul endroit du dépôt qui le choisit.
+ *
+ * `BILLING_PROVIDER` bascule d'un encaisseur à l'autre SANS DÉPLOIEMENT DE
+ * CODE — une variable d'environnement Convex, et le prochain clic part
+ * ailleurs. C'est ce qui rend la migration réversible : si le premier paiement
+ * en bac à sable révèle un défaut chez le nouveau, on revient à l'ancien le
+ * temps de comprendre, au lieu de découvrir le problème avec l'argent d'une
+ * école.
+ *
+ * BICTORYS PAR DÉFAUT : c'est le prestataire retenu — 1,5 % en mobile money
+ * contre 2,25 %. PayDunya reste entièrement câblé et testé tant que le premier
+ * encaissement réel n'a pas eu lieu chez Bictorys ; le retirer avant serait
+ * jeter le seul chemin dont on sait qu'il a été écrit contre une documentation
+ * complète.
+ *
+ * L'HISTORIQUE, LUI, N'EST PAS RÉÉCRIT : chaque ligne `payments` garde le
+ * prestataire par lequel son argent est passé. Basculer ne change que l'avenir.
+ */
+function activeProvider(): "paydunya" | "bictorys" {
+  return process.env.BILLING_PROVIDER === "paydunya" ? "paydunya" : "bictorys";
+}
+
+/**
+ * Ouvre un paiement pour une tranche — LE point d'entrée de l'écran.
+ *
+ * UNE SEULE FONCTION PUBLIQUE, quel que soit le nombre d'adaptateurs. L'écran
+ * ne nomme aucun prestataire : il demande à payer une tranche, et le
+ * déploiement décide chez qui. Exposer les deux adaptateurs aurait doublé la
+ * surface publique pour rien, et laissé l'écran choisir ce qu'il n'a pas à
+ * savoir.
+ *
+ * LA GARDE N'EST PAS ICI, et ce n'est pas un oubli : chaque adaptateur passe par
+ * `invoiceTarget`, qui vérifie l'`admin` et relit le montant en base. Une garde
+ * de plus ici ferait croire que celle de là-bas est facultative.
+ */
+export const openPayment = action({
+  args: { installmentId: v.id("installments") },
+  handler: async (ctx, args): Promise<{ paymentUrl: string }> => {
+    return activeProvider() === "paydunya"
+      ? await ctx.runAction(internal.billingPaydunya.openInvoice, args)
+      : await ctx.runAction(internal.billingBictorys.openInvoice, args);
+  },
+});
+
 export type InvoiceTarget = {
   installmentId: Id<"installments">;
   subscriptionId: Id<"subscriptions">;
@@ -227,6 +301,7 @@ export const recordInitiatedPayment = internalMutation({
   args: {
     subscriptionId: v.id("subscriptions"),
     installmentId: v.id("installments"),
+    provider: chargeProviderValidator,
     providerToken: v.string(),
     amountFcfa: v.number(),
   },
@@ -234,7 +309,7 @@ export const recordInitiatedPayment = internalMutation({
     return await ctx.db.insert("payments", {
       subscriptionId: args.subscriptionId,
       installmentId: args.installmentId,
-      provider: "paydunya",
+      provider: args.provider,
       providerToken: args.providerToken,
       amountFcfa: args.amountFcfa,
       status: "initiated",
@@ -285,8 +360,9 @@ export type ApplyPaymentResult = {
  */
 export const applyPayment = internalMutation({
   args: {
+    provider: chargeProviderValidator,
     providerToken: v.string(),
-    providerStatus: v.string(),
+    providerOutcome: providerOutcomeValidator,
     confirmedAmountFcfa: v.number(),
     /**
      * La tranche désignée par le `custom_data` de la facture — UNE CHAÎNE, et
@@ -326,7 +402,7 @@ export const applyPayment = internalMutation({
 
     const decision = decidePaymentApplication({
       existingPaymentStatus: payment?.status ?? null,
-      providerStatus: args.providerStatus,
+      providerOutcome: args.providerOutcome,
       confirmedAmountFcfa: args.confirmedAmountFcfa,
       dueAmountFcfa: installment?.amountFcfa ?? null,
       installmentStatus: installment?.status ?? null,
@@ -350,7 +426,7 @@ export const applyPayment = internalMutation({
       await ctx.db.insert("payments", {
         subscriptionId: installment.subscriptionId,
         installmentId: installment._id,
-        provider: "paydunya",
+        provider: args.provider,
         providerToken: args.providerToken,
         // Le montant CONFIRMÉ, pas le montant dû : la ligne doit dire ce qui
         // est réellement entré, y compris quand c'est trop peu.
@@ -369,6 +445,7 @@ export const applyPayment = internalMutation({
       // retrouver. Se taire ici perdrait un versement réel.
       console.error(
         "[billing] paiement sans tranche identifiable",
+        args.provider,
         args.providerToken,
       );
     }

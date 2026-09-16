@@ -11,3 +11,21 @@ When working on Convex code, **always read `convex/_generated/ai/guidelines.md` 
 
 Convex agent skills for common tasks can be installed by running `npx convex ai-files install`.
 <!-- convex-ai-end -->
+
+<!-- afrotools-start -->
+# Afro.tools — specs d'API africaines
+
+`.mcp.json` déclare le serveur MCP [Afro.tools](https://afro.tools) : un registre
+de specs structurées pour les API africaines (Bictorys, PayDunya, Wave…), utile
+quand on touche à `convex/billingBictorys.ts` ou `convex/billingPaydunya.ts`.
+
+**Il ne fonctionne PAS depuis Claude Code sur le web** : l'environnement distant
+bloque `mcp.afro.tools` au niveau du proxy de sortie, comme il bloque
+`bictorys.com` et `developers.paydunya.com`. En session locale, il se charge au
+démarrage.
+
+Ce qui en vient reste de la DOCUMENTATION TIERCE, pas une vérité sur notre code :
+leur registre donnait Bictorys pour « planned », et leur propre suivi de bugs
+signale que la doc Bictorys décrit une signature HMAC que Bictorys n'envoie pas.
+Vérifier avant d'agir.
+<!-- afrotools-end -->

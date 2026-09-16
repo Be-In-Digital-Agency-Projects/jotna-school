@@ -2,6 +2,7 @@ import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { auth } from "./auth";
+import { expectedWebhookSecret } from "./billingBictorys";
 import { expectedWebhookHash } from "./billingPaydunya";
 import { constantTimeEquals } from "./billingRules";
 
@@ -115,8 +116,9 @@ http.route({
     );
 
     const result = await ctx.runMutation(internal.billing.applyPayment, {
+      provider: "paydunya",
       providerToken,
-      providerStatus: confirmation.status,
+      providerOutcome: confirmation.outcome,
       confirmedAmountFcfa: confirmation.amountFcfa,
       ...(confirmation.installmentRef
         ? { fallbackInstallmentRef: confirmation.installmentRef }
@@ -125,6 +127,105 @@ http.route({
       // tranchera un litige, et un objet que nous aurions déjà interprété ne
       // dirait plus que notre lecture.
       rawPayload: Object.fromEntries(form.entries()),
+    });
+
+    return new Response(result.outcome, { status: 200 });
+  }),
+});
+
+/**
+ * LE WEBHOOK DE BICTORYS — spec §8.2, et les quatre règles de §8.3.
+ *
+ * MÊME ARCHITECTURE QUE LA ROUTE PAYDUNYA juste au-dessus : vérifier,
+ * reconfirmer, déléguer. Seules changent la forme du corps et la manière dont le
+ * prestataire s'authentifie — c'est tout ce qu'un changement de prestataire
+ * devrait coûter.
+ *
+ * DEUX DIFFÉRENCES AVEC PAYDUNYA, ET LA PREMIÈRE EST PIRE :
+ *
+ *   1. Bictorys NE SIGNE PAS. Leur page « Comment valider les webhooks » est
+ *      explicite : chaque rappel porte un en-tête `X-Secret-Key` contenant LE
+ *      SECRET EN CLAIR, et valider consiste à le comparer au sien. PayDunya, au
+ *      moins, en envoyait l'empreinte. Ni l'un ni l'autre ne signe la charge
+ *      utile, donc la reconfirmation (D39) reste la seule chose qui prouve
+ *      quelque chose — elle n'est pas une précaution qu'on pourra retirer ;
+ *   2. le corps est du JSON, pas du `x-www-form-urlencoded`.
+ *
+ * LA COMPARAISON RESTE À TEMPS CONSTANT. Le secret voyage en clair à chaque
+ * appel, donc un attaquant qui écoute l'a de toute façon ; mais celui qui ne
+ * fait que DEVINER ne doit rien apprendre de notre temps de réponse, et écrire
+ * `===` ici laisserait un exemple à copier là où ce serait grave.
+ *
+ * LES CODES DE RÉPONSE SONT DES INSTRUCTIONS AU PRESTATAIRE : 200 veut dire
+ * « traité, n'y reviens pas », 401 refuse sans rien faire, 503 et 500 disent
+ * « rappelle-moi ».
+ */
+http.route({
+  path: "/bictorys-webhook",
+  method: "POST",
+  handler: httpAction(async (ctx, req) => {
+    const expected = expectedWebhookSecret();
+    if (expected === null) {
+      // Rien n'est configuré : on ne peut RIEN vérifier, donc on ne traite
+      // rien. 503 pour que Bictorys rappelle quand les clés seront posées.
+      return new Response("bictorys non configuré", { status: 503 });
+    }
+
+    const presented = req.headers.get("X-Secret-Key") ?? "";
+    if (!constantTimeEquals(presented, expected)) {
+      return new Response("secret invalide", { status: 401 });
+    }
+
+    // Le corps est lu APRÈS l'authentification : un appel non authentifié ne
+    // doit rien nous coûter, pas même une analyse syntaxique.
+    let payload: { id?: unknown; merchantReference?: unknown };
+    try {
+      payload = (await req.json()) as typeof payload;
+    } catch {
+      return new Response("corps illisible", { status: 200 });
+    }
+
+    // Leur charge utile nomme `id` l'identifiant de transaction. C'est lui
+    // qu'on a stocké comme `providerToken` à l'ouverture du paiement, et c'est
+    // la clé d'idempotence de tout ce qui suit (§8.3, règle 3).
+    const providerToken = typeof payload.id === "string" ? payload.id : "";
+    if (providerToken === "") {
+      // Authentifié mais inexploitable : rejouer ne produira pas un
+      // identifiant qui n'était pas là.
+      return new Response("identifiant absent", { status: 200 });
+    }
+
+    // Peut lever : prestataire injoignable, réponse inattendue. On laisse
+    // remonter en 500 plutôt que d'avaler l'erreur — Bictorys rejouera, et un
+    // paiement qu'on ne sait pas confirmer ne doit ni être crédité ni perdu.
+    const confirmation = await ctx.runAction(
+      internal.billingBictorys.confirmCharge,
+      { providerToken },
+    );
+
+    // `merchantReference` VIENT DE LA RECONFIRMATION, pas du corps du POST :
+    // c'est nous qui l'avons écrit à l'ouverture du paiement, et le relire chez
+    // eux plutôt que dans un corps non signé retire une prise à qui aurait le
+    // secret. Le repli sur le corps existe pour le seul cas où leur réponse ne
+    // le porterait pas.
+    const installmentRef =
+      confirmation.installmentRef ??
+      (typeof payload.merchantReference === "string"
+        ? payload.merchantReference
+        : null);
+
+    const result = await ctx.runMutation(internal.billing.applyPayment, {
+      provider: "bictorys",
+      providerToken,
+      providerOutcome: confirmation.outcome,
+      confirmedAmountFcfa: confirmation.amountFcfa,
+      ...(installmentRef ? { fallbackInstallmentRef: installmentRef } : {}),
+      // La charge utile BRUTE, telle qu'elle est arrivée : c'est elle qui
+      // tranchera un litige, et un objet que nous aurions déjà interprété ne
+      // dirait plus que notre lecture. Leur documentation prévient que des
+      // champs peuvent apparaître sans préavis — raison de plus pour tout
+      // garder.
+      rawPayload: payload,
     });
 
     return new Response(result.outcome, { status: 200 });

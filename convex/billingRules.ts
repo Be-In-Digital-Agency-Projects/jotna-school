@@ -221,6 +221,86 @@ export async function sha512Hex(text: string): Promise<string> {
     .join("");
 }
 
+/**
+ * LE VOCABULAIRE COMMUN DES PRESTATAIRES — quatre issues, et quatre seulement.
+ *
+ * POURQUOI IL EXISTE. PayDunya dit « completed », Bictorys dit « succeeded », et
+ * le prochain dira autre chose. Laisser la règle de décision comparer des
+ * CHAÎNES de prestataire, c'est lui demander de connaître le dialecte de chacun
+ * — et le jour où l'un d'eux ajoute un statut, la règle le traite par omission,
+ * silencieusement, sur de l'argent.
+ *
+ * Chaque prestataire a donc son traducteur, pur et testé, juste en dessous. La
+ * règle, elle, ne voit plus que ces quatre issues.
+ *
+ * `pending` N'EST PAS UN ÉCHEC, et c'est la distinction qui compte : la facture
+ * vit encore, le prestataire rappellera, et marquer la ligne `failed` ferait
+ * croire à un paiement perdu. « Annulé » et « échoué » sont des fins ; tout ce
+ * qui n'est ni l'un ni l'autre ni un succès est une attente.
+ */
+export type ProviderOutcome = "completed" | "cancelled" | "failed" | "pending";
+
+/**
+ * Le statut PayDunya, traduit.
+ *
+ * Valeurs documentées : `completed`, `pending`, `cancelled` — `failed` est
+ * observé sans être documenté, on le reconnaît quand même.
+ */
+export function paydunyaOutcome(status: string): ProviderOutcome {
+  switch (status.trim().toLowerCase()) {
+    case "completed":
+      return "completed";
+    case "cancelled":
+    case "canceled":
+      return "cancelled";
+    case "failed":
+      return "failed";
+    default:
+      return "pending";
+  }
+}
+
+/**
+ * Le statut Bictorys, traduit — l'énumération complète de leur OpenAPI.
+ *
+ * `authorized` EST TRAITÉ COMME UNE ATTENTE, et c'est un choix. Leur propre
+ * exemple d'intégration l'accepte comme un succès ; nous non. « Autorisé » veut
+ * dire qu'un montant est RÉSERVÉ sur la carte, pas qu'il est encaissé : une
+ * autorisation non capturée expire, et l'école aurait alors eu l'accès sans
+ * qu'un franc soit arrivé. Nos charges sont créées sans `authorization`, donc
+ * les cartes sont débitées immédiatement et ce statut ne devrait pas nous
+ * parvenir — s'il arrive, c'est que quelque chose a changé, et l'attente est le
+ * repli sûr.
+ *
+ * `reversed` EST TRAITÉ COMME UN ÉCHEC, faute de mieux. Un paiement rétracté
+ * après coup — impayé, contestation — n'a pas d'équivalent dans notre modèle :
+ * rien ne DÉFAIT une tranche soldée (spec §10). S'il arrive AVANT que la
+ * tranche soit créditée, le traiter en échec est juste. S'il arrive APRÈS, la
+ * ligne de paiement passera à `failed` mais la tranche restera réglée : c'est
+ * un trou connu, et il appartient au plan de facturation avec le remboursement.
+ */
+export function bictorysOutcome(status: string): ProviderOutcome {
+  switch (status.trim().toLowerCase()) {
+    case "succeeded":
+      return "completed";
+    case "cancelled":
+    case "canceled":
+      return "cancelled";
+    case "failed":
+    case "reversed":
+      return "failed";
+    case "pending":
+    case "processing":
+    case "authorized":
+      return "pending";
+    default:
+      // Un statut que Bictorys ajouterait sans prévenir — leur documentation
+      // demande explicitement de ne pas valider strictement les champs
+      // inconnus. On attend plutôt que d'inventer une fin.
+      return "pending";
+  }
+}
+
 /** Ce qu'il advient d'un paiement que PayDunya nous annonce. */
 export type PaymentOutcome =
   /** La tranche est soldée. Le seul cas qui ouvre quelque chose. */
@@ -252,9 +332,21 @@ export interface PaymentDecision {
 export interface PaymentApplicationInput {
   /** Statut de la ligne `payments` déjà en base, ou `null` si elle manque. */
   existingPaymentStatus: "initiated" | "completed" | "failed" | "cancelled" | null;
-  /** Le statut que PAYDUNYA nous a confirmé — jamais celui du corps du POST. */
-  providerStatus: string;
-  /** Le montant que PAYDUNYA nous a confirmé — jamais celui du corps du POST. */
+  /**
+   * L'issue que LE PRESTATAIRE nous a confirmée, déjà traduite par son
+   * traducteur — jamais le statut brut du corps du POST.
+   */
+  providerOutcome: ProviderOutcome;
+  /**
+   * Le montant BRUT que le prestataire nous a confirmé, frais compris — jamais
+   * celui du corps du POST, et jamais un montant net.
+   *
+   * « Brut » n'est pas une précision d'écriture : Bictorys rend dans
+   * `transactions/{id}.amount` un montant NET DE FRAIS. Comparé tel quel à ce
+   * que la tranche réclame, il serait systématiquement inférieur, et AUCUN
+   * paiement ne serait jamais crédité. C'est à l'adaptateur de reconstituer le
+   * brut avant d'arriver ici.
+   */
   confirmedAmountFcfa: number;
   /** Le montant relu dans `installments`, ou `null` si la tranche est introuvable. */
   dueAmountFcfa: number | null;
@@ -301,16 +393,14 @@ export function decidePaymentApplication(
     };
   }
 
-  const status = input.providerStatus.trim().toLowerCase();
-  if (status !== "completed") {
+  if (input.providerOutcome !== "completed") {
     return {
       outcome: "not_completed",
-      // « Annulé » et « échoué » sont des fins, et se recopient. Tout le
-      // reste — « en attente », ou un statut que PayDunya ajouterait un jour —
+      // « Annulé » et « échoué » sont des fins, et se recopient. « En attente »
       // laisse la ligne telle quelle : le prestataire rappellera, et une ligne
       // marquée `failed` par excès de zèle ferait croire à un paiement perdu.
       paymentStatus:
-        status === "cancelled" ? "cancelled" : status === "failed" ? "failed" : null,
+        input.providerOutcome === "pending" ? null : input.providerOutcome,
       creditsInstallment: false,
     };
   }

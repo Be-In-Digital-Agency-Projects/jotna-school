@@ -23,6 +23,7 @@ import type * as attemptsVerify from "../attemptsVerify.js";
 import type * as auth from "../auth.js";
 import type * as badges from "../badges.js";
 import type * as billing from "../billing.js";
+import type * as billingBictorys from "../billingBictorys.js";
 import type * as billingPaydunya from "../billingPaydunya.js";
 import type * as billingRules from "../billingRules.js";
 import type * as crons from "../crons.js";
@@ -82,6 +83,7 @@ declare const fullApi: ApiFromModules<{
   auth: typeof auth;
   badges: typeof badges;
   billing: typeof billing;
+  billingBictorys: typeof billingBictorys;
   billingPaydunya: typeof billingPaydunya;
   billingRules: typeof billingRules;
   crons: typeof crons;

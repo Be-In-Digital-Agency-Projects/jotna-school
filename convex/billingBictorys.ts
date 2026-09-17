@@ -1,7 +1,7 @@
 import { ConvexError, v } from "convex/values";
 import { internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { bictorysOutcome, type ProviderOutcome } from "./billingRules";
+import { bictorysOutcome, type ChargeConfirmation } from "./billingRules";
 
 // ---------------------------------------------------------------------------
 // LE SEUL MODULE DU DÉPÔT QUI PARLE À BICTORYS — spec §8.2.
@@ -17,11 +17,12 @@ import { bictorysOutcome, type ProviderOutcome } from "./billingRules";
 // PAR MOIS. Wave, Orange Money, Free Money et MTN y sont. Les deux prestataires
 // sont agréés par la BCEAO comme établissements de paiement.
 //
-// CE QUI EST VÉRIFIÉ ICI, ET CE QUI NE L'EST PAS. Tout ce qui suit vient de
-// leur OpenAPI publique (`docs.bictorys.com`, lue le 16/09/2026). RIEN n'a été
-// essayé contre leur bac à sable depuis l'environnement où ce code a été écrit :
-// leur domaine y est bloqué. Les deux endroits qui demandent une vérification au
-// premier paiement réel sont signalés par « À ÉPROUVER » ci-dessous.
+// CE QUI EST VÉRIFIÉ ICI, ET CE QUI NE L'EST PAS. La forme des appels vient de
+// leur OpenAPI publique (`docs.bictorys.com`, lue le 16/09/2026). Le 17/09/2026,
+// `openInvoice` a été essayée pour la première fois contre leur bac à sable : le
+// format de `paymentReference` y a été corrigé sur un refus de leur part, détaillé
+// au-dessus de la fonction. `confirmCharge` reste NON ÉPROUVÉE — aucun appelant ne
+// l'invoque — et son hypothèse de montant brut est signalée « À ÉPROUVER ».
 // ---------------------------------------------------------------------------
 
 /** Production. Ne sert QUE si `BICTORYS_MODE` vaut exactement « live ». */
@@ -106,12 +107,33 @@ const NOT_CONFIGURED =
  * la garde d'`admin` — même règle que partout : un prix reçu en argument serait
  * une facture que n'importe qui pourrait ramener à cent francs.
  *
- * `merchantReference` PORTE L'IDENTIFIANT DE LA TRANCHE. Leur documentation
- * promet qu'il est « renvoyé dans la réponse ET dans la charge utile du
- * webhook » : c'est l'équivalent exact du `custom_data` de PayDunya, et c'est
- * par lui que le webhook retrouve la tranche si notre ligne `payments` manque.
- * `paymentReference`, lui, est AFFICHÉ sur la page de paiement — on y met une
- * phrase lisible, pas un identifiant.
+ * LES DEUX RÉFÉRENCES PORTENT L'IDENTIFIANT DE LA TRANCHE, et c'est ce que
+ * Bictorys demande. `paymentReference` est leur clé de rapprochement — « your
+ * internal order reference, returned in webhook and verify_transaction so you
+ * can match the payment to your order » — et `merchantReference` une référence
+ * de trace facultative. Les deux reviennent dans la charge utile du webhook,
+ * qui retrouve ainsi la tranche même si notre ligne `payments` manque.
+ *
+ * CE CHAMP A PORTÉ UNE PHRASE LISIBLE, ET BICTORYS L'A REFUSÉE. Le premier
+ * appel réel contre leur bac à sable, le 17/09/2026, a rendu :
+ *
+ *     HTTP 400 {"status":400,"title":"BAD_REQUEST",
+ *               "details":"E400-46: Invalid paymentReference format",
+ *               "source":"pay"}
+ *
+ * pour `paymentReference: "Jotna School — École de test Bictorys, tranche 1"`.
+ * Le champ EST bien affiché sur leur page de paiement, l'ancien commentaire avait
+ * raison sur ce point ; c'est « on y met une phrase lisible » qui était faux. Il
+ * est contraint en format, et un libellé avec espaces, accents et tiret cadratin
+ * le viole. L'identifiant Convex de la tranche, lui, est alphanumérique et passe.
+ *
+ * CONSÉQUENCE ASSUMÉE : la page de paiement montre cet identifiant, tronqué —
+ * mesuré le 17/09/2026, elle affiche `ps7abmed33wqz60...` — et plus le nom de
+ * l'école. Le directeur y arrive depuis SA fiche d'école, après avoir cliqué
+ * « Payer » sur une tranche affichée avec son montant : le contexte est à
+ * l'écran d'où il vient, pas à reconstruire depuis un libellé que le prestataire
+ * peut refuser. Le montant, lui, s'affiche bien — « CFA 50000 » pour une tranche
+ * de 50 000 FCFA — et c'est ce qu'il doit reconnaître avant de payer.
  *
  * L'ORDRE DES DEUX ÉCRITURES EST DÉLIBÉRÉ, comme chez PayDunya : la charge
  * d'abord — elle seule produit le `chargeId` — puis la ligne `payments`. Si
@@ -152,7 +174,7 @@ export const openInvoice = internalAction({
         // pays du marchand s'applique — ce qui donnerait la même chose, mais on
         // ne fait pas reposer un paiement sur un défaut.
         country: "SN",
-        paymentReference: `Jotna School — ${target.schoolName}, tranche ${target.index}`,
+        paymentReference: target.installmentId,
         merchantReference: target.installmentId,
       }),
     });
@@ -176,8 +198,20 @@ export const openInvoice = internalAction({
       transactionId?: string;
     };
 
-    // `chargeId` sur un 202, `transactionId` sur un 201 : c'est l'identifiant
-    // que le webhook renverra, et notre clé d'idempotence.
+    // `chargeId` sur un 202, `transactionId` sur un 201.
+    //
+    // CE N'EST PAS L'IDENTIFIANT QUE LE WEBHOOK RENVERRA, contrairement à ce
+    // que ce commentaire affirmait. Mesuré le 17/09/2026 contre leur bac à
+    // sable : la charge ouverte ici valait
+    // `3949430b-ee5a-493d-8c8e-16e03a6f512a`, et le rappel est arrivé avec
+    // `id: "f418ae93-5e49-49ba-9821-7f7e89b2e288"` — l'identifiant de la
+    // TRANSACTION, que Bictorys crée quand le client choisit son opérateur.
+    // Les deux UUID ne se recoupent jamais dans le parcours hébergé.
+    //
+    // ON L'ENREGISTRE QUAND MÊME : il nomme la charge chez eux, donc il sert au
+    // rapprochement et au litige. Mais la clé d'idempotence réelle est celle
+    // que porte le webhook, et `billing.applyPayment` réconcilie cette ligne
+    // avec elle au premier rappel — le raisonnement est écrit là-bas.
     const providerToken = body.chargeId ?? body.transactionId;
     if (!body.link || !providerToken) {
       throw new ConvexError(
@@ -197,59 +231,28 @@ export const openInvoice = internalAction({
   },
 });
 
-/** Ce que Bictorys répond quand on lui redemande une transaction. */
-export type ChargeConfirmation = {
-  /** L'issue, DÉJÀ TRADUITE : la règle de décision ne lit aucun dialecte. */
-  outcome: ProviderOutcome;
-  /** Le montant BRUT reconstitué — voir le commentaire de `confirmCharge`. */
-  amountFcfa: number;
-  /** La tranche que la charge désignait, telle qu'elle revient. Chaîne brute. */
-  installmentRef: string | null;
-};
-
 /**
- * Redemande une transaction à Bictorys — la deuxième ligne de défense.
+ * Redemande une transaction à Bictorys — DÉSORMAIS un outil de RAPPROCHEMENT,
+ * plus la garde du webhook (plan B, D47).
  *
- * POURQUOI ELLE EXISTE, ET POURQUOI ELLE EST ENCORE PLUS NÉCESSAIRE ICI.
- * Bictorys ne signe PAS ses webhooks. Leur page « Comment valider les
- * webhooks » est explicite : chaque rappel porte un en-tête `X-Secret-Key`
- * contenant **le secret en clair**, et valider consiste à le comparer au sien.
- * Ce n'est pas une signature de la charge utile — elle ne prouve rien du
- * contenu — c'est un mot de passe transmis à chaque appel. Leur documentation
- * mentionne par ailleurs des en-têtes `X-Webhook-Signature` et
- * `X-Webhook-Timestamp` en HMAC-SHA256 qui, d'après les rapports
- * d'intégration publics, ne sont pas envoyés en pratique.
+ * CE QUI A CHANGÉ. La route `/bictorys-webhook` ne l'appelle plus : elle lit le
+ * montant et le statut dans le corps signé du webhook (`readBictorysWebhook`
+ * ci-dessus), parce que `/status` rend en bac à sable un corps minimal sans
+ * `amount` et tombe par intermittence en production. Cette fonction reste pour un
+ * balayage de rapprochement — retrouver le sort d'un paiement dont le webhook
+ * n'est jamais arrivé — le seul usage que Bictorys recommande pour cet endpoint
+ * côté serveur.
  *
- * Le statut et le montant qui décident viennent donc de CETTE réponse-ci,
- * redemandée avec notre clé d'API, jamais du corps du POST.
+ * SON `amount` EST NET DE FRAIS, d'où le brut reconstitué `amount + merchantFees`
+ * — à l'inverse du webhook, dont l'`amount` est déjà le montant payé par le
+ * client. Un montant illisible devient zéro, et zéro ne solde rien (D42).
  *
- * ---------------------------------------------------------------------------
- * À ÉPROUVER AU PREMIER PAIEMENT — LE MONTANT EST NET DE FRAIS
- *
- * Leur OpenAPI décrit `amount`, sur CETTE réponse, comme « the amount received
- * or paid by the merchant, NET OF FEES ». Le webhook, lui, décrit son propre
- * `amount` comme le montant payé par le client. Les deux champs portent le même
- * nom et ne veulent pas dire la même chose.
- *
- * SI ON COMPARAIT `amount` TEL QUEL à ce que la tranche réclame, il serait
- * systématiquement inférieur du montant des frais — 6 250 FCFA sur une tranche
- * de 416 668 à 1,5 % — et `decidePaymentApplication` conclurait « paiement
- * partiel » sur CHAQUE paiement. Aucune tranche ne serait jamais soldée, aucun
- * accès jamais ouvert, et rien dans les journaux ne dirait pourquoi.
- *
- * On reconstitue donc le brut : `amount + merchantFees`. Les frais du client
- * (`customerFees`) n'entrent pas — ils s'ajoutent à ce qu'il paie, pas à ce que
- * nous encaissons — sauf si le compte est réglé pour faire supporter les frais
- * au client, cas où leur note dit que `amount` les inclut déjà.
- *
- * C'EST LE PREMIER PAIEMENT EN BAC À SABLE QUI TRANCHERA. Comparer le montant
- * reconstitué ici au montant de la tranche est la seule vérification qui
- * compte, et elle se fait avec de l'argent, pas avec un test unitaire.
- * ---------------------------------------------------------------------------
- *
- * Elle LÈVE quand Bictorys ne répond pas : la route renvoie alors une erreur et
- * le prestataire rejouera. Un paiement qu'on ne sait pas confirmer ne doit ni
- * être crédité, ni être perdu.
+ * DEUX PRÉREQUIS AVANT DE LA CÂBLER. Son chemin est `/transactions/{id}/status` :
+ * sans `/status`, Bictorys répond 404 « this endpoint does not exist ». Et
+ * `verify_transaction` exige la clé PRIVÉE (`BICTORYS_PRIVATE_KEY`), non la clé
+ * publique que `bictorysHeaders` envoie pour la charge — le rapprochement devra
+ * passer sa propre clé. Tant qu'aucun appelant ne l'invoque, ces deux points sont
+ * documentés, pas réglés.
  */
 export const confirmCharge = internalAction({
   args: { providerToken: v.string() },
@@ -258,7 +261,7 @@ export const confirmCharge = internalAction({
     if (!config) throw new Error("Bictorys non configuré");
 
     const response = await fetch(
-      `${config.base}/transactions/${encodeURIComponent(args.providerToken)}`,
+      `${config.base}/transactions/${encodeURIComponent(args.providerToken)}/status`,
       { method: "GET", headers: bictorysHeaders(config) },
     );
 

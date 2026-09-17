@@ -358,6 +358,38 @@ export type ApplyPaymentResult = {
  * indéfiniment ; chaque refus est une valeur de retour, et la route répond 200
  * avec ce que la mutation a décidé.
  */
+/**
+ * La ligne de paiement encore OUVERTE de cette tranche chez ce prestataire.
+ *
+ * Sert à rattacher un webhook dont le jeton ne correspond à aucune ligne, parce
+ * que le prestataire a changé d'identifiant entre l'ouverture et le rappel —
+ * voir le commentaire dans `applyPayment`.
+ *
+ * LA PLUS RÉCENTE quand il y en a plusieurs : un directeur qui ouvre la page de
+ * paiement, l'abandonne, puis recommence, laisse derrière lui une ligne
+ * `initiated` par tentative. C'est la dernière qu'il a suivie jusqu'au bout.
+ * Les précédentes restent ouvertes, et c'est juste : elles n'ont rien encaissé.
+ */
+async function openPaymentFor(
+  ctx: MutationCtx,
+  installmentId: Id<"installments">,
+  provider: Doc<"payments">["provider"],
+): Promise<Doc<"payments"> | null> {
+  const rows = await ctx.db
+    .query("payments")
+    .withIndex("by_installment", (q) => q.eq("installmentId", installmentId))
+    .collect();
+
+  const open = rows.filter(
+    (row) => row.provider === provider && row.status === "initiated",
+  );
+  if (open.length === 0) return null;
+
+  return open.reduce((latest, row) =>
+    row.createdAt > latest.createdAt ? row : latest,
+  );
+}
+
 export const applyPayment = internalMutation({
   args: {
     provider: chargeProviderValidator,
@@ -387,7 +419,7 @@ export const applyPayment = internalMutation({
     // lèverait à CHAQUE rejeu, et PayDunya rappellerait sans fin une route qui
     // ne crédite plus rien. Un invariant qu'on fait entendre ne doit pas
     // bloquer un encaissement réel.
-    const payment = await ctx.db
+    const booked = await ctx.db
       .query("payments")
       .withIndex("by_providerToken", (q) =>
         q.eq("providerToken", args.providerToken),
@@ -397,6 +429,28 @@ export const applyPayment = internalMutation({
     const fallbackId = args.fallbackInstallmentRef
       ? ctx.db.normalizeId("installments", args.fallbackInstallmentRef)
       : null;
+
+    // LE JETON STOCKÉ À L'OUVERTURE N'EST PAS CELUI QUE LE WEBHOOK RENVOIE, et
+    // il a fallu un paiement réel pour le savoir. Chez Bictorys, le parcours
+    // hébergé rend un `chargeId` sur son 202 — c'est ce que `openInvoice`
+    // enregistre — mais le rappel porte l'identifiant de la TRANSACTION, un
+    // autre UUID. Mesuré le 17/09/2026 en bac à sable : charge
+    // `3949430b-ee5a-493d-8c8e-16e03a6f512a`, webhook
+    // `f418ae93-5e49-49ba-9821-7f7e89b2e288`.
+    //
+    // SANS CE RATTRAPAGE, la recherche par jeton échouait, la ligne ouverte
+    // restait `initiated` pour toujours, et une SECONDE ligne était insérée
+    // pour le même encaissement. La tranche était bien soldée — le repli par
+    // `merchantReference` la retrouvait — mais la table accumulait une ligne
+    // morte par paiement, et plus rien ne reliait la charge ouverte au
+    // versement qui l'avait honorée.
+    //
+    // ON RÉCONCILIE PLUTÔT QUE D'INSÉRER : la ligne ouverte de cette tranche,
+    // chez ce prestataire, reçoit le jeton du webhook. Le rejeu redevient alors
+    // idempotent par `by_providerToken`, comme le reste du code le suppose.
+    const payment =
+      booked ?? (fallbackId ? await openPaymentFor(ctx, fallbackId, args.provider) : null);
+
     const installmentId = payment?.installmentId ?? fallbackId;
     const installment = installmentId ? await ctx.db.get(installmentId) : null;
 
@@ -419,6 +473,12 @@ export const applyPayment = internalMutation({
     if (payment) {
       await ctx.db.patch(payment._id, {
         rawPayload: args.rawPayload,
+        // Le jeton du webhook REMPLACE celui de l'ouverture quand ils diffèrent :
+        // c'est lui que le prestataire rejouera, donc lui qui doit rendre le
+        // rejeu idempotent.
+        ...(payment.providerToken !== args.providerToken
+          ? { providerToken: args.providerToken }
+          : {}),
         ...(decision.paymentStatus ? { status: decision.paymentStatus } : {}),
         ...(decision.paymentStatus === "completed" ? { completedAt: now } : {}),
       });

@@ -935,6 +935,7 @@ export default defineSchema({
     completedAt: v.optional(v.number()),
   })
     .index("by_providerToken", ["providerToken"])
+    .index("by_installment", ["installmentId"])
     .index("by_subscription", ["subscriptionId"]),
 
   studentImportJobs: defineTable({

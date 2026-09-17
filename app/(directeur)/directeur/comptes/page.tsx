@@ -7,6 +7,7 @@ import { Copy, Mail, Printer, UserPlus } from "lucide-react";
 
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { refusalMessage } from "@/lib/refusalMessage";
 
 type Created = {
   name: string;
@@ -109,11 +110,13 @@ function ComptesContent() {
       setEmail("");
       setStudentId("");
     } catch (err: unknown) {
-      setError(
-        err instanceof Error && err.message
-          ? err.message.replace(/^\[.*?\]\s*/, "")
-          : "Création impossible.",
-      );
+      // `refusalMessage` ET NON `err.message`. Le client Convex ne transmet pas
+      // le message du serveur : il en fabrique un neuf, de la forme
+      // `[CONVEX A(...)] <texte>\n  Called by client`, avec la trace de pile.
+      // Retirer le préfixe entre crochets laissait « Server Error Uncaught
+      // ConvexError: … at createAdultAccount (../convex/schoolAccounts.ts:309) »
+      // à l'écran d'un directeur d'école. Le texte écrit voyage dans `data`.
+      setError(refusalMessage(err, "Création impossible."));
     } finally {
       setBusy(false);
     }

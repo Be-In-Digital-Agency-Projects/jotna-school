@@ -8,6 +8,7 @@ import Link from "next/link";
 import { Eye, EyeOff, Loader2 } from "lucide-react";
 
 import { api } from "@/convex/_generated/api";
+import { refusalMessage } from "@/lib/refusalMessage";
 
 /**
  * L'activation d'un compte créé par une école.
@@ -77,11 +78,10 @@ function ActivationForm() {
       });
       window.location.href = "/post-auth";
     } catch (err: unknown) {
-      const message =
-        err instanceof Error && err.message
-          ? err.message.replace(/^\[.*?\]\s*/, "")
-          : "Activation impossible. Réessayez.";
-      setError(message);
+      // Même raison que dans l'espace direction : le message du client Convex
+      // porte la trace de pile, le texte écrit par le serveur voyage dans
+      // `data`. Le lecteur est ici un parent qui tient un papier.
+      setError(refusalMessage(err, "Activation impossible. Réessayez."));
     } finally {
       setLoading(false);
     }

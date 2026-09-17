@@ -16,6 +16,10 @@ import {
   graceAnchorFor,
 } from "./access";
 import {
+  formatInvoiceNumber,
+  nextSequence,
+} from "./invoiceRules";
+import {
   decideOverdue,
   decidePaymentApplication,
   decidePostPayment,
@@ -567,10 +571,85 @@ async function creditInstallment(
     hasRemainingOverdue: remainingAnchor !== null,
   });
 
+  await issueInvoice(ctx, installment, contract, now);
+
   if (!post.activate) return false;
 
   await ctx.db.patch(contract._id, { status: "active" });
   return true;
+}
+
+/**
+ * Émet la facture de la tranche qu'on vient de solder, et planifie son envoi.
+ *
+ * DANS LA TRANSACTION DU SOLDE, ET NON APRÈS. Une facture posée par une seconde
+ * mutation laisserait exister une fenêtre — courte, mais réelle — où la tranche
+ * est payée et où rien ne la documente : l'école a versé son argent et n'a rien
+ * à comptabiliser. Les deux écritures ne se séparent pas, pour la même raison
+ * que l'échéancier naît avec le contrat (`schools.recordSubscription`).
+ *
+ * ELLE EST APPELÉE AVANT LA GARDE `post.activate`, et c'est délibéré : une
+ * tranche réglée se facture même quand elle n'active pas le contrat — deuxième
+ * et troisième tranches, ou contrat déjà actif. Placée après le `return false`,
+ * la facture n'aurait été émise que pour la première tranche de l'année.
+ *
+ * LE RANG S'ALLOUE EN LISANT LE DERNIER DE L'ANNÉE. Une mutation Convex est une
+ * transaction sérialisable : deux encaissements simultanés ne peuvent pas
+ * obtenir le même rang, et la suite reste sans trou — ce qu'exige une facture.
+ *
+ * L'ENVOI EST PLANIFIÉ, PAS ATTENDU. Une mutation ne peut pas appeler Resend,
+ * et surtout : un service de messagerie indisponible ne doit pas faire échouer
+ * l'encaissement. La facture existe en base ; le courriel la suit, et son échec
+ * s'écrit sur la ligne plutôt que d'annuler un paiement.
+ *
+ * ELLE NE FACTURE JAMAIS DEUX FOIS la même tranche. `applyPayment` et
+ * `settleInstallmentOffline` refusent tous deux une tranche déjà `paid` avant
+ * d'arriver ici, mais la garde est reprise sur `by_installment` : un rejeu ne
+ * doit pas consommer un numéro de facture, qui est une suite sans trou.
+ */
+async function issueInvoice(
+  ctx: MutationCtx,
+  installment: Doc<"installments">,
+  contract: Doc<"subscriptions">,
+  now: number,
+): Promise<void> {
+  const already = await ctx.db
+    .query("invoices")
+    .withIndex("by_installment", (q) => q.eq("installmentId", installment._id))
+    .first();
+  if (already) return;
+
+  // Le contrat d'une école porte `ownerType: "school"` ; rien d'autre n'est
+  // facturable aujourd'hui, et un propriétaire d'un autre type n'aurait ni
+  // adresse ni NINEA à mettre sur une facture.
+  if (contract.ownerType !== "school") return;
+  const school = await ctx.db.get(contract.ownerId as Id<"schools">);
+  if (!school) return;
+
+  const year = new Date(now).getUTCFullYear();
+  const last = await ctx.db
+    .query("invoices")
+    .withIndex("by_year_sequence", (q) => q.eq("year", year))
+    .order("desc")
+    .first();
+
+  const sequence = nextSequence(last?.sequence ?? null);
+
+  const invoiceId = await ctx.db.insert("invoices", {
+    year,
+    sequence,
+    number: formatInvoiceNumber(year, sequence),
+    schoolId: school._id,
+    subscriptionId: contract._id,
+    installmentId: installment._id,
+    amountFcfa: installment.amountFcfa,
+    issuedAt: now,
+    recipientEmail: school.contactEmail,
+  });
+
+  await ctx.scheduler.runAfter(0, internal.billingInvoice.sendInvoice, {
+    invoiceId,
+  });
 }
 
 /**

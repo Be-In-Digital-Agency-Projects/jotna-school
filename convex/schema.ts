@@ -913,6 +913,51 @@ export default defineSchema({
   // alors qu'un adulte qui déclare « cette tranche est réglée » engage l'école
   // exactement comme celui qui active un contrat. Mêmes principes que les
   // autres journaux : copié, jamais relu pour autoriser.
+  /**
+   * La facture d'une tranche réglée.
+   *
+   * ELLE NAÎT AVEC LE SOLDE, dans la transaction de `billing.creditInstallment`
+   * — le seul endroit du dépôt qui passe une tranche à `paid`, appelé par le
+   * webhook du prestataire ET par le règlement constaté à la main. Une facture
+   * créée par une seconde mutation, ou par le planificateur, laisserait exister
+   * une tranche payée sans facture : l'école aurait versé son argent et
+   * n'aurait rien à comptabiliser.
+   *
+   * LE NUMÉRO EST SÉQUENTIEL PAR ANNÉE ET SANS TROU, ce qu'exige une facture
+   * sénégalaise. Le rang s'alloue en lisant le dernier de l'année par
+   * `by_year_sequence` : une mutation Convex est une transaction sérialisable,
+   * donc deux encaissements simultanés ne peuvent pas obtenir le même rang.
+   * C'est aussi pourquoi il n'est ni tiré au sort ni dérivé d'un identifiant.
+   *
+   * `number` EST DÉNORMALISÉ depuis `year` et `sequence`. Il est ce que l'école
+   * cite au téléphone et ce qu'un comptable cherche ; le recalculer à chaque
+   * lecture ferait dépendre l'affichage d'une fonction de formatage qui pourrait
+   * changer après coup, et le numéro d'une facture émise ne change jamais.
+   *
+   * `sentAt` ET `failureReason` DISENT LE SORT DE L'ENVOI, pas celui de la
+   * facture. Une facture existe dès qu'elle est émise, même si le courriel n'est
+   * jamais parti — l'inverse ferait dépendre une pièce comptable de la
+   * disponibilité d'un service tiers.
+   */
+  invoices: defineTable({
+    year: v.number(),
+    sequence: v.number(),
+    /** Le numéro affiché, `FAC-2026-0001` — voir `invoiceRules`. */
+    number: v.string(),
+    schoolId: v.id("schools"),
+    subscriptionId: v.id("subscriptions"),
+    installmentId: v.id("installments"),
+    amountFcfa: v.number(),
+    issuedAt: v.number(),
+    /** L'adresse visée, telle qu'elle était sur la fiche école à l'émission. */
+    recipientEmail: v.string(),
+    sentAt: v.optional(v.number()),
+    failureReason: v.optional(v.string()),
+  })
+    .index("by_year_sequence", ["year", "sequence"])
+    .index("by_school", ["schoolId"])
+    .index("by_installment", ["installmentId"]),
+
   payments: defineTable({
     subscriptionId: v.id("subscriptions"),
     installmentId: v.optional(v.id("installments")),

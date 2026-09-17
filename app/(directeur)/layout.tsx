@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { GraduationCap, LayoutDashboard, Users } from "lucide-react";
+import { FileText, GraduationCap, LayoutDashboard, Users } from "lucide-react";
 
 import { Brand } from "@/components/landing/brand";
 import {
@@ -26,6 +26,7 @@ const sidebarLinks = [
   { href: "/directeur/dashboard", label: "Mon école", icon: LayoutDashboard },
   { href: "/directeur/comptes", label: "Comptes", icon: Users },
   { href: "/directeur/eleves", label: "Élèves", icon: GraduationCap },
+  { href: "/directeur/factures", label: "Factures", icon: FileText },
 ];
 
 /**

@@ -52,6 +52,7 @@ import type * as regenNotificationEmail from "../regenNotificationEmail.js";
 import type * as reports from "../reports.js";
 import type * as reportsEmail from "../reportsEmail.js";
 import type * as resetContent from "../resetContent.js";
+import type * as resetDeployment from "../resetDeployment.js";
 import type * as roleRules from "../roleRules.js";
 import type * as schools from "../schools.js";
 import type * as secureRandom from "../secureRandom.js";
@@ -117,6 +118,7 @@ declare const fullApi: ApiFromModules<{
   reports: typeof reports;
   reportsEmail: typeof reportsEmail;
   resetContent: typeof resetContent;
+  resetDeployment: typeof resetDeployment;
   roleRules: typeof roleRules;
   schools: typeof schools;
   secureRandom: typeof secureRandom;

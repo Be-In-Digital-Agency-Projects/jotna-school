@@ -137,23 +137,6 @@ export default defineSchema({
     isVariation: v.optional(v.boolean()), // Decision 52
     originalExerciseId: v.optional(v.id("exercises")), // Decision 52 — traceability
 
-    // MÊME DÉRIVE QUE DANS `exerciseExplanations`, MAIS SUR UNE AUTRE TABLE —
-    // et c'est l'information qui compte. La fonctionnalité de génération de
-    // médias qui a laissé `audio`, `video` et `boardSpecs` là-bas a aussi posé
-    // la main ici : `promptAudio` (l'énoncé lu à voix haute — voix, durée,
-    // identifiant de stockage) et son horodatage de demande. Aucun code de ce
-    // dépôt ne les écrit ni ne les lit.
-    //
-    // Elle peut donc en avoir touché d'autres. Convex s'arrêtant au premier
-    // champ fautif du premier document fautif, chaque poussée n'en révèle
-    // qu'un : la seule façon de voir l'ensemble d'un coup est le schéma généré
-    // du tableau de bord (Data → la table → Schema), table par table.
-    //
-    // `v.any()` pour la même raison qu'ailleurs : personne ne lit ces champs,
-    // un validateur précis ne protégerait rien et casserait la poussée
-    // suivante sur la première variante non devinée.
-    promptAudio: v.optional(v.any()),
-    promptAudioRequestedAt: v.optional(v.any()),
   })
     .index("by_topicId", ["topicId"])
     .index("by_palierId", ["palierId"])
@@ -504,6 +487,7 @@ export default defineSchema({
     generatedAt: v.number(),
     model: v.string(),
     traceId: v.optional(v.string()),
+
   }).index("by_exercise", ["exerciseId"]),
 
   // ---------------------------------------------------------------------------

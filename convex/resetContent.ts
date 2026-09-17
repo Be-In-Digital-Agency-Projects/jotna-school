@@ -17,13 +17,23 @@ import { internalMutation } from "./_generated/server";
  * développement n'a pas d'appelant porteur de session à qui demander un rôle,
  * donc on ne le garde pas — on le retire de la surface.
  *
- * CONSÉQUENCE ASSUMÉE, IDENTIQUE À CELLE DE `seedDefaults` : elle n'a plus
- * aucun appelant, et une fonction interne ne s'appelle que depuis une autre
- * fonction Convex. Tant que personne ne la câble explicitement, elle ne
- * s'exécute pas. C'est voulu : mieux vaut un effacement à rebrancher à dessein
- * qu'un effacement que n'importe qui déclenche. La ligne d'usage
- * `pnpx convex run resetContent:wipeAll` a donc été retirée plutôt que laissée
- * à vérifier par le prochain lecteur.
+ * CE QU'« INTERNE » VEUT DIRE, EXACTEMENT. Ce commentaire affirmait qu'une
+ * fonction interne « ne s'appelle que depuis une autre fonction Convex » et que
+ * la ligne `convex run resetContent:wipeAll` ne marchait donc plus. C'est FAUX,
+ * et la CLI le montre : `convex run` pose une authentification d'ADMINISTRATION
+ * (`client.setAdminAuth`, dans `convex/dist/cjs/cli/lib/run.js`), qui atteint
+ * les fonctions internes comme le fait le tableau de bord. La commande marche.
+ *
+ * Ce qui change vraiment — et c'était bien le but — est ailleurs : une
+ * `mutation` publique est appelable par QUICONQUE connaît l'URL du déploiement,
+ * sans rien posséder. Une fonction interne exige la clé d'administration, que
+ * seul le propriétaire du déploiement détient. On n'a pas fermé la porte, on
+ * l'a mise sous clé. C'est la protection recherchée ; la formulation précédente
+ * en promettait une autre, plus forte, qui n'existe pas.
+ *
+ * POUR UNE REMISE À ZÉRO COMPLÈTE, CE N'EST PAS ICI. Voir
+ * `convex/resetDeployment.ts` : `wipeAll` ne couvre que les sept tables
+ * ci-dessous — ni `exerciseExplanations`, ni les écoles, ni la facturation.
  *
  * SON NOM PROMET PLUS QU'ELLE NE FAIT, et c'était déjà vrai : `.take(500)` par
  * table, donc au plus cinq cents lignes chacune. Au-delà, elle laisse des

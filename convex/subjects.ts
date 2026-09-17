@@ -1,6 +1,13 @@
-import { query, mutation, internalMutation } from "./_generated/server";
+import {
+  query,
+  mutation,
+  internalMutation,
+  type QueryCtx,
+} from "./_generated/server";
 import { ConvexError, v } from "convex/values";
-import { catalogReadable, callerIsAdmin } from "./access";
+import { catalogAccess, callerIsAdmin } from "./access";
+import { isHiddenClass } from "./curriculum";
+import type { Id } from "./_generated/dataModel";
 
 // ---------------------------------------------------------------------------
 // Queries — IDENTITÉ ET DROIT D'ACCÈS, en une seule décision.
@@ -28,22 +35,62 @@ import { catalogReadable, callerIsAdmin } from "./access";
 // Une requête ne lève jamais : même valeur vide que le chemin nominal.
 // ---------------------------------------------------------------------------
 
+/**
+ * Les matières dont TOUTES les thématiques sont masquées.
+ *
+ * TROIS MATIÈRES N'EXISTENT QUE POUR LE LYCÉE sur ce déploiement — Philosophie,
+ * SVT, Physique-Chimie. Masquer leurs thématiques sans masquer la matière
+ * laisserait à l'élève trois cartes qui s'ouvrent sur rien : le contenu de
+ * collège transparaîtrait par son absence.
+ *
+ * UNE MATIÈRE SANS AUCUNE THÉMATIQUE N'EST PAS CONCERNÉE. Six autres sont vides
+ * depuis toujours et s'affichent déjà ainsi ; les faire disparaître ici serait
+ * un autre changement, qui ne regarde pas le masquage.
+ */
+async function subjectsHiddenWhole(
+  ctx: QueryCtx,
+): Promise<ReadonlySet<Id<"subjects">>> {
+  const topics = await ctx.db.query("topics").take(1000);
+
+  const withVisible = new Set<Id<"subjects">>();
+  const withHidden = new Set<Id<"subjects">>();
+  for (const topic of topics) {
+    (isHiddenClass(topic.class) ? withHidden : withVisible).add(topic.subjectId);
+  }
+
+  for (const subjectId of withVisible) withHidden.delete(subjectId);
+  return withHidden;
+}
+
 export const list = query({
   args: {},
   handler: async (ctx) => {
-    // Identité ET paywall en une lecture — voir `catalogReadable`.
-    if (!(await catalogReadable(ctx))) return [];
+    // Identité, paywall ET niveaux masqués en une lecture — voir `catalogAccess`.
+    const access = await catalogAccess(ctx);
+    if (!access.readable) return [];
 
     const subjects = await ctx.db.query("subjects").take(50);
-    return subjects.sort((a, b) => a.order - b.order);
+    if (access.hiddenClasses) return subjects.sort((a, b) => a.order - b.order);
+
+    const hidden = await subjectsHiddenWhole(ctx);
+    return subjects
+      .filter((subject) => !hidden.has(subject._id))
+      .sort((a, b) => a.order - b.order);
   },
 });
 
 export const getById = query({
   args: { id: v.id("subjects") },
   handler: async (ctx, args) => {
-    // Identité ET paywall en une lecture — voir `catalogReadable`.
-    if (!(await catalogReadable(ctx))) return null;
+    // Identité, paywall ET niveaux masqués en une lecture — voir `catalogAccess`.
+    const access = await catalogAccess(ctx);
+    if (!access.readable) return null;
+
+    // Même règle que la liste : une matière entièrement masquée répond comme
+    // une matière absente, sinon son identifiant rouvrirait la porte.
+    if (!access.hiddenClasses && (await subjectsHiddenWhole(ctx)).has(args.id)) {
+      return null;
+    }
 
     return await ctx.db.get(args.id);
   },

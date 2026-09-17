@@ -1,6 +1,7 @@
 import { internalQuery } from "./_generated/server";
 import { v } from "convex/values";
 import { blockedStudent } from "./access";
+import { isHiddenClass } from "./curriculum";
 
 // ---------------------------------------------------------------------------
 // Queries
@@ -56,11 +57,14 @@ export const getSubjectProgress = internalQuery({
     // l'appelant.
     if (await blockedStudent(ctx)) return null;
 
-    // Get all topics for this subject
-    const topics = await ctx.db
-      .query("topics")
-      .withIndex("by_subjectId", (q) => q.eq("subjectId", args.subjectId))
-      .take(200);
+    // Get all topics for this subject — hors niveaux masqués
+    // (`convex/curriculum.ts`) : l'élève ne peut pas les atteindre.
+    const topics = (
+      await ctx.db
+        .query("topics")
+        .withIndex("by_subjectId", (q) => q.eq("subjectId", args.subjectId))
+        .take(1000)
+    ).filter((topic) => !isHiddenClass(topic.class));
 
     const topicIds = new Set(topics.map((t) => t._id));
 

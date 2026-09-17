@@ -8,6 +8,7 @@ import type { Doc } from "./_generated/dataModel";
 import { ConvexError, v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { callerIsAdmin, callerIsStaff, callerStaffProfile } from "./access";
+import { isHiddenClass } from "./curriculum";
 
 // ---------------------------------------------------------------------------
 // Queries
@@ -35,6 +36,14 @@ export const listByTopic = query({
   handler: async (ctx, args) => {
     // Réservé aux adultes : rend le document brut, corrigé compris.
     if (!(await callerIsStaff(ctx))) return [];
+
+    // LE NIVEAU MASQUÉ SE REFUSE AUSSI AU PROFESSEUR. Il ne peut pas découvrir
+    // la thématique — `topics.listAll` la filtre — mais un identifiant suffirait
+    // sinon à lire le contenu de collège que personne ne sert encore. L'admin,
+    // lui, le prépare : c'est le seul rôle qui passe (`convex/curriculum.ts`).
+    const topic = await ctx.db.get(args.topicId);
+    if (topic === null) return [];
+    if (isHiddenClass(topic.class) && !(await callerIsAdmin(ctx))) return [];
 
     const exercises = await ctx.db
       .query("exercises")

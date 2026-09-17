@@ -6,6 +6,7 @@ import {
   type QueryCtx,
 } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
+import { VISIBLE_CLASSES, visibleClassValidator } from "./curriculum";
 import {
   callerAdminProfile,
   callerIsAdmin,
@@ -194,28 +195,14 @@ const MEMBERSHIP_EVENTS_LIMIT = 50;
 const SEAT_AMENDMENTS_LIMIT = 20;
 
 /**
- * Niveaux, dans l'ordre scolaire — recopié de `classEnum`
- * (`convex/schema.ts:10`), que le schéma n'exporte pas. `paliers/index.ts:32`
- * porte déjà la même copie pour la même raison. Le type vient du schéma, lui :
- * un niveau inventé ne compilerait pas.
+ * Niveaux, dans l'ordre scolaire. `VISIBLE_CLASSES` est déjà cette liste, dans
+ * cet ordre — les deux copies qui vivaient ici et dans `paliers/index.ts` ont
+ * fusionné dans `convex/curriculum.ts`, qui décide aussi lesquelles se
+ * montrent.
  */
-const CLASS_ORDER: Doc<"schoolClasses">["class"][] = [
-  "CI",
-  "CP",
-  "CE1",
-  "CE2",
-  "CM1",
-  "CM2",
-];
+const CLASS_ORDER: readonly Doc<"schoolClasses">["class"][] = VISIBLE_CLASSES;
 
-const classValidator = v.union(
-  v.literal("CI"),
-  v.literal("CP"),
-  v.literal("CE1"),
-  v.literal("CE2"),
-  v.literal("CM1"),
-  v.literal("CM2"),
-);
+const classValidator = visibleClassValidator;
 
 /**
  * Les SIX statuts du schéma, alors que `recordSubscription` n'en accepte que

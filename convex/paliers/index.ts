@@ -15,6 +15,10 @@ import {
 import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
 import {
+  assertVisibleClass,
+  visibleClassValidator,
+} from "../curriculum";
+import {
   buildPalierBasePrompt,
   buildPalierBaseSystemPrompt,
   buildVariationPrompt,
@@ -60,14 +64,7 @@ const PALIER_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 const REGEN_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const REGEN_HARD_CAP = 3;
 
-const classValidator = v.union(
-  v.literal("CI"),
-  v.literal("CP"),
-  v.literal("CE1"),
-  v.literal("CE2"),
-  v.literal("CM1"),
-  v.literal("CM2"),
-);
+const classValidator = visibleClassValidator;
 
 const exerciseTypeValidator = v.union(
   v.literal("qcm"),
@@ -897,7 +894,7 @@ export const regenerateFailedExercises = action({
     }
 
     const systemPrompt = buildVariationSystemPrompt({
-      class: palier.class,
+      class: assertVisibleClass(palier.class),
       failed: failed.map((f) => ({
         concept: f.concept,
         statement: f.statement,
@@ -908,7 +905,7 @@ export const regenerateFailedExercises = action({
       topic: topic.name,
     });
     const userPrompt = buildVariationPrompt({
-      class: palier.class,
+      class: assertVisibleClass(palier.class),
       failed: failed.map((f) => ({
         concept: f.concept,
         statement: f.statement,

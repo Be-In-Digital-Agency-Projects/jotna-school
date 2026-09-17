@@ -1,9 +1,7 @@
 import { query, mutation } from "./_generated/server";
 import { ConvexError, v } from "convex/values";
-import {
-  catalogReadable,
-  callerIsAdmin,
-} from "./access";
+import { catalogAccess, callerIsAdmin } from "./access";
+import { isHiddenClass } from "./curriculum";
 
 // ---------------------------------------------------------------------------
 // Queries — IDENTITÉ ET DROIT D'ACCÈS, en une seule décision.
@@ -34,34 +32,54 @@ import {
 export const listAll = query({
   args: {},
   handler: async (ctx) => {
-    // Identité ET paywall en une lecture — voir `catalogReadable`.
-    if (!(await catalogReadable(ctx))) return [];
+    // Identité, paywall ET niveaux masqués en une lecture — voir `catalogAccess`.
+    const access = await catalogAccess(ctx);
+    if (!access.readable) return [];
 
-    return await ctx.db.query("topics").take(200);
+    // LE PLAFOND A MONTÉ AVEC LA BASE. Le collège et le lycée ajoutent 200
+    // thématiques que le client ne verra pas : à 200 lignes lues, le filtre
+    // ci-dessous pouvait n'en laisser passer qu'une poignée d'élémentaire.
+    const topics = await ctx.db.query("topics").take(1000);
+    if (access.hiddenClasses) return topics;
+    return topics.filter((topic) => !isHiddenClass(topic.class));
   },
 });
 
 export const listBySubject = query({
   args: { subjectId: v.id("subjects") },
   handler: async (ctx, args) => {
-    // Identité ET paywall en une lecture — voir `catalogReadable`.
-    if (!(await catalogReadable(ctx))) return [];
+    // Identité, paywall ET niveaux masqués en une lecture — voir `catalogAccess`.
+    const access = await catalogAccess(ctx);
+    if (!access.readable) return [];
 
     const topics = await ctx.db
       .query("topics")
       .withIndex("by_subjectId", (q) => q.eq("subjectId", args.subjectId))
-      .take(200);
-    return topics.sort((a, b) => a.order - b.order);
+      .take(1000);
+    const visible = access.hiddenClasses
+      ? topics
+      : topics.filter((topic) => !isHiddenClass(topic.class));
+    return visible.sort((a, b) => a.order - b.order);
   },
 });
 
 export const getById = query({
   args: { id: v.id("topics") },
   handler: async (ctx, args) => {
-    // Identité ET paywall en une lecture — voir `catalogReadable`.
-    if (!(await catalogReadable(ctx))) return null;
+    // Identité, paywall ET niveaux masqués en une lecture — voir `catalogAccess`.
+    const access = await catalogAccess(ctx);
+    if (!access.readable) return null;
 
-    return await ctx.db.get(args.id);
+    const topic = await ctx.db.get(args.id);
+    if (topic === null) return null;
+
+    // C'EST ICI QUE LE MASQUAGE TIENT VRAIMENT. Retirer une thématique des
+    // listes ne la rend pas inatteignable : son identifiant suffit à ouvrir
+    // l'écran de session. Un niveau masqué répond donc comme une thématique
+    // absente, et non comme un refus — il n'y a rien à faire deviner.
+    if (!access.hiddenClasses && isHiddenClass(topic.class)) return null;
+
+    return topic;
   },
 });
 

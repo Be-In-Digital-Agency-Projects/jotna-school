@@ -2,6 +2,7 @@ import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { Doc, Id } from "./_generated/dataModel";
+import { isHiddenClass } from "./curriculum";
 import { getConditionText, normalizeRarity } from "./badges";
 import {
   callerIsAdmin,
@@ -224,10 +225,15 @@ export const getStudentDetail = query({
 
       if (!subjectProgress[subject._id]) {
         // Count total topics in subject
-        const allTopics = await ctx.db
-          .query("topics")
-          .withIndex("by_subjectId", (q) => q.eq("subjectId", subject._id))
-          .take(200);
+        // Les niveaux masqués ne comptent pas dans le total : l'élève ne
+        // peut pas les travailler, les inclure afficherait une progression
+        // qu'aucun travail ne ferait monter (`convex/curriculum.ts`).
+        const allTopics = (
+          await ctx.db
+            .query("topics")
+            .withIndex("by_subjectId", (q) => q.eq("subjectId", subject._id))
+            .take(1000)
+        ).filter((topic) => !isHiddenClass(topic.class));
 
         subjectProgress[subject._id] = {
           subjectId: subject._id,
@@ -678,10 +684,13 @@ export const getStudentSubjectMap = query({
     const subject = await ctx.db.get(args.subjectId);
     if (!subject) return null;
 
-    const topics = await ctx.db
-      .query("topics")
-      .withIndex("by_subjectId", (q) => q.eq("subjectId", args.subjectId))
-      .take(200);
+    // Collège et lycée sont en base mais masqués — voir `convex/curriculum.ts`.
+    const topics = (
+      await ctx.db
+        .query("topics")
+        .withIndex("by_subjectId", (q) => q.eq("subjectId", args.subjectId))
+        .take(1000)
+    ).filter((topic) => !isHiddenClass(topic.class));
     topics.sort((a, b) => a.order - b.order);
 
     const allProgress = await ctx.db

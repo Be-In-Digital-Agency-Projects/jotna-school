@@ -144,6 +144,10 @@ export const processBatch = internalAction({
             email: normalized,
             name: row.name,
             role: "student",
+            // Marqueur infalsifiable : voir `createOrUpdateUser` dans
+            // `convex/auth.ts`. Sans lui, l'inscription est refusée — un
+            // compte d'élève est créé par son école, jamais par l'élève.
+            schoolCreated: true,
           } as unknown as Parameters<typeof createAccount>[1]["profile"],
         });
 

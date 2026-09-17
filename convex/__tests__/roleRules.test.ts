@@ -1,34 +1,50 @@
-import { describe, it, expect } from "vitest";
-import { decideSignupRole } from "../roleRules";
+import { describe, expect, it } from "vitest";
 
-describe("decideSignupRole", () => {
-  it("accepte les deux rôles sans autorité", () => {
-    expect(decideSignupRole("parent")).toBe("parent");
-    expect(decideSignupRole("student")).toBe("student");
+import { decideProfileRole, SELF_SIGNUP_CLOSED } from "../roleRules";
+
+describe("decideProfileRole — inscription libre", () => {
+  it("refuse tout compte qui se crée tout seul, quel que soit le rôle", () => {
+    for (const role of [
+      "student",
+      "parent",
+      "professeur",
+      "directeur",
+      "admin",
+      undefined,
+    ]) {
+      expect(() =>
+        decideProfileRole({ rawRole: role, schoolCreated: false }),
+      ).toThrow(SELF_SIGNUP_CLOSED);
+    }
   });
+});
 
-  it("REFUSE les trois rôles qui confèrent une autorité", () => {
-    // `professeur` est le cas qui motive ce module : il était accepté, et
-    // `callerIsStaff` le reconnaît comme « membre du personnel » partout dans
-    // le dépôt. Les deux autres ne l'ont jamais été, mais la règle vaut pour
-    // les trois — et une règle qui ne vaut que pour un cas se périme.
-    for (const role of ["professeur", "directeur", "admin"]) {
-      expect(() => decideSignupRole(role)).toThrow("Rôle non autorisé");
+describe("decideProfileRole — création par une école", () => {
+  it("accepte les quatre rôles qu'une école pose", () => {
+    for (const role of ["directeur", "professeur", "parent", "student"]) {
+      expect(decideProfileRole({ rawRole: role, schoolCreated: true })).toBe(
+        role,
+      );
     }
   });
 
-  it("refuse aussi ce qui ne ressemble à aucun rôle", () => {
-    for (const value of ["", "PARENT", "Professeur", "teacher", "{}"]) {
-      expect(() => decideSignupRole(value)).toThrow("Rôle non autorisé");
+  it("refuse `admin`, qui se pose hors de l'application", () => {
+    expect(() =>
+      decideProfileRole({ rawRole: "admin", schoolCreated: true }),
+    ).toThrow("Rôle non autorisé");
+  });
+
+  it("refuse un rôle inventé", () => {
+    for (const value of ["", "  ", "Parent", "eleve", "teacher"]) {
+      expect(() =>
+        decideProfileRole({ rawRole: value, schoolCreated: true }),
+      ).toThrow("Rôle non autorisé");
     }
   });
 
-  it("ne retombe sur `student` QUE pour un rôle absent", () => {
-    // La nuance qui porte tout : un formulaire sans rôle est une inscription
-    // incomplète, pas une demande refusée. Un rôle PRÉSENT mais interdit doit
-    // lever, sans quoi une demande de compte professeur deviendrait un compte
-    // élève sans un mot.
-    expect(decideSignupRole(undefined)).toBe("student");
-    expect(() => decideSignupRole("professeur")).toThrow();
+  it("refuse plutôt que de retomber sur un rôle par défaut", () => {
+    expect(() =>
+      decideProfileRole({ rawRole: undefined, schoolCreated: true }),
+    ).toThrow("Rôle manquant");
   });
 });

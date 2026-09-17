@@ -1678,6 +1678,18 @@ function StaffSection({
 }) {
   const addStaff = useMutation(api.schools.addStaff);
   const removeStaff = useMutation(api.schools.removeStaff);
+  const createStaffAccount = useAction(api.schoolAccounts.createStaffAccount);
+
+  const [newName, setNewName] = useState("");
+  const [newEmail, setNewEmail] = useState("");
+  const [newRole, setNewRole] = useState<StaffRole>("directeur");
+  const [creating, setCreating] = useState(false);
+  const [createdAccount, setCreatedAccount] = useState<{
+    name: string;
+    loginId: string;
+    activationCode: string;
+    channel: "email" | "printed";
+  } | null>(null);
 
   const [profileId, setProfileId] = useState("");
   const [staffRole, setStaffRole] = useState<StaffRole>("professeur");
@@ -1719,6 +1731,33 @@ function StaffSection({
     }
   };
 
+  const handleCreate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCreating(true);
+    setError(null);
+    setCreatedAccount(null);
+    try {
+      const result = await createStaffAccount({
+        schoolId,
+        name: newName,
+        staffRole: newRole,
+        ...(newEmail.trim() === "" ? {} : { email: newEmail.trim() }),
+      });
+      setCreatedAccount({
+        name: result.name,
+        loginId: result.loginId,
+        activationCode: result.activationCode,
+        channel: result.channel,
+      });
+      setNewName("");
+      setNewEmail("");
+    } catch (err) {
+      setError(refusalMessage(err, "Erreur lors de la création du compte"));
+    } finally {
+      setCreating(false);
+    }
+  };
+
   const handleRemove = async (row: StaffRow) => {
     setError(null);
     try {
@@ -1742,6 +1781,117 @@ function StaffSection({
           {error}
         </div>
       )}
+
+      {/*
+        CRÉER LE COMPTE, PUIS LE RATTACHER — deux gestes distincts, et c'est
+        voulu. `addStaff` en dessous rattache un profil qui EXISTE ; rien dans
+        l'application ne créait un profil `directeur` ou `professeur`, donc ce
+        formulaire-là n'avait jamais de candidat à proposer et le rôle
+        `directeur` était inatteignable. C'est ici que naît le premier directeur
+        d'une école ; ensuite il crée lui-même ses professeurs et ses parents
+        depuis son propre espace.
+      */}
+      <form
+        onSubmit={handleCreate}
+        className="mb-4 flex flex-wrap items-end gap-3 rounded-xl border-2 border-indigo-200 bg-indigo-50/40 p-4"
+      >
+        <div className="w-full">
+          <h3 className="text-sm font-semibold text-gray-900">
+            Créer un compte
+          </h3>
+          <p className="text-xs text-gray-600">
+            Le compte naît sans mot de passe : la personne le choisit en
+            l&apos;activant avec le code ci-dessous.
+          </p>
+        </div>
+        <div>
+          <label className="mb-1 block text-sm font-medium text-gray-700">
+            Rôle
+          </label>
+          <select
+            value={newRole}
+            onChange={(e) => {
+              const next = STAFF_ROLES.find((role) => role === e.target.value);
+              if (next) setNewRole(next);
+            }}
+            className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+          >
+            {STAFF_ROLES.map((role) => (
+              <option key={role} value={role}>
+                {STAFF_ROLE_LABEL[role]}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="min-w-48 flex-1">
+          <label className="mb-1 block text-sm font-medium text-gray-700">
+            Nom
+          </label>
+          <input
+            required
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            placeholder="ex : Awa Diop"
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+          />
+        </div>
+        <div className="min-w-48 flex-1">
+          <label className="mb-1 block text-sm font-medium text-gray-700">
+            E-mail <span className="text-gray-400">(optionnel)</span>
+          </label>
+          <input
+            type="email"
+            value={newEmail}
+            onChange={(e) => setNewEmail(e.target.value)}
+            placeholder="vide = code imprimé"
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+          />
+        </div>
+        <button
+          type="submit"
+          disabled={creating}
+          className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+        >
+          {creating ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <UserPlus className="h-4 w-4" />
+          )}
+          Créer le compte
+        </button>
+
+        {createdAccount && (
+          <div className="w-full rounded-lg border-2 border-green-300 bg-green-50 p-4">
+            <p className="text-sm font-semibold text-green-900">
+              Compte créé pour {createdAccount.name}
+            </p>
+            <p className="mt-1 text-xs text-green-800">
+              {createdAccount.channel === "email"
+                ? "Le code part par e-mail. Notez-le : un message qui n'arrive pas ne doit pas bloquer la personne."
+                : "Remettez ces deux lignes à la personne."}
+            </p>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              <div className="rounded bg-white p-2">
+                <p className="text-xs uppercase text-gray-500">Identifiant</p>
+                <p className="font-mono text-sm font-semibold">
+                  {createdAccount.loginId}
+                </p>
+              </div>
+              <div className="rounded bg-white p-2">
+                <p className="text-xs uppercase text-gray-500">
+                  Code d&apos;activation
+                </p>
+                <p className="font-mono text-sm font-bold tracking-widest">
+                  {createdAccount.activationCode}
+                </p>
+              </div>
+            </div>
+            <p className="mt-2 text-xs text-green-900">
+              Ce code ne sera plus jamais affiché.
+            </p>
+          </div>
+        )}
+      </form>
 
       <form
         onSubmit={handleAdd}

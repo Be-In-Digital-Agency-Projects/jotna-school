@@ -467,6 +467,84 @@ export async function callerStaffProfile(
 }
 
 /**
+ * Nombre maximum d'écoles qu'un membre du personnel dirige.
+ *
+ * Un directeur en porte une, deux quand un groupe scolaire a deux
+ * établissements. La borne existe pour que la lecture ne grandisse pas avec la
+ * table, pas pour contraindre un cas réel.
+ */
+const SCHOOLS_PER_DIRECTEUR_LIMIT = 4;
+
+/** Ce qu'un appelant a le droit d'administrer, et à quel titre. */
+export type SchoolAuthority = {
+  profile: Doc<"profiles">;
+  /** Vrai pour un `admin` : il administre TOUTES les écoles. */
+  platformWide: boolean;
+  /** Les écoles qu'il dirige. Vide pour un `admin`, qui n'en a pas besoin. */
+  schoolIds: Id<"schools">[];
+};
+
+/**
+ * À quel titre l'appelant peut administrer une école — ou `null`.
+ *
+ * DEUX TITRES, PAS UN. L'`admin` de la plateforme administre toutes les écoles ;
+ * un `directeur` administre les siennes, et seulement les siennes. Les deux
+ * écrivent par les mêmes mutations, donc le cadrage doit vivre en un seul
+ * endroit : deux copies de cette règle auraient fini par diverger, et la copie
+ * la plus permissive aurait décidé.
+ *
+ * LE RÔLE NE SUFFIT PAS POUR UN DIRECTEUR. `profiles.role === "directeur"` dit
+ * ce qu'une personne EST, pas ce qu'elle dirige : c'est `schoolStaff`, en statut
+ * `active`, qui porte le lien. Un directeur retiré de son école garde son rôle
+ * et ne doit plus rien pouvoir y écrire.
+ *
+ * Ne lève jamais : les requêtes rendent un statut, et seules les mutations
+ * transforment `null` en refus (spec §5.4).
+ */
+export async function callerSchoolAuthority(
+  ctx: QueryCtx | MutationCtx,
+): Promise<SchoolAuthority | null> {
+  const profile = await currentProfile(ctx);
+  if (!profile) return null;
+
+  if (profile.role === "admin") {
+    return { profile, platformWide: true, schoolIds: [] };
+  }
+  if (profile.role !== "directeur") return null;
+
+  const rows = await ctx.db
+    .query("schoolStaff")
+    .withIndex("by_profile", (q) => q.eq("profileId", profile._id))
+    .take(SCHOOLS_PER_DIRECTEUR_LIMIT);
+
+  const schoolIds = rows
+    .filter((row) => row.staffRole === "directeur" && row.status === "active")
+    .map((row) => row.schoolId);
+
+  if (schoolIds.length === 0) return null;
+  return { profile, platformWide: false, schoolIds };
+}
+
+/**
+ * L'autorité de l'appelant sur CETTE école, ou `null`.
+ *
+ * C'est la question que posent toutes les écritures d'un espace directeur, et
+ * elle n'est pas la même que « est-il directeur ? » : un directeur de l'école A
+ * qui reçoit l'identifiant de l'école B ne doit rien pouvoir y faire. Sans ce
+ * cadrage, l'espace directeur serait une console d'administration de toute la
+ * plateforme déguisée.
+ */
+export async function callerAuthorityOverSchool(
+  ctx: QueryCtx | MutationCtx,
+  schoolId: Id<"schools">,
+): Promise<SchoolAuthority | null> {
+  const authority = await callerSchoolAuthority(ctx);
+  if (!authority) return null;
+  if (authority.platformWide) return authority;
+  return authority.schoolIds.includes(schoolId) ? authority : null;
+}
+
+/**
  * Nombre maximum de classes lues pour un professeur.
  *
  * Le dépôt ne modélise que six niveaux (CI → CM2) et une classe est une

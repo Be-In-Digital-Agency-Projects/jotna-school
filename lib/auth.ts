@@ -22,31 +22,18 @@ type SignIn = (
 
 type SignOut = () => Promise<void>;
 
-// ── Registration ────────────────────────────────────────────────────────────
-
-export interface RegisterParams {
-  email: string;
-  password: string;
-  name: string;
-  role: "parent" | "student" | "professeur";
-}
-
-/**
- * Register a new user with email and password.
- * A profile row (with the given role) is created automatically on the backend.
- */
-export async function register(
-  signIn: SignIn,
-  params: RegisterParams,
-): Promise<{ signingIn: boolean }> {
-  return signIn("password", {
-    flow: "signUp",
-    email: params.email,
-    password: params.password,
-    name: params.name,
-    role: params.role,
-  });
-}
+// ── Inscription ─────────────────────────────────────────────────────────────
+//
+// IL N'Y A PLUS DE FONCTION `register`, ET C'EST VOLONTAIRE. Aucun compte ne se
+// crée depuis le navigateur : c'est l'école qui crée ceux de ses professeurs, de
+// ses parents et de ses élèves, et la personne ne fait que les ACTIVER
+// (`convex/schoolAccounts.activateAccount`). Le serveur refuse désormais toute
+// inscription libre — voir `convex/roleRules.decideProfileRole` — donc un
+// helper client aurait promis un geste que l'API rejette.
+//
+// Ce helper typait par ailleurs `role: "parent" | "student" | "professeur"`
+// alors que `professeur` était déjà refusé côté serveur : le formulaire offrait
+// un rôle impossible.
 
 // ── Login ───────────────────────────────────────────────────────────────────
 
@@ -97,11 +84,19 @@ export function clearConvexAuthTokens(): void {
 
 // ── Role-based home path ────────────────────────────────────────────────────
 
-export type Role = "admin" | "parent" | "student" | "professeur";
+export type Role = "admin" | "parent" | "student" | "professeur" | "directeur";
 
 /**
- * Returns the default landing path for a given profile role.
- * Used by /post-auth to route users after login or signup.
+ * L'écran d'accueil d'un rôle, celui vers lequel `/post-auth` renvoie.
+ *
+ * `directeur` MANQUAIT, ET LE RÔLE ÉTAIT DONC INUTILISABLE. Il existe au schéma,
+ * `schools.addStaff` l'accepte, mais tout directeur qui se connectait retombait
+ * sur le `default` — donc sur `/login`, donc en boucle. Le rôle était posable et
+ * la personne ne pouvait jamais entrer.
+ *
+ * TOUT RÔLE CONNU DOIT AVOIR SA LIGNE ICI, et le `default` ne doit rester que
+ * pour l'absence de profil. Un rôle ajouté au schéma sans être ajouté ici
+ * produit exactement la même boucle, silencieusement.
  */
 export function roleHomePath(role: Role | null | undefined): string {
   switch (role) {
@@ -111,6 +106,8 @@ export function roleHomePath(role: Role | null | undefined): string {
       return "/parent/dashboard";
     case "professeur":
       return "/teacher/dashboard";
+    case "directeur":
+      return "/directeur/dashboard";
     case "student":
       return "/student/home";
     default:

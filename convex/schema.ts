@@ -979,6 +979,42 @@ export default defineSchema({
     // l'écran des billets proposer de réimprimer un billet mort.
     .index("by_student", ["studentId"]),
 
+  /**
+   * Un compte créé PAR une école, en attente de son premier mot de passe.
+   *
+   * POURQUOI UNE TABLE PLUTÔT QU'UN CHAMP SUR `profiles`. Le code est un
+   * SECRET à durée de vie courte, et une école peut en réémettre un : deux
+   * lignes coexistent alors pour le même profil, l'ancienne encore valide
+   * jusqu'à son expiration. Un champ n'en porterait qu'un et forcerait à
+   * choisir entre invalider l'ancien billet — déjà distribué — et refuser le
+   * nouveau.
+   *
+   * LE COMPTE D'AUTHENTIFICATION EXISTE DÉJÀ quand cette ligne est écrite, avec
+   * un secret aléatoire que personne ne voit. C'est délibéré : le profil est
+   * donc assignable à une classe ou rattachable à un enfant AVANT que la
+   * personne ait activé, et rien d'utilisable ne traîne en attendant. Le contre-
+   * modèle est celui des élèves (`studentImportRun.initialPassword`), où le mot
+   * de passe est égal au code imprimé — tenable pour un enfant dont le compte
+   * ne porte que des tentatives d'exercices, pas pour un adulte qui lit des
+   * dossiers d'élèves.
+   */
+  accountActivations: defineTable({
+    profileId: v.id("profiles"),
+    schoolId: v.id("schools"),
+    /** L'identifiant de connexion : l'e-mail, ou un identifiant imprimé. */
+    loginId: v.string(),
+    /** Le code d'activation, normalisé — voir `accountRules.normalizeIdentifier`. */
+    code: v.string(),
+    channel: v.union(v.literal("email"), v.literal("printed")),
+    expiresAt: v.number(),
+    activatedAt: v.optional(v.number()),
+    createdBy: v.id("profiles"),
+    createdAt: v.number(),
+  })
+    .index("by_code", ["code"])
+    .index("by_profile", ["profileId"])
+    .index("by_school", ["schoolId"]),
+
   parentLinkCodes: defineTable({
     studentId: v.id("profiles"),
     schoolId: v.id("schools"),

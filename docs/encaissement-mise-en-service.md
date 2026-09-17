@@ -27,13 +27,27 @@ npx convex env set BILLING_PROVIDER paydunya    # repli
 
 ## 0. D'abord, le schéma — sans lui, rien ne marche
 
+**Deux déploiements, et les deux commandes ne visent pas le même.**
+
 ```bash
-npx convex deploy
+npx convex dev      # bac à sable : pousse le schéma et les routes, puis surveille
+npx convex deploy   # PRODUCTION — c'est sa cible par défaut
 ```
 
-À faire **avant** le reste, et une seule fois. Le dépôt ne déploie Convex nulle
-part tout seul : `package.json` n'a que `next build`, et la CI ne lance aucun
-`convex deploy`.
+L'asymétrie mérite d'être lue deux fois, parce qu'elle est la première cause
+d'un webhook qui répond 404 :
+
+| Commande | Cible par défaut | Comment viser l'autre |
+|---|---|---|
+| `npx convex deploy` | **production** | `npx convex dev` pour le bac à sable |
+| `npx convex env set` | **développement** | `--prod` pour la production |
+
+Autrement dit, suivre ce document sans y prendre garde déploierait le code d'un
+côté et poserait les clés de l'autre. **Tant qu'on est en bac à sable, c'est
+`npx convex dev`** — le reste de ce document suppose ce déploiement-là.
+
+À faire **avant** le reste. Le dépôt ne déploie Convex nulle part tout seul :
+`package.json` n'a que `next build`, et la CI ne lance aucun `convex deploy`.
 
 Le cumul des trois plans attend ce déploiement — 14 tables et 5 index (plan 1/3),
 `studentImportRows.by_student` (plan 2/3), et pour le plan 3/3 :
@@ -54,13 +68,20 @@ ouvrez **Développeurs** dans le menu de gauche du tableau de bord.
 
 | Ce qu'il faut | Nom de la variable | D'où ça vient |
 |---|---|---|
-| Clé d'API | `BICTORYS_API_KEY` | délivrée par Bictorys |
+| Clé **privée** | `BICTORYS_API_KEY` | « Ajouter une nouvelle clé privée », à créer |
 | Secret de webhook | `BICTORYS_WEBHOOK_SECRET` | **une chaîne que VOUS choisissez** et déposez sur leur tableau de bord |
 | Le mode | `BICTORYS_MODE` | `test` ou `live` |
 
-Le secret de webhook n'est pas fourni : c'est à vous d'inventer une chaîne
-aléatoire et de la coller dans leur formulaire. Générez-la sérieusement —
-`openssl rand -hex 32` — et ne la réutilisez nulle part ailleurs.
+**La page présente DEUX clés, et c'est la privée qu'il faut.** Elles forment une
+paire — même identifiant, deux préfixes : `test_public-<uuid>.…` s'affiche en
+clair sur le tableau de bord, `test_secret-<uuid>.…` se crée au bouton et n'est
+montré **qu'une seule fois**. C'est cette dernière que le code envoie en
+`X-API-Key`. Copiez-la à l'instant où elle apparaît ; si elle vous échappe,
+créez-en simplement une autre.
+
+Le secret de webhook, lui, n'est pas fourni du tout : c'est à vous d'inventer
+une chaîne aléatoire et de la coller dans leur formulaire. Générez-la
+sérieusement — `openssl rand -hex 32` — et ne la réutilisez nulle part ailleurs.
 
 **Un bouton du tableau de bord bascule entre Test et Live**, avec les mêmes
 identifiants de connexion. Mais **la clé d'API de Live est différente**, et le
@@ -69,11 +90,16 @@ webhook doit être configuré séparément en mode Live.
 ## 2. Poser les variables sur le déploiement Convex
 
 ```bash
-npx convex env set BICTORYS_API_KEY        "…"
-npx convex env set BICTORYS_WEBHOOK_SECRET "…"
+npx convex env set BICTORYS_API_KEY              # SANS valeur : saisie interactive
+npx convex env set BICTORYS_WEBHOOK_SECRET      # SANS valeur : saisie interactive
 npx convex env set BICTORYS_MODE           test
 npx convex env set BILLING_PROVIDER        bictorys
 ```
+
+**Les deux secrets se posent sans valeur sur la ligne**, et la CLI les demande
+alors en interactif. Écrits en argument, ils resteraient dans l'historique du
+shell et seraient lisibles dans la liste des processus le temps de la commande.
+Les deux autres ne sont pas des secrets.
 
 **Par déploiement.** Ces commandes visent le déploiement de développement ;
 ajoutez `--prod` pour la production, qui a ses propres variables. `npx convex
@@ -99,10 +125,11 @@ https://<déploiement>.convex.site/bictorys-webhook
 
 - `.convex.site`, **pas** `.convex.cloud` : les routes HTTP de Convex sont
   servies sur le premier domaine, l'API sur le second.
-- `<déploiement>` est le nom de votre déploiement. Celui qui apparaît en repli
-  dans `convex/linkRequestsEmail.ts` est `impartial-ermine-150` — **à confirmer
-  dans le tableau de bord** (`npx convex dashboard`), et à refaire séparément
-  pour la production, qui porte un autre nom.
+- `<déploiement>` est le nom de votre déploiement. Il est écrit dans
+  `.env.local`, ligne `CONVEX_DEPLOYMENT=dev:<nom>` ; `npx convex dashboard`
+  l'ouvre aussi. Celui qui apparaît en repli dans `convex/linkRequestsEmail.ts`
+  est `impartial-ermine-150`. **La production porte un autre nom** et demande
+  donc son propre webhook.
 - L'URL et le secret se déclarent ensemble, dans **Développeurs** → nouveau
   webhook.
 
@@ -175,12 +202,13 @@ Le parcours est complet sans aucune clé :
 
 ## Récapitulatif
 
-- [ ] `npx convex deploy`
+- [ ] Schéma poussé sur le **bac à sable** : `npx convex dev` (surtout pas
+      `npx convex deploy`, qui vise la production)
 - [ ] Compte Bictorys créé, clé d'API de **test** récupérée
 - [ ] Secret de webhook généré (`openssl rand -hex 32`) et déposé chez eux
 - [ ] `npx convex env set` × 4, avec `BICTORYS_MODE=test`
 - [ ] URL de notification déclarée chez Bictorys (`.convex.site`, pas `.cloud`)
 - [ ] Parcours de l'étape 4 fait en entier, en bac à sable
 - [ ] **`amount + merchantFees` confirmé** par un vrai paiement
-- [ ] Clés de **production** posées avec `--prod`, webhook de production
-      déclaré, puis `BICTORYS_MODE=live`
+- [ ] `npx convex deploy` pour la production, clés de production posées avec
+      `--prod`, webhook de production déclaré, puis `BICTORYS_MODE=live`

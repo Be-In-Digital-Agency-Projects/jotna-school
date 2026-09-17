@@ -489,6 +489,28 @@ export default defineSchema({
     generatedAt: v.number(),
     model: v.string(),
     traceId: v.optional(v.string()),
+
+    // DEUX CHAMPS QUE CE DÉPÔT N'ÉCRIT NI NE LIT NULLE PART, et qui existent
+    // pourtant dans les documents déployés. `git log --all -S boardSpecs` ne
+    // rend rien : ils ont été écrits par du code qui n'a jamais vécu ici —
+    // vraisemblablement l'incarnation précédente de l'application, celle que
+    // Vercel appelle encore « help-courses ». `audio` porte une narration
+    // synthétisée (segments, voix, identifiants de stockage), `boardSpecs` la
+    // description d'un tableau illustré.
+    //
+    // POURQUOI `v.any()` ET NON LEUR VRAIE FORME. Un validateur précis écrit
+    // d'après UN document est un pari sur tous les autres : `boardSpecs` est
+    // déjà une union discriminée (`kind: "objects" | "word" | "keyword"`), avec
+    // des champs différents par branche, et rien ne dit qu'on les a toutes
+    // vues. Le décrire finement ne protégerait aucun code — personne ne lit ces
+    // champs — mais ferait échouer le prochain `convex dev` sur la première
+    // variante oubliée. `v.any()` dit la vérité : donnée héritée, de forme non
+    // garantie, conservée telle quelle.
+    //
+    // NE PAS S'EN SERVIR POUR ÉCRIRE. Si la narration audio revient un jour,
+    // elle mérite son vrai schéma, écrit d'après le code qui la produit.
+    audio: v.optional(v.any()),
+    boardSpecs: v.optional(v.any()),
   }).index("by_exercise", ["exerciseId"]),
 
   // ---------------------------------------------------------------------------

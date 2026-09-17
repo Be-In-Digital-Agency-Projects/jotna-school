@@ -139,24 +139,6 @@ export default defineSchema({
     needsManualReview: v.optional(v.boolean()), // Decision 53 — flagged by factCheck
     isVariation: v.optional(v.boolean()), // Decision 52
     originalExerciseId: v.optional(v.id("exercises")), // Decision 52 — traceability
-
-    // MÊME DÉRIVE QUE DANS `exerciseExplanations`, MAIS SUR UNE AUTRE TABLE —
-    // et c'est l'information qui compte. La fonctionnalité de génération de
-    // médias qui a laissé `audio`, `video` et `boardSpecs` là-bas a aussi posé
-    // la main ici : `promptAudio` (l'énoncé lu à voix haute — voix, durée,
-    // identifiant de stockage) et son horodatage de demande. Aucun code de ce
-    // dépôt ne les écrit ni ne les lit.
-    //
-    // Elle peut donc en avoir touché d'autres. Convex s'arrêtant au premier
-    // champ fautif du premier document fautif, chaque poussée n'en révèle
-    // qu'un : la seule façon de voir l'ensemble d'un coup est le schéma généré
-    // du tableau de bord (Data → la table → Schema), table par table.
-    //
-    // `v.any()` pour la même raison qu'ailleurs : personne ne lit ces champs,
-    // un validateur précis ne protégerait rien et casserait la poussée
-    // suivante sur la première variante non devinée.
-    promptAudio: v.optional(v.any()),
-    promptAudioRequestedAt: v.optional(v.any()),
   })
     .index("by_topicId", ["topicId"])
     .index("by_palierId", ["palierId"])
@@ -507,38 +489,6 @@ export default defineSchema({
     generatedAt: v.number(),
     model: v.string(),
     traceId: v.optional(v.string()),
-
-    // TROIS CHAMPS QUE CE DÉPÔT N'ÉCRIT NI NE LIT NULLE PART, et qui existent
-    // pourtant dans les documents déployés. `git log --all -S boardSpecs` ne
-    // rend rien : ils ont été écrits par du code qui n'a jamais vécu ici —
-    // vraisemblablement l'incarnation précédente de l'application, celle que
-    // Vercel appelle encore « help-courses ». `audio` porte une narration
-    // synthétisée (segments, voix, identifiants de stockage), `boardSpecs` la
-    // description d'un tableau illustré, `video` un rendu vidéo (dimensions,
-    // durée, identifiant de stockage).
-    //
-    // POURQUOI `v.any()` ET NON LEUR VRAIE FORME. Un validateur précis écrit
-    // d'après UN document est un pari sur tous les autres — et le pari a déjà
-    // été perdu une fois ici. Le premier document rencontré donnait `boardSpecs`
-    // avec `kind: "objects" | "word" | "keyword"` ; le deuxième a sorti
-    // `kind: "fraction"` et `kind: "compare"`, aux champs entièrement
-    // différents. Décrire finement ces formes ne protégerait AUCUN code —
-    // personne ne lit ces champs — mais ferait échouer le prochain
-    // `convex dev` sur la première variante non devinée. `v.any()` dit la
-    // vérité : donnée héritée, de forme non garantie, conservée telle quelle.
-    //
-    // LA LISTE PEUT ÊTRE INCOMPLÈTE. Convex s'arrête au PREMIER champ fautif
-    // du PREMIER document fautif : chaque poussée n'en révèle qu'un. `audio` a
-    // été trouvé ainsi, puis `video`. S'il en sort un quatrième, l'ajouter ici
-    // sur le même modèle ; le schéma généré depuis le tableau de bord Convex
-    // (Data → exerciseExplanations → Schema) les donne tous d'un coup.
-    //
-    // NE PAS S'EN SERVIR POUR ÉCRIRE. Si la narration audio ou la vidéo
-    // revient un jour, elle mérite son vrai schéma, écrit d'après le code qui
-    // la produit.
-    audio: v.optional(v.any()),
-    boardSpecs: v.optional(v.any()),
-    video: v.optional(v.any()),
   }).index("by_exercise", ["exerciseId"]),
 
   // ---------------------------------------------------------------------------

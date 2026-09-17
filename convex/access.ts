@@ -308,10 +308,37 @@ export async function blockedStudent(ctx: QueryCtx): Promise<boolean> {
  * servent ailleurs.
  */
 export async function catalogReadable(ctx: QueryCtx): Promise<boolean> {
+  return (await catalogAccess(ctx)).readable;
+}
+
+/**
+ * Ce que l'appelant a le droit de lire du catalogue, en UNE lecture de profil.
+ *
+ * DEUX RÉPONSES PARCE QU'IL Y A DEUX QUESTIONS, et qu'elles se tranchent avec
+ * le même profil :
+ *
+ * - `readable` — le droit d'accès, exactement `catalogReadable` ci-dessus ;
+ * - `hiddenClasses` — le droit de voir le collège et le lycée, que
+ *   `convex/curriculum.ts` masque à tout le monde sauf à un `admin`, parce que
+ *   c'est lui qui les prépare.
+ *
+ * LES POSER SÉPARÉMENT RELIRAIT `profiles`. C'est précisément le doublon que
+ * `catalogReadable` avait supprimé — et il coûtait double aussi en surface
+ * d'invalidation, `profiles.preferences` étant réécrit à chaque série, badge ou
+ * réglage de son.
+ */
+export async function catalogAccess(
+  ctx: QueryCtx,
+): Promise<{ readable: boolean; hiddenClasses: boolean }> {
   const profile = await currentProfile(ctx);
-  if (!profile) return false;
-  if (profile.role !== "student") return true;
-  return (await checkAccess(ctx, profile)).ok;
+  if (!profile) return { readable: false, hiddenClasses: false };
+  if (profile.role !== "student") {
+    return { readable: true, hiddenClasses: profile.role === "admin" };
+  }
+  return {
+    readable: (await checkAccess(ctx, profile)).ok,
+    hiddenClasses: false,
+  };
 }
 
 /** Rôle de l'appelant, ou null s'il n'est pas authentifié ou n'a pas de profil. */

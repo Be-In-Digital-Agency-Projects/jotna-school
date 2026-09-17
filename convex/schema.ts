@@ -490,27 +490,37 @@ export default defineSchema({
     model: v.string(),
     traceId: v.optional(v.string()),
 
-    // DEUX CHAMPS QUE CE DÉPÔT N'ÉCRIT NI NE LIT NULLE PART, et qui existent
+    // TROIS CHAMPS QUE CE DÉPÔT N'ÉCRIT NI NE LIT NULLE PART, et qui existent
     // pourtant dans les documents déployés. `git log --all -S boardSpecs` ne
     // rend rien : ils ont été écrits par du code qui n'a jamais vécu ici —
     // vraisemblablement l'incarnation précédente de l'application, celle que
     // Vercel appelle encore « help-courses ». `audio` porte une narration
     // synthétisée (segments, voix, identifiants de stockage), `boardSpecs` la
-    // description d'un tableau illustré.
+    // description d'un tableau illustré, `video` un rendu vidéo (dimensions,
+    // durée, identifiant de stockage).
     //
     // POURQUOI `v.any()` ET NON LEUR VRAIE FORME. Un validateur précis écrit
-    // d'après UN document est un pari sur tous les autres : `boardSpecs` est
-    // déjà une union discriminée (`kind: "objects" | "word" | "keyword"`), avec
-    // des champs différents par branche, et rien ne dit qu'on les a toutes
-    // vues. Le décrire finement ne protégerait aucun code — personne ne lit ces
-    // champs — mais ferait échouer le prochain `convex dev` sur la première
-    // variante oubliée. `v.any()` dit la vérité : donnée héritée, de forme non
-    // garantie, conservée telle quelle.
+    // d'après UN document est un pari sur tous les autres — et le pari a déjà
+    // été perdu une fois ici. Le premier document rencontré donnait `boardSpecs`
+    // avec `kind: "objects" | "word" | "keyword"` ; le deuxième a sorti
+    // `kind: "fraction"` et `kind: "compare"`, aux champs entièrement
+    // différents. Décrire finement ces formes ne protégerait AUCUN code —
+    // personne ne lit ces champs — mais ferait échouer le prochain
+    // `convex dev` sur la première variante non devinée. `v.any()` dit la
+    // vérité : donnée héritée, de forme non garantie, conservée telle quelle.
     //
-    // NE PAS S'EN SERVIR POUR ÉCRIRE. Si la narration audio revient un jour,
-    // elle mérite son vrai schéma, écrit d'après le code qui la produit.
+    // LA LISTE PEUT ÊTRE INCOMPLÈTE. Convex s'arrête au PREMIER champ fautif
+    // du PREMIER document fautif : chaque poussée n'en révèle qu'un. `audio` a
+    // été trouvé ainsi, puis `video`. S'il en sort un quatrième, l'ajouter ici
+    // sur le même modèle ; le schéma généré depuis le tableau de bord Convex
+    // (Data → exerciseExplanations → Schema) les donne tous d'un coup.
+    //
+    // NE PAS S'EN SERVIR POUR ÉCRIRE. Si la narration audio ou la vidéo
+    // revient un jour, elle mérite son vrai schéma, écrit d'après le code qui
+    // la produit.
     audio: v.optional(v.any()),
     boardSpecs: v.optional(v.any()),
+    video: v.optional(v.any()),
   }).index("by_exercise", ["exerciseId"]),
 
   // ---------------------------------------------------------------------------

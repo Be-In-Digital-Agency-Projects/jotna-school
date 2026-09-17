@@ -45,3 +45,4 @@ next-env.d.ts
 
 # Espace de travail scratch subagent-driven-development
 .superpowers/
+.ci-local/

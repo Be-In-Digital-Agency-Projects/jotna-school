@@ -1,6 +1,9 @@
 {
   "engine": "native",
-  "events": ["push", "pull_request"],
+  "events": [
+    "push",
+    "pull_request"
+  ],
   "skipJobs": [],
   "skipWorkflows": [],
   "allowUnverified": false,

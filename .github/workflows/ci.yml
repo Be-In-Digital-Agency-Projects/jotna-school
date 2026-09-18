@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Lancement à la demande, sur n'importe quelle branche. Les deux déclencheurs
+  # ci-dessus ne couvrent que ce qui vise `main` : sans celui-ci, la seule façon
+  # d'obtenir une vérification est de rejouer un run existant, donc sur un
+  # commit déjà poussé et déjà jugé.
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

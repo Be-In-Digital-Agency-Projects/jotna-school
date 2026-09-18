@@ -46,5 +46,5 @@ next-env.d.ts
 # Espace de travail scratch subagent-driven-development
 .superpowers/
 
-# Sorties de ci-local : secrets locaux, artefacts et rapports d exécution
+# Sorties de ci-local : secrets locaux, artefacts et rapports d’exécution
 .ci-local/

@@ -16,6 +16,10 @@ import {
   graceAnchorFor,
 } from "./access";
 import {
+  formatInvoiceNumber,
+  nextSequence,
+} from "./invoiceRules";
+import {
   decideOverdue,
   decidePaymentApplication,
   decidePostPayment,
@@ -358,6 +362,38 @@ export type ApplyPaymentResult = {
  * indéfiniment ; chaque refus est une valeur de retour, et la route répond 200
  * avec ce que la mutation a décidé.
  */
+/**
+ * La ligne de paiement encore OUVERTE de cette tranche chez ce prestataire.
+ *
+ * Sert à rattacher un webhook dont le jeton ne correspond à aucune ligne, parce
+ * que le prestataire a changé d'identifiant entre l'ouverture et le rappel —
+ * voir le commentaire dans `applyPayment`.
+ *
+ * LA PLUS RÉCENTE quand il y en a plusieurs : un directeur qui ouvre la page de
+ * paiement, l'abandonne, puis recommence, laisse derrière lui une ligne
+ * `initiated` par tentative. C'est la dernière qu'il a suivie jusqu'au bout.
+ * Les précédentes restent ouvertes, et c'est juste : elles n'ont rien encaissé.
+ */
+async function openPaymentFor(
+  ctx: MutationCtx,
+  installmentId: Id<"installments">,
+  provider: Doc<"payments">["provider"],
+): Promise<Doc<"payments"> | null> {
+  const rows = await ctx.db
+    .query("payments")
+    .withIndex("by_installment", (q) => q.eq("installmentId", installmentId))
+    .collect();
+
+  const open = rows.filter(
+    (row) => row.provider === provider && row.status === "initiated",
+  );
+  if (open.length === 0) return null;
+
+  return open.reduce((latest, row) =>
+    row.createdAt > latest.createdAt ? row : latest,
+  );
+}
+
 export const applyPayment = internalMutation({
   args: {
     provider: chargeProviderValidator,
@@ -387,7 +423,7 @@ export const applyPayment = internalMutation({
     // lèverait à CHAQUE rejeu, et PayDunya rappellerait sans fin une route qui
     // ne crédite plus rien. Un invariant qu'on fait entendre ne doit pas
     // bloquer un encaissement réel.
-    const payment = await ctx.db
+    const booked = await ctx.db
       .query("payments")
       .withIndex("by_providerToken", (q) =>
         q.eq("providerToken", args.providerToken),
@@ -397,6 +433,28 @@ export const applyPayment = internalMutation({
     const fallbackId = args.fallbackInstallmentRef
       ? ctx.db.normalizeId("installments", args.fallbackInstallmentRef)
       : null;
+
+    // LE JETON STOCKÉ À L'OUVERTURE N'EST PAS CELUI QUE LE WEBHOOK RENVOIE, et
+    // il a fallu un paiement réel pour le savoir. Chez Bictorys, le parcours
+    // hébergé rend un `chargeId` sur son 202 — c'est ce que `openInvoice`
+    // enregistre — mais le rappel porte l'identifiant de la TRANSACTION, un
+    // autre UUID. Mesuré le 17/09/2026 en bac à sable : charge
+    // `3949430b-ee5a-493d-8c8e-16e03a6f512a`, webhook
+    // `f418ae93-5e49-49ba-9821-7f7e89b2e288`.
+    //
+    // SANS CE RATTRAPAGE, la recherche par jeton échouait, la ligne ouverte
+    // restait `initiated` pour toujours, et une SECONDE ligne était insérée
+    // pour le même encaissement. La tranche était bien soldée — le repli par
+    // `merchantReference` la retrouvait — mais la table accumulait une ligne
+    // morte par paiement, et plus rien ne reliait la charge ouverte au
+    // versement qui l'avait honorée.
+    //
+    // ON RÉCONCILIE PLUTÔT QUE D'INSÉRER : la ligne ouverte de cette tranche,
+    // chez ce prestataire, reçoit le jeton du webhook. Le rejeu redevient alors
+    // idempotent par `by_providerToken`, comme le reste du code le suppose.
+    const payment =
+      booked ?? (fallbackId ? await openPaymentFor(ctx, fallbackId, args.provider) : null);
+
     const installmentId = payment?.installmentId ?? fallbackId;
     const installment = installmentId ? await ctx.db.get(installmentId) : null;
 
@@ -419,6 +477,12 @@ export const applyPayment = internalMutation({
     if (payment) {
       await ctx.db.patch(payment._id, {
         rawPayload: args.rawPayload,
+        // Le jeton du webhook REMPLACE celui de l'ouverture quand ils diffèrent :
+        // c'est lui que le prestataire rejouera, donc lui qui doit rendre le
+        // rejeu idempotent.
+        ...(payment.providerToken !== args.providerToken
+          ? { providerToken: args.providerToken }
+          : {}),
         ...(decision.paymentStatus ? { status: decision.paymentStatus } : {}),
         ...(decision.paymentStatus === "completed" ? { completedAt: now } : {}),
       });
@@ -507,10 +571,85 @@ async function creditInstallment(
     hasRemainingOverdue: remainingAnchor !== null,
   });
 
+  await issueInvoice(ctx, installment, contract, now);
+
   if (!post.activate) return false;
 
   await ctx.db.patch(contract._id, { status: "active" });
   return true;
+}
+
+/**
+ * Émet la facture de la tranche qu'on vient de solder, et planifie son envoi.
+ *
+ * DANS LA TRANSACTION DU SOLDE, ET NON APRÈS. Une facture posée par une seconde
+ * mutation laisserait exister une fenêtre — courte, mais réelle — où la tranche
+ * est payée et où rien ne la documente : l'école a versé son argent et n'a rien
+ * à comptabiliser. Les deux écritures ne se séparent pas, pour la même raison
+ * que l'échéancier naît avec le contrat (`schools.recordSubscription`).
+ *
+ * ELLE EST APPELÉE AVANT LA GARDE `post.activate`, et c'est délibéré : une
+ * tranche réglée se facture même quand elle n'active pas le contrat — deuxième
+ * et troisième tranches, ou contrat déjà actif. Placée après le `return false`,
+ * la facture n'aurait été émise que pour la première tranche de l'année.
+ *
+ * LE RANG S'ALLOUE EN LISANT LE DERNIER DE L'ANNÉE. Une mutation Convex est une
+ * transaction sérialisable : deux encaissements simultanés ne peuvent pas
+ * obtenir le même rang, et la suite reste sans trou — ce qu'exige une facture.
+ *
+ * L'ENVOI EST PLANIFIÉ, PAS ATTENDU. Une mutation ne peut pas appeler Resend,
+ * et surtout : un service de messagerie indisponible ne doit pas faire échouer
+ * l'encaissement. La facture existe en base ; le courriel la suit, et son échec
+ * s'écrit sur la ligne plutôt que d'annuler un paiement.
+ *
+ * ELLE NE FACTURE JAMAIS DEUX FOIS la même tranche. `applyPayment` et
+ * `settleInstallmentOffline` refusent tous deux une tranche déjà `paid` avant
+ * d'arriver ici, mais la garde est reprise sur `by_installment` : un rejeu ne
+ * doit pas consommer un numéro de facture, qui est une suite sans trou.
+ */
+async function issueInvoice(
+  ctx: MutationCtx,
+  installment: Doc<"installments">,
+  contract: Doc<"subscriptions">,
+  now: number,
+): Promise<void> {
+  const already = await ctx.db
+    .query("invoices")
+    .withIndex("by_installment", (q) => q.eq("installmentId", installment._id))
+    .first();
+  if (already) return;
+
+  // Le contrat d'une école porte `ownerType: "school"` ; rien d'autre n'est
+  // facturable aujourd'hui, et un propriétaire d'un autre type n'aurait ni
+  // adresse ni NINEA à mettre sur une facture.
+  if (contract.ownerType !== "school") return;
+  const school = await ctx.db.get(contract.ownerId as Id<"schools">);
+  if (!school) return;
+
+  const year = new Date(now).getUTCFullYear();
+  const last = await ctx.db
+    .query("invoices")
+    .withIndex("by_year_sequence", (q) => q.eq("year", year))
+    .order("desc")
+    .first();
+
+  const sequence = nextSequence(last?.sequence ?? null);
+
+  const invoiceId = await ctx.db.insert("invoices", {
+    year,
+    sequence,
+    number: formatInvoiceNumber(year, sequence),
+    schoolId: school._id,
+    subscriptionId: contract._id,
+    installmentId: installment._id,
+    amountFcfa: installment.amountFcfa,
+    issuedAt: now,
+    recipientEmail: school.contactEmail,
+  });
+
+  await ctx.scheduler.runAfter(0, internal.billingInvoice.sendInvoice, {
+    invoiceId,
+  });
 }
 
 /**

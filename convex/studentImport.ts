@@ -7,7 +7,7 @@ import {
 } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { callerAdminProfile } from "./access";
+import { callerAuthorityOverSchool } from "./access";
 import { pluralCount, seatStateForSchool } from "./schools";
 import {
   IMPORT_ROWS_LIMIT,
@@ -134,8 +134,12 @@ export const openImport = mutation({
     paste: v.string(),
   },
   handler: async (ctx, args) => {
-    const actor = await callerAdminProfile(ctx);
-    if (!actor) throw new ConvexError("Rôle non autorisé");
+    // L'IMPORT APPARTIENT À L'ÉCOLE, pas à la plateforme. Un directeur importe
+    // ses élèves ; l'`admin` le fait aussi, pour dépanner. Même cadrage que
+    // partout ailleurs : `access.callerAuthorityOverSchool`.
+    const authority = await callerAuthorityOverSchool(ctx, args.schoolId);
+    if (!authority) throw new ConvexError("Rôle non autorisé");
+    const actor = authority.profile;
 
     const school = await ctx.db.get(args.schoolId);
     if (!school) throw new ConvexError("École introuvable");
@@ -273,7 +277,7 @@ export const openImport = mutation({
 export const latestJob = query({
   args: { schoolId: v.id("schools") },
   handler: async (ctx, args) => {
-    if (!(await callerAdminProfile(ctx))) return null;
+    if (!(await callerAuthorityOverSchool(ctx, args.schoolId))) return null;
 
     const jobs = await ctx.db
       .query("studentImportJobs")
@@ -298,10 +302,11 @@ export const latestJob = query({
 export const jobTickets = query({
   args: { jobId: v.id("studentImportJobs") },
   handler: async (ctx, args) => {
-    if (!(await callerAdminProfile(ctx))) return [];
-
     const job = await ctx.db.get(args.jobId);
     if (!job) return [];
+    // Le cadrage passe par le job : les billets d'une école ne se lisent que
+    // par qui la dirige. L'ordre est donc inversé — charger, puis autoriser.
+    if (!(await callerAuthorityOverSchool(ctx, job.schoolId))) return [];
 
     const rows = await ctx.db
       .query("studentImportRows")

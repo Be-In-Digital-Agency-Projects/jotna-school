@@ -10,7 +10,6 @@ import {
   Trophy,
   ArrowRight,
   UserCircle,
-  Plus,
   LinkIcon,
   Clock,
 } from "lucide-react";
@@ -67,13 +66,6 @@ export default function ParentChildrenPage() {
             <LinkIcon className="h-4 w-4" />
             Lier un enfant existant
           </Link>
-          <Link
-            href="/parent/children/add"
-            className="inline-flex items-center gap-2 rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-700"
-          >
-            <Plus className="h-4 w-4" />
-            Ajouter un enfant
-          </Link>
         </div>
       </div>
 
@@ -128,12 +120,6 @@ export default function ParentChildrenPage() {
             >
               <LinkIcon className="h-4 w-4" />
               Lier un enfant existant
-            </Link>
-            <Link
-              href="/parent/children/add"
-              className="inline-block rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-700"
-            >
-              Ajouter un enfant
             </Link>
           </div>
         </div>

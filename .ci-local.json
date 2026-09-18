@@ -1,5 +1,5 @@
 {
-  "engine": "auto",
+  "engine": "native",
   "events": [
     "push",
     "pull_request"

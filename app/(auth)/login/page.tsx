@@ -7,7 +7,7 @@ import { Eye, EyeOff } from "lucide-react";
 
 export default function LoginPage() {
   const { signIn } = useAuthActions();
-  const [email, setEmail] = useState("");
+  const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -18,10 +18,14 @@ export default function LoginPage() {
     setError(null);
     setLoading(true);
     try {
-      await signIn("password", { email, password, flow: "signIn" });
+      // `email` est le nom du paramètre attendu par le fournisseur Password,
+      // pas une promesse sur la forme de la valeur : `convex/auth.ts` ne fait
+      // que la normaliser en minuscules. Un identifiant imprimé passe par le
+      // même chemin.
+      await signIn("password", { email: identifier, password, flow: "signIn" });
       window.location.href = "/post-auth";
     } catch {
-      setError("Email ou mot de passe incorrect");
+      setError("Identifiant ou mot de passe incorrect");
     } finally {
       setLoading(false);
     }
@@ -37,13 +41,31 @@ export default function LoginPage() {
         </div>
       )}
 
+      {/*
+        `type="text"` ET NON `type="email"`, ET C'EST UN CORRECTIF. Tous les
+        comptes n'ont pas d'adresse : un élève se connecte avec `CM1A-4821`, un
+        parent sans e-mail avec `FAM-7C4K2M`. Avec `type="email"`, le navigateur
+        refusait lui-même la saisie — « Veuillez inclure "@" dans l'adresse
+        e-mail » — et le formulaire ne partait jamais. Ces comptes étaient donc
+        créés, imprimés, distribués, et inutilisables.
+
+        `autoCapitalize` et `autoCorrect` sont coupés : un téléphone qui met une
+        majuscule ou corrige un code le rend faux, et la personne ne voit pas
+        pourquoi.
+      */}
       <div>
-        <label className="block text-sm font-medium mb-1">Email</label>
+        <label className="block text-sm font-medium mb-1">
+          Identifiant ou e-mail
+        </label>
         <input
-          type="email"
+          type="text"
           required
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck={false}
+          value={identifier}
+          onChange={(e) => setIdentifier(e.target.value)}
+          placeholder="adresse e-mail, ou code reçu de votre école"
           className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500"
         />
       </div>
@@ -87,8 +109,8 @@ export default function LoginPage() {
 
       <p className="text-center text-sm text-gray-600">
         Pas de compte ?{" "}
-        <Link href="/register" className="font-medium text-amber-700 hover:underline">
-          Créer un compte
+        <Link href="/activation" className="font-medium text-amber-700 hover:underline">
+          Activer mon compte
         </Link>
       </p>
     </form>

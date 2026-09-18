@@ -3,7 +3,7 @@
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import Link from "next/link";
-import { Users, BookOpen, Trophy, ArrowRight, UserCircle, LinkIcon, Plus } from "lucide-react";
+import { Users, BookOpen, Trophy, ArrowRight, UserCircle, LinkIcon } from "lucide-react";
 import type { Id } from "@/convex/_generated/dataModel";
 
 export default function ParentDashboardPage() {
@@ -66,12 +66,6 @@ export default function ParentDashboardPage() {
             >
               Lier un enfant existant
             </Link>
-            <Link
-              href="/parent/children/add"
-              className="text-sm font-medium text-teal-600 hover:text-teal-700"
-            >
-              + Ajouter un enfant
-            </Link>
           </div>
         </div>
 
@@ -88,13 +82,6 @@ export default function ParentDashboardPage() {
               >
                 <LinkIcon className="h-4 w-4" />
                 Lier un enfant existant
-              </Link>
-              <Link
-                href="/parent/children/add"
-                className="inline-flex items-center gap-2 rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-700"
-              >
-                <Plus className="h-4 w-4" />
-                Ajouter un enfant
               </Link>
             </div>
           </div>

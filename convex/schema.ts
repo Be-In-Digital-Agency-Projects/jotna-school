@@ -913,6 +913,51 @@ export default defineSchema({
   // alors qu'un adulte qui déclare « cette tranche est réglée » engage l'école
   // exactement comme celui qui active un contrat. Mêmes principes que les
   // autres journaux : copié, jamais relu pour autoriser.
+  /**
+   * La facture d'une tranche réglée.
+   *
+   * ELLE NAÎT AVEC LE SOLDE, dans la transaction de `billing.creditInstallment`
+   * — le seul endroit du dépôt qui passe une tranche à `paid`, appelé par le
+   * webhook du prestataire ET par le règlement constaté à la main. Une facture
+   * créée par une seconde mutation, ou par le planificateur, laisserait exister
+   * une tranche payée sans facture : l'école aurait versé son argent et
+   * n'aurait rien à comptabiliser.
+   *
+   * LE NUMÉRO EST SÉQUENTIEL PAR ANNÉE ET SANS TROU, ce qu'exige une facture
+   * sénégalaise. Le rang s'alloue en lisant le dernier de l'année par
+   * `by_year_sequence` : une mutation Convex est une transaction sérialisable,
+   * donc deux encaissements simultanés ne peuvent pas obtenir le même rang.
+   * C'est aussi pourquoi il n'est ni tiré au sort ni dérivé d'un identifiant.
+   *
+   * `number` EST DÉNORMALISÉ depuis `year` et `sequence`. Il est ce que l'école
+   * cite au téléphone et ce qu'un comptable cherche ; le recalculer à chaque
+   * lecture ferait dépendre l'affichage d'une fonction de formatage qui pourrait
+   * changer après coup, et le numéro d'une facture émise ne change jamais.
+   *
+   * `sentAt` ET `failureReason` DISENT LE SORT DE L'ENVOI, pas celui de la
+   * facture. Une facture existe dès qu'elle est émise, même si le courriel n'est
+   * jamais parti — l'inverse ferait dépendre une pièce comptable de la
+   * disponibilité d'un service tiers.
+   */
+  invoices: defineTable({
+    year: v.number(),
+    sequence: v.number(),
+    /** Le numéro affiché, `FAC-2026-0001` — voir `invoiceRules`. */
+    number: v.string(),
+    schoolId: v.id("schools"),
+    subscriptionId: v.id("subscriptions"),
+    installmentId: v.id("installments"),
+    amountFcfa: v.number(),
+    issuedAt: v.number(),
+    /** L'adresse visée, telle qu'elle était sur la fiche école à l'émission. */
+    recipientEmail: v.string(),
+    sentAt: v.optional(v.number()),
+    failureReason: v.optional(v.string()),
+  })
+    .index("by_year_sequence", ["year", "sequence"])
+    .index("by_school", ["schoolId"])
+    .index("by_installment", ["installmentId"]),
+
   payments: defineTable({
     subscriptionId: v.id("subscriptions"),
     installmentId: v.optional(v.id("installments")),
@@ -935,6 +980,7 @@ export default defineSchema({
     completedAt: v.optional(v.number()),
   })
     .index("by_providerToken", ["providerToken"])
+    .index("by_installment", ["installmentId"])
     .index("by_subscription", ["subscriptionId"]),
 
   studentImportJobs: defineTable({
@@ -977,6 +1023,42 @@ export default defineSchema({
     // retrouver depuis l'élève pour qu'une réinitialisation ne laisse pas
     // l'écran des billets proposer de réimprimer un billet mort.
     .index("by_student", ["studentId"]),
+
+  /**
+   * Un compte créé PAR une école, en attente de son premier mot de passe.
+   *
+   * POURQUOI UNE TABLE PLUTÔT QU'UN CHAMP SUR `profiles`. Le code est un
+   * SECRET à durée de vie courte, et une école peut en réémettre un : deux
+   * lignes coexistent alors pour le même profil, l'ancienne encore valide
+   * jusqu'à son expiration. Un champ n'en porterait qu'un et forcerait à
+   * choisir entre invalider l'ancien billet — déjà distribué — et refuser le
+   * nouveau.
+   *
+   * LE COMPTE D'AUTHENTIFICATION EXISTE DÉJÀ quand cette ligne est écrite, avec
+   * un secret aléatoire que personne ne voit. C'est délibéré : le profil est
+   * donc assignable à une classe ou rattachable à un enfant AVANT que la
+   * personne ait activé, et rien d'utilisable ne traîne en attendant. Le contre-
+   * modèle est celui des élèves (`studentImportRun.initialPassword`), où le mot
+   * de passe est égal au code imprimé — tenable pour un enfant dont le compte
+   * ne porte que des tentatives d'exercices, pas pour un adulte qui lit des
+   * dossiers d'élèves.
+   */
+  accountActivations: defineTable({
+    profileId: v.id("profiles"),
+    schoolId: v.id("schools"),
+    /** L'identifiant de connexion : l'e-mail, ou un identifiant imprimé. */
+    loginId: v.string(),
+    /** Le code d'activation, normalisé — voir `accountRules.normalizeIdentifier`. */
+    code: v.string(),
+    channel: v.union(v.literal("email"), v.literal("printed")),
+    expiresAt: v.number(),
+    activatedAt: v.optional(v.number()),
+    createdBy: v.id("profiles"),
+    createdAt: v.number(),
+  })
+    .index("by_code", ["code"])
+    .index("by_profile", ["profileId"])
+    .index("by_school", ["schoolId"]),
 
   parentLinkCodes: defineTable({
     studentId: v.id("profiles"),

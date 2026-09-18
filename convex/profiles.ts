@@ -1,7 +1,6 @@
 import { query, mutation, action, internalMutation } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
-import { createAccount, getAuthUserId } from "@convex-dev/auth/server";
-import { internal } from "./_generated/api";
+import { getAuthUserId } from "@convex-dev/auth/server";
 import { decideLinkChild } from "./linkRules";
 import { decideProfileUpdate } from "./profileRules";
 import type { ProfileUpdateDecision } from "./profileRules";
@@ -282,10 +281,19 @@ export const updateProfile = mutation({
 /**
  * Create a child account from the parent's session, without altering that session.
  *
- * Uses Convex Auth's `createAccount` helper to create the child's auth
- * account server-side — this does NOT sign the parent out. The
- * `createOrUpdateUser` callback in convex/auth.ts auto-creates the child's
- * profile row (role=student). We then insert the studentGuardians link.
+ * FERMÉE : UN PARENT NE CRÉE PLUS DE COMPTE D'ÉLÈVE.
+ *
+ * C'est l'école qui crée les comptes de ses élèves — par l'import
+ * (`studentImport`), qui leur attribue un code de connexion et un code de
+ * rattachement pour la famille. Un enfant créé depuis un compte parent
+ * n'appartenait à aucune école, ne comptait dans aucun contrat, et son accès ne
+ * dépendait donc d'aucun paiement : c'était une porte ouverte sur le catalogue.
+ *
+ * ELLE REFUSE AU LIEU DE DISPARAÎTRE. La fonction est une API HTTP publique :
+ * la supprimer rendrait un « fonction inconnue » à un client resté ouvert, là
+ * où une phrase dit à l'adulte ce qu'il doit faire. Le corps qui suit n'est plus
+ * atteint ; `convex/roleRules.decideProfileRole` l'aurait de toute façon refusé,
+ * sans expliquer pourquoi.
  */
 export const createChildAccount = action({
   args: {
@@ -293,41 +301,13 @@ export const createChildAccount = action({
     email: v.string(),
     password: v.string(),
   },
-  handler: async (
-    ctx,
-    args,
-  ): Promise<{ childUserId: string }> => {
-    const parentUserId = await getAuthUserId(ctx);
-    if (!parentUserId) {
-      throw new Error("Non authentifié");
-    }
-
-    if (args.password.length < 6) {
-      // Un parent lit cette phrase sur l'écran d'ajout d'enfant.
-      throw new ConvexError(
-        "Le mot de passe doit contenir au moins 6 caractères.",
-      );
-    }
-
-    const { user } = await createAccount(ctx, {
-      provider: "password",
-      account: {
-        id: args.email,
-        secret: args.password,
-      },
-      profile: {
-        email: args.email,
-        name: args.name,
-        role: "student",
-      } as unknown as Parameters<typeof createAccount>[1]["profile"],
-    });
-
-    await ctx.runMutation(internal.profiles.linkChildToParent, {
-      childUserId: user._id,
-      parentUserId,
-    });
-
-    return { childUserId: user._id };
+  returns: v.object({ childUserId: v.string() }),
+  handler: async (): Promise<{ childUserId: string }> => {
+    throw new ConvexError(
+      "La création d'un compte élève ne se fait plus depuis un compte parent : " +
+        "c'est l'école qui inscrit ses élèves et vous remet un code de " +
+        "rattachement. Saisissez ce code pour suivre votre enfant.",
+    );
   },
 });
 

@@ -301,6 +301,75 @@ export function bictorysOutcome(status: string): ProviderOutcome {
   }
 }
 
+/** Ce que rend un adaptateur Bictorys — webhook lu, ou transaction redemandée. */
+export type ChargeConfirmation = {
+  /** L'issue, DÉJÀ TRADUITE : la règle de décision ne lit aucun dialecte. */
+  outcome: ProviderOutcome;
+  /**
+   * Le montant COMPARABLE À LA TRANCHE, frais compris : le montant payé par le
+   * client tel que le webhook le donne, ou le brut `amount + merchantFees`
+   * reconstitué par `confirmCharge` depuis la réponse NETTE de `verify`.
+   */
+  amountFcfa: number;
+  /** La tranche que la charge désignait, telle qu'elle revient. Chaîne brute. */
+  installmentRef: string | null;
+};
+
+/**
+ * Lit la charge utile d'un webhook Bictorys — LA SOURCE DE VÉRITÉ (plan B, D47).
+ *
+ * PURE ET TESTÉE, à côté de `bictorysOutcome` dont elle se sert : c'est le
+ * dialecte Bictorys traduit, pas un appel réseau. `convex/billingBictorys.ts`
+ * garde l'appel sortant (`openInvoice`) et la reconfirmation de rapprochement
+ * (`confirmCharge`) ; la lecture du webhook, elle, se prouve sans base ni réseau.
+ *
+ * POURQUOI ON NE REDEMANDE PLUS. La reconfirmation `GET /transactions/{id}/status`
+ * rend en bac à sable un corps minimal `{ id, status }`, SANS `amount` : comparé
+ * à la tranche il vaudrait zéro, et aucune tranche ne serait jamais soldée. En
+ * production leur endpoint `/status` tombe par intermittence — le rappeler à
+ * chaque webhook risque de perdre un paiement réussi sur une panne passagère. Le
+ * webhook, lui, porte le montant, et la route a déjà prouvé son authenticité par
+ * `X-Secret-Key` avant d'appeler ceci. Compromis assumé : le secret partagé
+ * authentifie, le montant relu en base tranche, la reconfirmation devient un
+ * outil de rapprochement, plus la garde du webhook.
+ *
+ * `amount` SE COMPARE TEL QUEL — PAS DE `+ merchantFees` ICI. Leur schéma de
+ * webhook décrit `amount` comme « le montant payé par le client » : c'est déjà le
+ * prix de la charge, celui que la tranche réclame. Les frais marchands sont
+ * prélevés au règlement (`settledAmount`), ils ne s'ajoutent pas au prix.
+ * L'ancienne reconstruction `amount + merchantFees` ne valait que pour la réponse
+ * de `verify_transaction`, dont l'`amount` est NET — deux endpoints, deux sens du
+ * même mot.
+ *
+ * DEVISE VÉRIFIÉE (rapprochement anti-fraude). Nos charges sont en XOF ; un
+ * webhook d'une autre devise ne solde pas une tranche en francs. Devise présente
+ * et différente de « XOF » rend un montant nul, qui ne crédite rien (D42) — même
+ * repli qu'un montant illisible. Devise absente : nos charges n'en connaissant
+ * qu'une, on ne refuse pas un paiement pour un champ optionnel manquant.
+ *
+ * PURE ET SANS RÉSEAU : elle NE LÈVE JAMAIS. Un corps illisible est déjà écarté
+ * par la route ; ici, tout champ absent devient le repli le plus sûr.
+ */
+export function readBictorysWebhook(payload: {
+  status?: unknown;
+  amount?: unknown;
+  currency?: unknown;
+  merchantReference?: unknown;
+}): ChargeConfirmation {
+  const status = typeof payload.status === "string" ? payload.status : "";
+
+  const currencyOk =
+    typeof payload.currency !== "string" ||
+    payload.currency.toUpperCase() === "XOF";
+  const paid = Number(payload.amount);
+  const amountFcfa = currencyOk && Number.isFinite(paid) ? paid : 0;
+
+  const reference = payload.merchantReference;
+  const installmentRef = typeof reference === "string" ? reference : null;
+
+  return { outcome: bictorysOutcome(status), amountFcfa, installmentRef };
+}
+
 /** Ce qu'il advient d'un paiement que PayDunya nous annonce. */
 export type PaymentOutcome =
   /** La tranche est soldée. Le seul cas qui ouvre quelque chose. */

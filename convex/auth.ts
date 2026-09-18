@@ -1,7 +1,7 @@
 import { Password } from "@convex-dev/auth/providers/Password";
 import { convexAuth } from "@convex-dev/auth/server";
 import { ResendOTPPasswordReset } from "./ResendOTPPasswordReset";
-import { decideSignupRole } from "./roleRules";
+import { decideProfileRole } from "./roleRules";
 
 export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
   providers: [
@@ -37,31 +37,22 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
         | string
         | undefined;
 
-      // UN RÔLE QUI CONFÈRE UNE AUTORITÉ NE S'ATTRIBUE PAS SOI-MÊME. C'est la
-      // règle, et elle vaut pour les trois : `admin` administre la plateforme,
-      // `directeur` engage une école, `professeur` lit et réécrit le catalogue
-      // — énoncés, corrigés, indices — que des élèves payants jouent.
+      // AUCUN COMPTE NE SE CRÉE TOUT SEUL. C'est l'école qui crée les comptes
+      // de ses professeurs, de ses parents et de ses élèves ; la personne ne
+      // fait que les ACTIVER, avec un code que l'école lui remet. La décision
+      // vit dans `convex/roleRules.ts`, pure et testée.
       //
-      // `professeur` était accepté ici, et l'écran d'inscription l'offrait dans
-      // un menu déroulant : il suffisait de trente secondes pour obtenir un
-      // compte que `callerIsStaff` reconnaît comme « membre du personnel ».
-      // Toute garde de rôle du dépôt en dépendait, sans le savoir. Les
-      // écritures sur les exercices sont depuis passées à une garde de LIEN
-      // (`exercises.ts`), mais la cause était ici.
-      //
-      // ON REFUSE PLUTÔT QUE DE RETOMBER EN SILENCE. Le repli `: "student"`
-      // plus bas aurait transformé une demande de compte professeur en compte
-      // ÉLÈVE, sans un mot : la personne aurait découvert bien plus tard que
-      // son rôle n'est pas celui qu'elle a demandé. Un refus explicite se lit.
-      // CONSÉQUENCE ASSUMÉE : plus AUCUN chemin applicatif ne crée un profil
-      // `professeur`, `directeur` ou `admin`. `schools.addStaff` ne le fait pas
-      // — il exige `profile.role === staffRole` et RATTACHE un profil existant
-      // à une école, il ne le crée pas. Ces trois rôles se posent donc hors de
-      // l'application, comme le faisaient déjà `admin` et `directeur`.
-      //
-      // La décision vit dans `convex/roleRules.ts`, pure et testée : ce
-      // handler-ci n'est atteignable par aucun test du dépôt.
-      const role = decideSignupRole(rawRole);
+      // `schoolCreated` N'EST PAS FALSIFIABLE, et c'est tout le mécanisme. Sur
+      // une inscription client, ce handler ne reçoit que ce que retourne le
+      // `profile(params)` ci-dessus — exactement `{ email, name, role }`. Un
+      // client ne peut donc pas faire apparaître `schoolCreated` dans cet
+      // objet, quoi qu'il envoie dans ses paramètres. Seul un appel serveur à
+      // `createAccount`, qui passe son `profile` directement au callback, peut
+      // porter le marqueur : `convex/schoolAccounts.ts` pour les adultes,
+      // `convex/studentImportRun.ts` pour les élèves.
+      const schoolCreated =
+        (profile as Record<string, unknown>).schoolCreated === true;
+      const role = decideProfileRole({ rawRole, schoolCreated });
 
       const name = (profile.name as string) ?? "";
       const email = (profile.email as string) ?? undefined;

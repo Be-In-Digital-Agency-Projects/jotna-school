@@ -9,6 +9,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { VISIBLE_CLASSES, visibleClassValidator } from "./curriculum";
 import {
   callerAdminProfile,
+  callerAuthorityOverSchool,
   callerIsAdmin,
   currentSchoolSubscription,
   graceAnchorFor,
@@ -267,10 +268,11 @@ export const listSchools = query({
 export const getSchool = query({
   args: { schoolId: v.string() },
   handler: async (ctx, args) => {
-    if (!(await callerIsAdmin(ctx))) return null;
-
     const schoolId = ctx.db.normalizeId("schools", args.schoolId);
     if (!schoolId) return null;
+    // L'`admin` voit toutes les écoles, un `directeur` la sienne. Le cadrage
+    // vit dans `access.callerAuthorityOverSchool`, un seul endroit.
+    if (!(await callerAuthorityOverSchool(ctx, schoolId))) return null;
     return await ctx.db.get(schoolId);
   },
 });
@@ -287,7 +289,7 @@ export const getSchool = query({
 export const listStaff = query({
   args: { schoolId: v.id("schools") },
   handler: async (ctx, args) => {
-    if (!(await callerIsAdmin(ctx))) return [];
+    if (!(await callerAuthorityOverSchool(ctx, args.schoolId))) return [];
 
     const rows = await ctx.db
       .query("schoolStaff")
@@ -382,7 +384,7 @@ export const listStaffCandidates = query({
 export const listClasses = query({
   args: { schoolId: v.id("schools") },
   handler: async (ctx, args) => {
-    if (!(await callerIsAdmin(ctx))) return [];
+    if (!(await callerAuthorityOverSchool(ctx, args.schoolId))) return [];
 
     const classes = await ctx.db
       .query("schoolClasses")
@@ -426,7 +428,12 @@ export const listClasses = query({
 export const listClassStudents = query({
   args: { schoolClassId: v.id("schoolClasses") },
   handler: async (ctx, args) => {
-    if (!(await callerIsAdmin(ctx))) return [];
+    // Cadrage par la classe : charger d'abord, autoriser ensuite. Un directeur
+    // lit les élèves de SES classes — c'est ce qui lui permet de rattacher un
+    // parent au bon enfant.
+    const schoolClass = await ctx.db.get(args.schoolClassId);
+    if (!schoolClass) return [];
+    if (!(await callerAuthorityOverSchool(ctx, schoolClass.schoolId))) return [];
 
     const memberships = await ctx.db
       .query("schoolMemberships")
@@ -870,7 +877,7 @@ type EnrollmentOutlook = {
 export const getEnrollmentOutlook = query({
   args: { schoolId: v.id("schools") },
   handler: async (ctx, args): Promise<EnrollmentOutlook | null> => {
-    if (!(await callerIsAdmin(ctx))) return null;
+    if (!(await callerAuthorityOverSchool(ctx, args.schoolId))) return null;
 
     const school = await ctx.db.get(args.schoolId);
     if (!school) return null;
@@ -2165,7 +2172,9 @@ export const createClass = mutation({
     label: v.string(),
   },
   handler: async (ctx, args) => {
-    if (!(await callerIsAdmin(ctx))) throw new ConvexError("Rôle non autorisé");
+    if (!(await callerAuthorityOverSchool(ctx, args.schoolId))) {
+      throw new ConvexError("Rôle non autorisé");
+    }
 
     const school = await ctx.db.get(args.schoolId);
     if (!school) throw new ConvexError("École introuvable");
@@ -2223,10 +2232,16 @@ export const assignTeacher = mutation({
     teacherId: v.optional(v.id("profiles")),
   },
   handler: async (ctx, args) => {
-    if (!(await callerIsAdmin(ctx))) throw new ConvexError("Rôle non autorisé");
-
     const schoolClass = await ctx.db.get(args.schoolClassId);
     if (!schoolClass) throw new ConvexError("Classe introuvable");
+
+    // LE CADRAGE PASSE PAR LA CLASSE, donc l'ordre est inversé : charger, puis
+    // autoriser. Un directeur affecte les professeurs de SES classes ; sans
+    // cette affectation, l'espace du professeur reste vide, `access
+    // .studentIdsTaughtBy` partant de `schoolClasses.teacherId`.
+    if (!(await callerAuthorityOverSchool(ctx, schoolClass.schoolId))) {
+      throw new ConvexError("Rôle non autorisé");
+    }
 
     if (args.teacherId === undefined) {
       await ctx.db.patch(schoolClass._id, { teacherId: undefined });

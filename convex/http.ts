@@ -4,7 +4,7 @@ import { internal } from "./_generated/api";
 import { auth } from "./auth";
 import { expectedWebhookSecret } from "./billingBictorys";
 import { expectedWebhookHash } from "./billingPaydunya";
-import { constantTimeEquals } from "./billingRules";
+import { constantTimeEquals, readBictorysWebhook } from "./billingRules";
 
 const http = httpRouter();
 
@@ -136,29 +136,39 @@ http.route({
 /**
  * LE WEBHOOK DE BICTORYS — spec §8.2, et les quatre règles de §8.3.
  *
- * MÊME ARCHITECTURE QUE LA ROUTE PAYDUNYA juste au-dessus : vérifier,
- * reconfirmer, déléguer. Seules changent la forme du corps et la manière dont le
- * prestataire s'authentifie — c'est tout ce qu'un changement de prestataire
- * devrait coûter.
+ * MÊME ARCHITECTURE QUE LA ROUTE PAYDUNYA juste au-dessus, à une différence
+ * près : vérifier, LIRE LE CORPS SIGNÉ, déléguer. La route PayDunya reconfirme la
+ * facture au prestataire ; ici on ne le fait plus (plan B, D47).
  *
- * DEUX DIFFÉRENCES AVEC PAYDUNYA, ET LA PREMIÈRE EST PIRE :
+ * POURQUOI ON NE RECONFIRME PLUS. La reconfirmation `GET /transactions/{id}/status`
+ * rend en bac à sable un corps minimal `{ id, status }` — sans `amount`, donc
+ * incapable de solder une tranche — et tombe par intermittence en production, où
+ * la rappeler à chaque webhook risquerait de perdre un paiement réussi. Le corps
+ * du webhook, lui, porte le montant. `readBictorysWebhook` le traduit sans quitter
+ * la route, et le corps est du JSON (pas du `x-www-form-urlencoded` de PayDunya).
  *
- *   1. Bictorys NE SIGNE PAS. Leur page « Comment valider les webhooks » est
- *      explicite : chaque rappel porte un en-tête `X-Secret-Key` contenant LE
- *      SECRET EN CLAIR, et valider consiste à le comparer au sien. PayDunya, au
- *      moins, en envoyait l'empreinte. Ni l'un ni l'autre ne signe la charge
- *      utile, donc la reconfirmation (D39) reste la seule chose qui prouve
- *      quelque chose — elle n'est pas une précaution qu'on pourra retirer ;
- *   2. le corps est du JSON, pas du `x-www-form-urlencoded`.
+ * CE QUI TIENT LA FRONTIÈRE, ALORS. Trois choses, plus la reconfirmation :
+ *   1. `X-Secret-Key` — le secret partagé, comparé à temps constant. Bictorys NE
+ *      SIGNE PAS la charge utile ; ce secret voyage en clair DANS TLS à chaque
+ *      appel. Il authentifie l'appelant, il ne prouve pas le contenu. Écrire
+ *      `===` ici laisserait un exemple à copier là où ce serait grave ;
+ *   2. le montant est RELU EN BASE avant de créditer (`decidePaymentApplication`,
+ *      règle 2) — un corps forgé devrait déjà connaître le montant exact ET
+ *      l'identifiant de tranche, tous deux non publics ;
+ *   3. la devise est vérifiée (`readBictorysWebhook`), et la charge utile brute
+ *      est journalisée pour tout litige.
  *
- * LA COMPARAISON RESTE À TEMPS CONSTANT. Le secret voyage en clair à chaque
- * appel, donc un attaquant qui écoute l'a de toute façon ; mais celui qui ne
- * fait que DEVINER ne doit rien apprendre de notre temps de réponse, et écrire
- * `===` ici laisserait un exemple à copier là où ce serait grave.
+ * LE RISQUE RÉSIDUEL, DIT FRANCHEMENT : si le secret de webhook fuite (journaux,
+ * TLS compromis), un tiers peut forger un corps « succeeded » et solder une
+ * tranche qu'il sait nommer, sans qu'un franc soit arrivé. La reconfirmation
+ * fermait ce trou ; plan B l'accepte pour que le montant soit vérifiable dès le
+ * bac à sable. Durcissement disponible si on le veut : vérifier l'en-tête
+ * `X-Webhook-Signature` (HMAC-SHA256) QUAND il est présent — leur documentation
+ * le décrit, leurs rapports d'intégration disent qu'il n'est pas toujours envoyé.
  *
  * LES CODES DE RÉPONSE SONT DES INSTRUCTIONS AU PRESTATAIRE : 200 veut dire
- * « traité, n'y reviens pas », 401 refuse sans rien faire, 503 et 500 disent
- * « rappelle-moi ».
+ * « traité, n'y reviens pas », 401 refuse sans rien faire, 503 dit « rappelle-moi
+ * quand les clés seront posées ».
  */
 http.route({
   path: "/bictorys-webhook",
@@ -178,7 +188,13 @@ http.route({
 
     // Le corps est lu APRÈS l'authentification : un appel non authentifié ne
     // doit rien nous coûter, pas même une analyse syntaxique.
-    let payload: { id?: unknown; merchantReference?: unknown };
+    let payload: {
+      id?: unknown;
+      status?: unknown;
+      amount?: unknown;
+      currency?: unknown;
+      merchantReference?: unknown;
+    };
     try {
       payload = (await req.json()) as typeof payload;
     } catch {
@@ -195,24 +211,13 @@ http.route({
       return new Response("identifiant absent", { status: 200 });
     }
 
-    // Peut lever : prestataire injoignable, réponse inattendue. On laisse
-    // remonter en 500 plutôt que d'avaler l'erreur — Bictorys rejouera, et un
-    // paiement qu'on ne sait pas confirmer ne doit ni être crédité ni perdu.
-    const confirmation = await ctx.runAction(
-      internal.billingBictorys.confirmCharge,
-      { providerToken },
-    );
-
-    // `merchantReference` VIENT DE LA RECONFIRMATION, pas du corps du POST :
-    // c'est nous qui l'avons écrit à l'ouverture du paiement, et le relire chez
-    // eux plutôt que dans un corps non signé retire une prise à qui aurait le
-    // secret. Le repli sur le corps existe pour le seul cas où leur réponse ne
-    // le porterait pas.
-    const installmentRef =
-      confirmation.installmentRef ??
-      (typeof payload.merchantReference === "string"
-        ? payload.merchantReference
-        : null);
+    // LE CORPS SIGNÉ EST LA SOURCE DE VÉRITÉ (plan B). Il est déjà authentifié
+    // par `X-Secret-Key` ci-dessus, et lui seul porte le montant : la
+    // reconfirmation `/status` rend en bac à sable un corps sans `amount`, qui ne
+    // solderait jamais rien. `readBictorysWebhook` est PURE et ne lève pas — plus
+    // de reconfirmation réseau, donc plus de 500 sur cette route.
+    const confirmation = readBictorysWebhook(payload);
+    const installmentRef = confirmation.installmentRef;
 
     const result = await ctx.runMutation(internal.billing.applyPayment, {
       provider: "bictorys",

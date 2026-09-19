@@ -1,3 +1,5 @@
+import { emailBrandHtml } from "./email-brand";
+
 /**
  * Generates a clean, professional HTML email for a topic report.
  * Designed for parents/guardians — not gamified.
@@ -5,6 +7,8 @@
  */
 
 export interface ReportEmailData {
+  /** Le logo de marque, quand le déploiement en publie un. */
+  logoUrl?: string;
   studentName: string;
   topicName: string;
   subjectName: string;
@@ -85,8 +89,7 @@ export function generateReportEmailHtml(data: ReportEmailData): string {
           <!-- Header -->
           <tr>
             <td style="background-color:#0d9488;padding:24px 32px;">
-              <h1 style="margin:0;color:#ffffff;font-size:24px;font-weight:700;">Jotna School</h1>
-              <p style="margin:4px 0 0;color:#ccfbf1;font-size:14px;">Rapport de progression</p>
+              ${emailBrandHtml({ subtitle: "Rapport de progression", logoUrl: data.logoUrl })}
             </td>
           </tr>
 

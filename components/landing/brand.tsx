@@ -14,10 +14,22 @@ type BrandProps = {
   priority?: boolean;
 };
 
+/**
+ * LES DIMENSIONS SUIVENT LE FICHIER, qui n'est plus carré : 1024 x 656, soit
+ * un rapport de 1,561. Les déclarer carrées faisait réserver à Next/Image une
+ * boîte qui ne correspondait pas à l'image, d'où un saut de mise en page au
+ * chargement.
+ *
+ * LES `scale-125` / `scale-150` ONT DISPARU, et ce n'est pas une simplification
+ * gratuite : ils compensaient les larges marges vides de l'ancien fichier, qui
+ * ne laissait au dessin qu'environ la moitié de sa hauteur. Le nouveau est
+ * détouré au plus près, donc `h-16` donne vraiment seize unités de dessin.
+ * Garder l'agrandissement aurait affiché un logo deux fois trop grand.
+ */
 const SIZES: Record<BrandSize, { w: number; h: number; className: string }> = {
-  sm: { w: 160, h: 160, className: "h-16 w-auto scale-125 origin-left" },
-  md: { w: 256, h: 256, className: "h-24 w-auto scale-150 origin-left" },
-  lg: { w: 384, h: 384, className: "h-32 w-auto scale-150 origin-left" },
+  sm: { w: 250, h: 160, className: "h-10 w-auto" },
+  md: { w: 400, h: 256, className: "h-14 w-auto" },
+  lg: { w: 599, h: 384, className: "h-20 w-auto" },
 };
 
 export function Brand({

@@ -1,6 +1,7 @@
 "use node";
 
 import { internalAction } from "./_generated/server";
+import { EMAIL_FROM } from "../lib/email-brand";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { Resend } from "resend";
@@ -41,6 +42,7 @@ export const sendLinkRequestEmail = internalAction({
     const rejectUrl = `${siteUrl}/link-response?token=${request.token}&action=reject`;
 
     const html = generateLinkRequestEmailHtml({
+      logoUrl: process.env.EMAIL_LOGO_URL,
       parentName,
       studentName: studentProfile ?? "Eleve",
       acceptUrl,
@@ -50,7 +52,7 @@ export const sendLinkRequestEmail = internalAction({
     const resend = new Resend(process.env.RESEND_API_KEY);
 
     await resend.emails.send({
-      from: "Jotna School <noreply@jotnaschool.app>",
+      from: EMAIL_FROM,
       to: studentEmail,
       subject: `[Jotna School] ${parentName} souhaite se lier a ton compte`,
       html,

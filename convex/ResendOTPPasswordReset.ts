@@ -1,4 +1,5 @@
 import { Email } from "@convex-dev/auth/providers/Email";
+import { EMAIL_FROM } from "../lib/email-brand";
 import { generatePasswordResetEmailHtml } from "../lib/password-reset-email-template";
 
 export const ResendOTPPasswordReset = Email({
@@ -24,10 +25,13 @@ export const ResendOTPPasswordReset = Email({
         Authorization: `Bearer ${provider.apiKey}`,
       },
       body: JSON.stringify({
-        from: "Jotna School <noreply@jotnaschool.app>",
+        from: EMAIL_FROM,
         to: [email],
         subject: "Jotna School — Réinitialisation de votre mot de passe",
-        html: generatePasswordResetEmailHtml({ code: token }),
+        html: generatePasswordResetEmailHtml({
+          code: token,
+          logoUrl: process.env.EMAIL_LOGO_URL,
+        }),
       }),
     });
 

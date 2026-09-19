@@ -1,6 +1,7 @@
 "use node";
 
 import { internalAction } from "./_generated/server";
+import { EMAIL_FROM } from "../lib/email-brand";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { Resend } from "resend";
@@ -28,6 +29,7 @@ export const sendRegenCapEmail = internalAction({
     }
 
     const html = generateRegenNotificationEmailHtml({
+      logoUrl: process.env.EMAIL_LOGO_URL,
       studentName: args.studentName,
       topicName: args.topicName,
       subjectName: args.subjectName,
@@ -47,7 +49,7 @@ export const sendRegenCapEmail = internalAction({
 
       try {
         await resend.emails.send({
-          from: "Jotna School <noreply@jotnaschool.app>",
+          from: EMAIL_FROM,
           to: guardian.email,
           subject: `[Jotna School] ${args.studentName} a besoin d'un coup de pouce en ${args.subjectName}`,
           html,

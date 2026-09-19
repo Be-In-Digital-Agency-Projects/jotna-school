@@ -287,6 +287,77 @@ export const invoiceTarget = internalQuery({
 });
 
 /**
+ * Ce que le reçu doit dire, relu en base au moment de l'envoi.
+ *
+ * ELLE N'A PAS DE GARDE, et c'est correct : son seul appelant est l'action
+ * d'envoi, déclenchée par `creditInstallment`, jamais par un navigateur. Une
+ * garde d'`admin` ici empêcherait le reçu de partir, puisque personne n'est
+ * connecté quand le webhook solde une tranche à trois heures du matin.
+ *
+ * ELLE REND `null` PLUTÔT QUE DE LEVER quand une pièce manque. Un reçu qu'on
+ * ne sait pas composer ne doit pas faire échouer une tranche déjà encaissée.
+ *
+ * LE MONTANT VIENT DE LA TRANCHE, pas du versement : le reçu constate la
+ * créance éteinte. Un paiement partiel ne solde pas, donc n'arrive jamais ici.
+ */
+export const invoiceEmailData = internalQuery({
+  args: { installmentId: v.id("installments") },
+  handler: async (ctx, args) => {
+    const installment = await ctx.db.get(args.installmentId);
+    if (!installment) return null;
+
+    const contract = await ctx.db.get(installment.subscriptionId);
+    if (!contract || contract.ownerType !== "school") return null;
+
+    const school = await ctx.db.get(contract.ownerId as Id<"schools">);
+    if (!school) return null;
+
+    // Le dernier versement encaissé sur cette tranche : c'est lui qui nomme le
+    // moyen et porte la référence que l'école citera en cas de litige.
+    const payments = await ctx.db
+      .query("payments")
+      .withIndex("by_subscription", (q) =>
+        q.eq("subscriptionId", contract._id),
+      )
+      .collect();
+    const payment = payments
+      .filter(
+        (p) =>
+          p.installmentId === installment._id && p.status === "completed",
+      )
+      .sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0))[0];
+
+    // LES DEUX NOMBRES, ET PAS UN SEUL. `seatsPurchased` est ce que l'école a
+    // ACHETÉ, donc ce que la tranche facture ; les inscriptions actives sont ce
+    // qu'elle UTILISE. N'afficher que le premier laisserait croire qu'on
+    // facture des sièges vides ; n'afficher que le second ferait douter du
+    // montant. Les deux côte à côte se répondent, et l'écart se voit.
+    const activeStudents = (
+      await ctx.db
+        .query("schoolMemberships")
+        .withIndex("by_school_status", (q) =>
+          q.eq("schoolId", school._id).eq("status", "active"),
+        )
+        .collect()
+    ).length;
+
+    return {
+      schoolName: school.name,
+      contactName: school.contactName,
+      contactEmail: school.contactEmail,
+      ninea: school.ninea,
+      installmentIndex: installment.index,
+      amountFcfa: installment.amountFcfa,
+      paidAt: installment.paidAt ?? Date.now(),
+      seatsPurchased: contract.seatsPurchased,
+      activeStudents,
+      provider: payment?.provider ?? "manual",
+      providerToken: payment?.providerToken ?? `installment:${installment._id}`,
+    };
+  },
+});
+
+/**
  * Enregistre la facture qu'on vient d'ouvrir chez PayDunya.
  *
  * ELLE NE CRÉDITE RIEN : une facture ouverte n'est pas un paiement, et le
@@ -493,6 +564,19 @@ async function creditInstallment(
   now: number,
 ): Promise<boolean> {
   await ctx.db.patch(installment._id, { status: "paid", paidAt: now });
+
+  // LE REÇU PART D'ICI, et d'ici seulement — même raison que tout le reste de
+  // cette fonction (règle D18). Le webhook et le règlement constaté à la main
+  // soldent par ce chemin unique ; y accrocher le courriel une seule fois
+  // garantit qu'une école payée par virement reçoit le même reçu qu'une école
+  // payée par Wave. Deux appels séparés auraient fini par diverger.
+  //
+  // `runAfter(0)` ET NON UN APPEL DIRECT : une mutation ne peut pas parler au
+  // réseau, et un envoi qui échoue ne doit pas annuler un encaissement. La
+  // tranche est soldée quoi qu'il arrive au courriel.
+  await ctx.scheduler.runAfter(0, internal.billingInvoiceEmail.sendInvoiceEmail, {
+    installmentId: installment._id,
+  });
 
   const contract = await ctx.db.get(installment.subscriptionId);
   if (!contract) return false;

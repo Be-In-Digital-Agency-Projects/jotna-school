@@ -61,6 +61,7 @@ export const sendInvoiceEmail = internalAction({
       seatsPurchased: data.seatsPurchased,
       activeStudents: data.activeStudents,
       methodLabel: METHOD_LABEL[data.provider] ?? "Paiement",
+      logoUrl: process.env.EMAIL_LOGO_URL,
       reference: data.providerToken,
     });
 

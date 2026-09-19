@@ -1,4 +1,8 @@
+import { emailBrandHtml } from "./email-brand";
+
 export interface LinkRequestEmailData {
+  /** Le logo de marque, quand le déploiement en publie un. */
+  logoUrl?: string;
   parentName: string;
   studentName: string;
   acceptUrl: string;
@@ -25,8 +29,7 @@ export function generateLinkRequestEmailHtml(
 
           <tr>
             <td style="background-color:#0d9488;padding:24px 32px;">
-              <h1 style="margin:0;color:#ffffff;font-size:24px;font-weight:700;">Jotna School</h1>
-              <p style="margin:4px 0 0;color:#ccfbf1;font-size:14px;">Demande de liaison parentale</p>
+              ${emailBrandHtml({ subtitle: "Demande de liaison parentale", logoUrl: data.logoUrl })}
             </td>
           </tr>
 

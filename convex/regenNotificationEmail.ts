@@ -28,6 +28,7 @@ export const sendRegenCapEmail = internalAction({
     }
 
     const html = generateRegenNotificationEmailHtml({
+      logoUrl: process.env.EMAIL_LOGO_URL,
       studentName: args.studentName,
       topicName: args.topicName,
       subjectName: args.subjectName,

@@ -1,3 +1,5 @@
+import { emailLogoImgHtml } from "./email-brand";
+
 /**
  * Le reçu qu'une école reçoit quand une tranche est soldée.
  *
@@ -24,6 +26,8 @@ export interface InvoiceEmailData {
   methodLabel: string;
   /** La référence du versement — celle du prestataire, ou celle du constat. */
   reference: string;
+  /** Le logo de marque, quand le déploiement en publie un. */
+  logoUrl?: string;
 }
 
 /** « 416668 » devient « 416 668 ». Espace insécable : un montant ne se coupe pas. */
@@ -88,8 +92,8 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;margin:0 auto;background:#ffffff;border-radius:12px;">
     <tr>
       <td style="padding:32px 28px 8px;">
-        <p style="margin:0 0 4px;color:#0d9488;font-size:13px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;">Jotna School</p>
-        <h1 style="margin:0 0 16px;color:#111827;font-size:22px;">Reçu de paiement</h1>
+        ${emailLogoImgHtml(data.logoUrl, 180) || '<p style="margin:0 0 4px;color:#0d9488;font-size:13px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;">Jotna School</p>'}
+        <h1 style="margin:12px 0 16px;color:#111827;font-size:22px;">Reçu de paiement</h1>
         <p style="margin:0 0 4px;color:#374151;font-size:15px;line-height:1.5;">Bonjour ${escapeHtml(data.contactName)},</p>
         <p style="margin:0;color:#374151;font-size:15px;line-height:1.5;">Votre versement est arrivé. La tranche ci-dessous est soldée, et l'accès de vos élèves reste ouvert.</p>
       </td>

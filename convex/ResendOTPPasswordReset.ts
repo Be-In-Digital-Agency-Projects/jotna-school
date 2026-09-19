@@ -27,7 +27,10 @@ export const ResendOTPPasswordReset = Email({
         from: "Jotna School <noreply@jotnaschool.app>",
         to: [email],
         subject: "Jotna School — Réinitialisation de votre mot de passe",
-        html: generatePasswordResetEmailHtml({ code: token }),
+        html: generatePasswordResetEmailHtml({
+          code: token,
+          logoUrl: process.env.EMAIL_LOGO_URL,
+        }),
       }),
     });
 

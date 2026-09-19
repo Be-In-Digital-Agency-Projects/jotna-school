@@ -41,6 +41,7 @@ export const sendLinkRequestEmail = internalAction({
     const rejectUrl = `${siteUrl}/link-response?token=${request.token}&action=reject`;
 
     const html = generateLinkRequestEmailHtml({
+      logoUrl: process.env.EMAIL_LOGO_URL,
       parentName,
       studentName: studentProfile ?? "Eleve",
       acceptUrl,

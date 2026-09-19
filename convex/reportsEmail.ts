@@ -79,6 +79,7 @@ export const sendEmail = internalAction({
     });
 
     const html = generateReportEmailHtml({
+      logoUrl: process.env.EMAIL_LOGO_URL,
       studentName: student.name,
       topicName: report.topicName,
       subjectName: report.subjectName,

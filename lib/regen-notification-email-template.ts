@@ -1,4 +1,8 @@
+import { emailBrandHtml } from "./email-brand";
+
 export interface RegenNotificationEmailData {
+  /** Le logo de marque, quand le déploiement en publie un. */
+  logoUrl?: string;
   studentName: string;
   topicName: string;
   subjectName: string;
@@ -24,8 +28,7 @@ export function generateRegenNotificationEmailHtml(
 
           <tr>
             <td style="background-color:#0d9488;padding:24px 32px;">
-              <h1 style="margin:0;color:#ffffff;font-size:24px;font-weight:700;">Jotna School</h1>
-              <p style="margin:4px 0 0;color:#ccfbf1;font-size:14px;">Un petit coup de pouce serait le bienvenu</p>
+              ${emailBrandHtml({ subtitle: "Un petit coup de pouce serait le bienvenu", logoUrl: data.logoUrl })}
             </td>
           </tr>
 

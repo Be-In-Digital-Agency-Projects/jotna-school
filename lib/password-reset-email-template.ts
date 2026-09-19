@@ -1,4 +1,8 @@
+import { emailBrandHtml } from "./email-brand";
+
 export interface PasswordResetEmailData {
+  /** Le logo de marque, quand le déploiement en publie un. */
+  logoUrl?: string;
   code: string;
 }
 
@@ -22,8 +26,7 @@ export function generatePasswordResetEmailHtml(
 
           <tr>
             <td style="background-color:#0d9488;padding:24px 32px;">
-              <h1 style="margin:0;color:#ffffff;font-size:24px;font-weight:700;">Jotna School</h1>
-              <p style="margin:4px 0 0;color:#ccfbf1;font-size:14px;">Réinitialisation de mot de passe</p>
+              ${emailBrandHtml({ subtitle: "Réinitialisation de mot de passe", logoUrl: data.logoUrl })}
             </td>
           </tr>
 

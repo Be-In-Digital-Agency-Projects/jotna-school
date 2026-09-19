@@ -17,6 +17,21 @@
  * l'attribut `src` et, avec un guillemet, le balisage entier.
  */
 
+/**
+ * L'expéditeur de TOUS les courriels — un seul exemplaire, lui aussi.
+ *
+ * LE DOMAINE EST `jotnaschool.com`. Les cinq actions d'envoi écrivaient
+ * `jotnaschool.app`, un domaine qui ne résout pas et que nous ne possédons
+ * pas. Resend refusait donc chaque envoi :
+ *
+ *     The jotnaschool.app domain is not verified.
+ *
+ * Aucun courriel de l'application ne partait — ni les bulletins, ni les
+ * demandes de liaison, ni les codes de réinitialisation, ni les reçus. Le pied
+ * de page du site, lui, donnait déjà `contact@jotnaschool.com`.
+ */
+export const EMAIL_FROM = "Jotna School <noreply@jotnaschool.com>";
+
 type Tone = "onTeal" | "onWhite";
 
 /** Une URL exploitable dans un `src`, ou `null`. */

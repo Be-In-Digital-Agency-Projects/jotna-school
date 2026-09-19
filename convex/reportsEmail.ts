@@ -1,6 +1,7 @@
 "use node";
 
 import { internalAction } from "./_generated/server";
+import { EMAIL_FROM } from "../lib/email-brand";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { Resend } from "resend";
@@ -95,7 +96,7 @@ export const sendEmail = internalAction({
     // Send to each recipient
     for (const guardian of recipients) {
       await resend.emails.send({
-        from: "Jotna School <noreply@jotnaschool.app>",
+        from: EMAIL_FROM,
         to: guardian.email,
         subject: `[Jotna School] Rapport - ${student.name} a terminé ${report.topicName}`,
         html,

@@ -1,6 +1,7 @@
 "use node";
 
 import { v } from "convex/values";
+import { EMAIL_FROM } from "../lib/email-brand";
 import { internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { Resend } from "resend";
@@ -68,7 +69,7 @@ export const sendInvoiceEmail = internalAction({
     try {
       const resend = new Resend(apiKey);
       const { error } = await resend.emails.send({
-        from: "Jotna School <noreply@jotnaschool.app>",
+        from: EMAIL_FROM,
         to: data.contactEmail,
         subject: `[Jotna School] Reçu de paiement - tranche ${data.installmentIndex}`,
         html,

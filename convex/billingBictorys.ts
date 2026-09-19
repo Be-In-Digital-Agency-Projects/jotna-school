@@ -84,6 +84,50 @@ function bictorysHeaders(config: BictorysConfig): Record<string, string> {
   };
 }
 
+/**
+ * La phrase affichée sur la page de paiement, ramenée à ce que Bictorys accepte.
+ *
+ * ÉPROUVÉ CONTRE LEUR BAC À SABLE le 19/09/2026, et pas déduit de leur
+ * documentation, qui ne dit rien du format de ce champ. Deux contraintes, et
+ * chacune faisait refuser le paiement entier par un
+ * `HTTP 400 — E400-46: Invalid paymentReference format` :
+ *
+ *   1. ASCII IMPRIMABLE SEULEMENT. Le tiret cadratin de la phrase d'origine
+ *      suffisait à faire refuser CHAQUE paiement, avant même qu'un nom d'école
+ *      soit en cause ; « École », « Lycée » ou « Institut Cheikh Ahmadou »
+ *      auraient fait le reste ;
+ *   2. 64 CARACTÈRES AU PLUS. 64 passe, 65 est refusé.
+ *
+ * ON TRANSLITÈRE PLUTÔT QUE DE SUPPRIMER : « École » devient « Ecole », pas
+ * « cole ». Et on coupe à 64 plutôt que de laisser partir une requête qu'on
+ * sait refusée : un nom d'école long ne doit pas empêcher son école de payer.
+ *
+ * LES LIGATURES SE TRAITENT AVANT LE RESTE, parce que NFD ne les décompose
+ * pas : « œ » n'est pas un « o » porteur d'un accent, c'est une lettre à part.
+ * Sans cette ligne, « Sacré-Cœur » — une école de Dakar, pas un cas d'école —
+ * s'afficherait « Sacre-C ur » sur la page de paiement.
+ *
+ * CE CHAMP EST DÉCORATIF, et c'est ce qui rend la coupe acceptable. Ce qui
+ * identifie la tranche est `merchantReference`, qui porte l'identifiant Convex
+ * — de l'ASCII, jamais tronqué.
+ */
+function bictorysReference(text: string): string {
+  return text
+    .replace(/œ/g, "oe")
+    .replace(/Œ/g, "OE")
+    .replace(/æ/g, "ae")
+    .replace(/Æ/g, "AE")
+    .replace(/[‘’]/g, "'")
+    .replace(/[‐-―]/g, "-")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^\x20-\x7E]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 64)
+    .trim();
+}
+
 /** La phrase que lit un adulte quand les clés ne sont pas posées. */
 const NOT_CONFIGURED =
   "L'encaissement en ligne n'est pas configuré sur ce déploiement : les clés " +
@@ -152,7 +196,9 @@ export const openInvoice = internalAction({
         // pays du marchand s'applique — ce qui donnerait la même chose, mais on
         // ne fait pas reposer un paiement sur un défaut.
         country: "SN",
-        paymentReference: `Jotna School — ${target.schoolName}, tranche ${target.index}`,
+        paymentReference: bictorysReference(
+          `Jotna School - ${target.schoolName}, tranche ${target.index}`,
+        ),
         merchantReference: target.installmentId,
       }),
     });

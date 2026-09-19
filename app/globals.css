@@ -110,3 +110,15 @@
     }
   }
 }
+
+/* Module « Arabe & Coran » — tout ce qui est écrit en arabe porte cette classe.
+   La variable est posée par `next/font` (app/layout.tsx) ; les polices citées
+   ensuite sont des replis installés localement sur certaines machines, et
+   `serif` ferme la liste pour que le texte reste lisible même sans aucune
+   d'elles. */
+.font-arabic {
+  font-family:
+    var(--font-arabic), "Amiri", "Scheherazade New", "Noto Naskh Arabic",
+    "Traditional Arabic", serif;
+  font-feature-settings: "liga" 1, "calt" 1;
+}

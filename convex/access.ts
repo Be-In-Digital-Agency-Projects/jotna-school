@@ -265,6 +265,26 @@ async function currentProfile(
     .unique();
 }
 
+/**
+ * Le profil de l'appelant, QUEL QUE SOIT son rôle — ou `null`.
+ *
+ * Le plus faible de la famille : il n'exige rien, il NOMME. Destiné aux
+ * fonctions qui jugent un LIEN plutôt qu'un rôle — « ce directeur est-il
+ * membre de CETTE école ? » — cas que `callerAdminProfile` et
+ * `callerStaffProfile` ne couvrent pas, leur garde de rôle jetant justement
+ * le directeur. C'est la doctrine que ce fichier énonce déjà : une fonction
+ * qui reçoit un identifiant en argument ne peut pas se contenter d'un rôle.
+ *
+ * Expose `currentProfile`, qui existait déjà et servait en privé à tout ce
+ * module ; aucune garde n'est déplacée ni affaiblie. QUI L'APPELLE DOIT POSER
+ * SA PROPRE GARDE — recevoir un profil n'autorise rien.
+ */
+export async function callerProfile(
+  ctx: QueryCtx | MutationCtx,
+): Promise<Doc<"profiles"> | null> {
+  return await currentProfile(ctx);
+}
+
 /** Pour les REQUÊTES : retourne un statut, ne lève jamais (spec §5.4). */
 export async function checkAccess(
   ctx: QueryCtx | MutationCtx,

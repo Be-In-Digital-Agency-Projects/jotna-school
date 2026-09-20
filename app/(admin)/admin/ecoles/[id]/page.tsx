@@ -39,6 +39,7 @@ import {
   Unlock,
   CreditCard,
   ExternalLink,
+  BookOpenText,
 } from "lucide-react";
 
 /** Les types viennent des fonctions Convex : aucune forme n'est recopiée. */
@@ -1332,6 +1333,8 @@ function SchoolDetail({ school }: { school: Doc<"schools"> }) {
 
       <BillingSection schoolId={school._id} />
 
+      <ModulesSection schoolId={school._id} />
+
       <StaffSection
         schoolId={school._id}
         staff={staff}
@@ -1666,6 +1669,110 @@ function BillingSection({ schoolId }: { schoolId: Doc<"schools">["_id"] }) {
 // Personnel — étape 2 du parcours : sans une ligne ici, personne ne peut être
 // affecté à une classe de cette école.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// LES MODULES OPTIONNELS — ce que l'école enseigne EN PLUS du tronc commun.
+//
+// POURQUOI L'INTERRUPTEUR EST ICI. Le module « Arabe & Coran » est un
+// enseignement religieux : toutes les écoles n'en veulent pas, et celles qui
+// le donnent ne le donnent pas toutes dans cette application. Il est donc
+// ÉTEINT par défaut, et personne d'autre que l'école ne l'allume — ni un
+// professeur, ni un parent, ni un réglage global du produit.
+//
+// LE GARDE EST CÔTÉ SERVEUR (`modules.setForSchool`) : un `admin`, ou le
+// `directeur` rattaché à CETTE école. Cet écran est celui de l'administrateur ;
+// le jour où un espace directeur existera, il appellera la même mutation, sans
+// qu'on ait à rouvrir la règle.
+//
+// ÉTEINDRE N'EFFACE RIEN. Les progressions des enfants restent en base et
+// reviennent si l'école rallume — c'est écrit dans la mutation, et c'est ce qui
+// permet de suspendre un module sans détruire un trimestre de travail.
+// ---------------------------------------------------------------------------
+
+function ModulesSection({ schoolId }: { schoolId: Doc<"schools">["_id"] }) {
+  const modules = useQuery(api.modules.listForSchool, { schoolId });
+  const setForSchool = useMutation(api.modules.setForSchool);
+
+  const [pending, setPending] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const toggle = async (moduleKey: "arabe_coran", enabled: boolean) => {
+    setPending(moduleKey);
+    setError(null);
+    try {
+      await setForSchool({ schoolId, moduleKey, enabled });
+    } catch (err) {
+      setError(
+        refusalMessage(err, "Impossible de modifier ce module pour le moment"),
+      );
+    } finally {
+      setPending(null);
+    }
+  };
+
+  return (
+    <section className="mb-10">
+      <div className="mb-4 flex items-center gap-2">
+        <BookOpenText className="h-5 w-5 text-gray-400" />
+        <h2 className="text-lg font-semibold text-gray-900">
+          Modules optionnels
+        </h2>
+      </div>
+
+      {error && (
+        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          {error}
+        </div>
+      )}
+
+      {modules === undefined ? (
+        <div className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white p-4 text-sm text-gray-500 shadow-sm">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Chargement...
+        </div>
+      ) : (
+        <ul className="space-y-3">
+          {modules.map((module_) => (
+            <li
+              key={module_.key}
+              className="flex flex-wrap items-start gap-4 rounded-xl border border-gray-200 bg-white p-4 shadow-sm"
+            >
+              <span className="text-2xl" aria-hidden>
+                {module_.emoji}
+              </span>
+              <div className="min-w-56 flex-1">
+                <p className="font-medium text-gray-900">{module_.title}</p>
+                <p className="mt-1 text-sm text-gray-500">{module_.summary}</p>
+                <p className="mt-2 text-xs text-gray-400">
+                  {module_.enabled
+                    ? "Visible par tous les élèves inscrits dans cette école."
+                    : "Éteint : aucun élève de cette école ne le voit."}
+                  {module_.updatedAt !== null &&
+                    ` Dernier changement le ${formatDay(module_.updatedAt)}.`}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => toggle(module_.key, !module_.enabled)}
+                disabled={pending === module_.key}
+                className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50 ${
+                  module_.enabled
+                    ? "border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+                    : "bg-indigo-600 text-white hover:bg-indigo-700"
+                }`}
+              >
+                {pending === module_.key && (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                )}
+                {module_.enabled ? "Désactiver" : "Activer pour cette école"}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
 
 function StaffSection({
   schoolId,

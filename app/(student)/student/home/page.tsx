@@ -21,6 +21,10 @@ const iconMap: Record<string, React.ReactNode> = {
 export default function StudentHomePage() {
   const subjects = useQuery(api.subjects.list);
   const stats = useQuery(api.students.getMyStats);
+  // Les modules optionnels de l'école (aujourd'hui : « Arabe & Coran »).
+  // Éteint par défaut : une école qui n'a rien demandé ne voit rien, et
+  // l'accueil ne montre donc aucune section vide — voir `convex/modules.ts`.
+  const modules = useQuery(api.modules.getMine);
 
   if (subjects === undefined || stats === undefined) {
     return (
@@ -61,6 +65,10 @@ export default function StudentHomePage() {
           longestStreak={stats.longestStreak}
         />
       )}
+
+      {/* Modules optionnels de l'école — avant les matières : c'est un
+          enseignement à part entière, pas une rubrique de fin de page. */}
+      <ModuleCards modules={modules ?? []} />
 
       {/* Subjects grid — "mes mondes" */}
       <div>
@@ -106,6 +114,56 @@ export default function StudentHomePage() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Les modules que l'école a allumés.
+ *
+ * Ne rend RIEN quand il n'y en a aucun : ni titre, ni cadre vide. Un enfant
+ * dont l'école n'a pas pris l'arabe ne doit pas voir la place où il aurait
+ * été — c'est la règle du catalogue (`convex/moduleCatalog.ts`), tenue
+ * jusqu'à l'écran.
+ */
+function ModuleCards({
+  modules,
+}: {
+  modules: {
+    key: string;
+    title: string;
+    summary: string;
+    emoji: string;
+    color: string;
+    href: string;
+    enabled: boolean;
+  }[];
+}) {
+  const enabled = modules.filter((module_) => module_.enabled);
+  if (enabled.length === 0) return null;
+
+  return (
+    <div className="grid gap-3 sm:grid-cols-2">
+      {enabled.map((module_) => (
+        <Link
+          key={module_.key}
+          href={module_.href}
+          className="group flex items-center gap-4 rounded-3xl p-5 text-white shadow-lg transition-all hover:-translate-y-0.5 hover:shadow-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
+          style={{ backgroundColor: module_.color }}
+        >
+          <span className="text-4xl" aria-hidden>
+            {module_.emoji}
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="font-display block text-xl font-extrabold">
+              {module_.title}
+            </span>
+            <span className="mt-0.5 block text-sm opacity-95">
+              {module_.summary}
+            </span>
+          </span>
+        </Link>
+      ))}
     </div>
   );
 }

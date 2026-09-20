@@ -2,6 +2,7 @@ import { defineSchema, defineTable } from "convex/server";
 import { authTables } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { classEnum, visibleClassValidator } from "./curriculum";
+import { moduleKeyValidator } from "./moduleCatalog";
 
 // ---------------------------------------------------------------------------
 // AI gateway purposes — mirrors aiGateway/registry.ts. Listed here as
@@ -988,4 +989,151 @@ export default defineSchema({
   })
     .index("by_code", ["code"])
     .index("by_student", ["studentId"]),
+
+  // ===========================================================================
+  // MODULE « ARABE & CORAN » — enseignement optionnel, allumé par l'école.
+  //
+  // CE QUE CE BLOC AJOUTE, ET CE QU'IL NE TOUCHE PAS. Quatre tables, toutes
+  // neuves, et pas une ligne de plus ailleurs : ni `subjects`, ni `topics`, ni
+  // `exercises`, ni `attempts`. Le module a son propre contenu (vingt-huit
+  // lettres et six sourates, écrites en TypeScript dans `convex/arabic/`, pas
+  // en base) et sa propre progression, parce qu'il ne se joue pas comme un
+  // palier : on y écoute, on y parle, on y écrit au doigt, et aucune de ces
+  // trois choses n'entre dans `attempts.submittedAnswer`. Greffer l'arabe sur
+  // le moteur d'exercices aurait demandé de tordre les deux.
+  // ===========================================================================
+
+  // Quels modules optionnels cette école a allumés.
+  //
+  // L'ABSENCE DE LIGNE VAUT « ÉTEINT » (voir `convex/moduleCatalog.ts`). Une
+  // école qui n'a rien demandé n'a donc aucune ligne ici, et ses élèves ne
+  // voient rien du module — c'est l'état de toutes les écoles le jour où ce
+  // code est déployé, et c'est le seul état acceptable par défaut pour un
+  // enseignement religieux.
+  //
+  // UNE LIGNE PAR (école, module), maintenue par `modules.setForSchool` :
+  // éteindre n'efface pas la ligne, ça passe `enabled` à faux. La différence
+  // compte — `updatedBy` et `updatedAt` disent alors QUI a éteint et QUAND,
+  // là où une suppression ne dirait plus rien.
+  schoolModules: defineTable({
+    schoolId: v.id("schools"),
+    moduleKey: moduleKeyValidator,
+    enabled: v.boolean(),
+    // L'auteur du dernier changement : un `admin`, ou le `directeur` de cette
+    // école. Copié, jamais relu pour autoriser quoi que ce soit — même
+    // principe que les journaux de `schools.ts`.
+    updatedBy: v.id("profiles"),
+    updatedAt: v.number(),
+  })
+    .index("by_school", ["schoolId"])
+    // La question du chemin chaud : « CE module est-il allumé pour CETTE
+    // école ? », posée à chaque ouverture de l'espace arabe par un élève.
+    .index("by_school_module", ["schoolId", "moduleKey"]),
+
+  // L'AUDIO SYNTHÉTISÉ, mis en cache.
+  //
+  // POURQUOI UN CACHE, ET NON UN APPEL PAR ÉCOUTE. Le texte est FINI et connu
+  // d'avance : vingt-huit noms de lettres, quatre-vingt-quatre syllabes,
+  // quelques dizaines de mots, vingt-huit versets. Une classe de quarante
+  // élèves qui révise l'alphabet, c'est le même « بَاء » demandé des centaines
+  // de fois par semaine. Sans cache, chaque écoute serait un appel facturé
+  // chez le fournisseur de voix, pour un fichier identique au précédent.
+  //
+  // LA CLÉ PORTE LA VOIX ET LE MODÈLE (`cacheKey`), pas seulement le texte :
+  // changer de voix doit produire un nouveau clip, pas resservir l'ancien.
+  // C'est ce qui rend le changement de voix sans danger — on ne réécrit ni
+  // n'efface rien, les anciens clips deviennent simplement inatteignables.
+  //
+  // `storageId` et non les octets : un mp3 de quelques secondes dépasse
+  // rapidement ce qu'un document Convex doit porter, et le stockage de fichiers
+  // existe pour ça.
+  arabicAudioClips: defineTable({
+    cacheKey: v.string(),
+    text: v.string(),
+    voiceId: v.string(),
+    modelId: v.string(),
+    storageId: v.id("_storage"),
+    bytes: v.number(),
+    createdAt: v.number(),
+  }).index("by_cacheKey", ["cacheKey"]),
+
+  // La progression d'un élève, leçon par leçon.
+  //
+  // `drillsDone` EST UN TABLEAU, et c'est permis ici : il énumère des familles
+  // d'exercices (`DrillKind`), dont le nombre est fixé par le code — sept
+  // aujourd'hui. Les guidelines interdisent les listes NON BORNÉES dans un
+  // document ; celle-ci ne peut pas grandir avec l'usage. Les tentatives,
+  // elles, sont sans limite : elles ont leur propre table, juste en dessous.
+  arabicLessonProgress: defineTable({
+    studentId: v.id("profiles"),
+    lessonKey: v.string(),
+    status: v.union(v.literal("in_progress"), v.literal("completed")),
+    /** 0..3 — la même échelle d'étoiles que le reste de l'espace élève. */
+    stars: v.number(),
+    /** 0..1 — la meilleure moyenne obtenue sur la leçon. */
+    bestScore: v.number(),
+    drillsDone: v.array(v.string()),
+    startedAt: v.number(),
+    completedAt: v.optional(v.number()),
+    updatedAt: v.number(),
+  })
+    .index("by_student", ["studentId"])
+    .index("by_student_lesson", ["studentId", "lessonKey"]),
+
+  // Une ligne par exercice tenté — la matière des bilans du professeur.
+  //
+  // CE QU'ELLE NE PORTE PAS, ET C'EST DÉLIBÉRÉ : ni l'audio de l'enfant, ni sa
+  // transcription. La voix d'un enfant est une donnée personnelle sensible ;
+  // elle traverse le module pour être jugée et n'est écrite NULLE PART — ni en
+  // stockage, ni en base, ni dans un journal. Ce qui reste est ce qu'un cahier
+  // garderait : la date, l'exercice, et si c'était juste.
+  //
+  // `source` dit OÙ la note a été calculée. « device » pour le tracé, que seul
+  // le navigateur peut juger (il faut la police pour dessiner le modèle) ;
+  // « server » pour la prononciation, jugée après transcription. La distinction
+  // est écrite parce qu'elle change ce qu'on peut conclure d'une note : celle
+  // du tracé est une aide à l'apprentissage, pas une preuve.
+  arabicAttempts: defineTable({
+    studentId: v.id("profiles"),
+    lessonKey: v.string(),
+    /** Une valeur de `DrillKind` (`convex/arabic/curriculum.ts`). */
+    drill: v.string(),
+    /** La lettre ou l'item de lecture visé. */
+    itemKey: v.string(),
+    correct: v.boolean(),
+    /** 0..1 pour la prononciation et le tracé ; absent pour les QCM. */
+    score: v.optional(v.number()),
+    verdict: v.optional(
+      v.union(v.literal("ok"), v.literal("close"), v.literal("retry")),
+    ),
+    source: v.union(v.literal("device"), v.literal("server")),
+    at: v.number(),
+  })
+    .index("by_student_lesson", ["studentId", "lessonKey"])
+    .index("by_student_at", ["studentId", "at"]),
+
+  // Ce que l'élève a consommé de voix aujourd'hui — le garde-fou de dépense.
+  //
+  // POURQUOI UNE TABLE À PART, ET NON `aiUsage` / `aiUserQuota`. Ces deux
+  // tables servent le plafond MENSUEL d'OpenAI (`aiGateway/budget.ts`), qui
+  // coupe la génération d'exercices quand la dépense approche du budget. Y
+  // verser la synthèse vocale ferait que réviser l'alphabet en classe pourrait
+  // fermer la génération de paliers en mathématiques — deux enseignements qui
+  // n'ont rien à voir, reliés par un compteur. Le fournisseur, l'unité
+  // facturée (des caractères, des secondes d'audio) et le geste de l'enfant
+  // sont différents : le compteur l'est aussi.
+  //
+  // UNE LIGNE PAR (élève, jour), et le jour est en UTC comme `aiUserQuota`
+  // (`dayKey`) — pas pour l'exactitude du fuseau sénégalais (UTC+0, donc
+  // exact ici), mais pour que deux compteurs du même dépôt ne tournent pas sur
+  // deux minuits différents.
+  arabicVoiceUsage: defineTable({
+    studentId: v.id("profiles"),
+    dayKey: v.string(), // YYYY-MM-DD, UTC
+    /** Nombre de transcriptions demandées — c'est ce qui coûte à l'appel. */
+    sttCalls: v.number(),
+    /** Caractères synthétisés HORS cache : les seuls qui aient été facturés. */
+    ttsChars: v.number(),
+    updatedAt: v.number(),
+  }).index("by_student_day", ["studentId", "dayKey"]),
 });

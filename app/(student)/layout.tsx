@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { Home, Award, UserCircle, Star, Flame } from "lucide-react";
+import { Home, Award, UserCircle, Star, Flame, BookOpenText } from "lucide-react";
 import { UserMenu } from "@/components/ui/user-menu";
 import { Brand } from "@/components/landing/brand";
 import { AccessGate } from "@/components/AccessGate";
@@ -16,13 +16,33 @@ const navLinks = [
   { href: "/student/profil", label: "Profil", icon: UserCircle },
 ];
 
+/**
+ * Le lien du module « Arabe & Coran », inséré après l'accueil quand l'école
+ * l'a allumé.
+ *
+ * IL N'APPARAÎT PAS PAR DÉFAUT. La barre du bas est le seul chemin de
+ * navigation sur téléphone : y laisser en permanence un lien vers un
+ * enseignement que l'école n'a pas pris donnerait une porte fermée à chaque
+ * écran. `modules.getMine` répond « éteint » tant qu'aucune école n'a
+ * décidé le contraire.
+ */
+const arabicLink = {
+  href: "/student/arabe",
+  label: "Arabe",
+  icon: BookOpenText,
+};
+
 // Routes where the student should be fully focused on the exercise —
 // the top nav + bottom tab are hidden to avoid distraction (Decision 90 +
 // driving-test app pattern). Decision D5 extends focus to the bottom tab.
 function isFocusRoute(pathname: string): boolean {
   return (
     /^\/student\/topics\/[^/]+\/session/.test(pathname) ||
-    /^\/student\/topics\/[^/]+\/complete/.test(pathname)
+    /^\/student\/topics\/[^/]+\/complete/.test(pathname) ||
+    // Une leçon d'arabe demande la même concentration qu'un palier : elle
+    // fait écouter, répéter au micro et écrire au doigt, et la barre du bas
+    // passerait sous le carré d'écriture sur un téléphone.
+    /^\/student\/arabe\/lecon\//.test(pathname)
   );
 }
 
@@ -33,6 +53,13 @@ export default function StudentLayout({
 }) {
   const pathname = usePathname() ?? "";
   const focusMode = isFocusRoute(pathname);
+  const modules = useQuery(api.modules.getMine);
+  const arabicEnabled =
+    modules?.some((module_) => module_.key === "arabe_coran" && module_.enabled) ===
+    true;
+  const links = arabicEnabled
+    ? [navLinks[0], arabicLink, ...navLinks.slice(1)]
+    : navLinks;
 
   return (
     // D12 — honors prefers-reduced-motion globally for all motion inside
@@ -46,7 +73,7 @@ export default function StudentLayout({
 
               {/* D5 — top nav links: tablet/desktop only. Mobile uses bottom tab. */}
               <nav className="hidden items-center gap-2 sm:flex">
-                {navLinks.map((link) => {
+                {links.map((link) => {
                   const isActive =
                     pathname === link.href ||
                     pathname.startsWith(`${link.href}/`);
@@ -89,7 +116,7 @@ export default function StudentLayout({
         </main>
 
         {/* D5 — bottom tab nav: mobile only. Hidden during focus mode. */}
-        {!focusMode && <BottomTabNav pathname={pathname} />}
+        {!focusMode && <BottomTabNav pathname={pathname} links={links} />}
       </div>
     </MotionConfig>
   );
@@ -143,14 +170,20 @@ function StudentStatusBar() {
   );
 }
 
-function BottomTabNav({ pathname }: { pathname: string }) {
+function BottomTabNav({
+  pathname,
+  links,
+}: {
+  pathname: string;
+  links: typeof navLinks;
+}) {
   return (
     <nav
       aria-label="Navigation principale"
       className="fixed bottom-0 left-0 right-0 z-10 border-t border-amber-100 bg-white/95 backdrop-blur-md sm:hidden"
     >
       <div className="mx-auto flex max-w-md items-stretch justify-around px-2 py-1.5">
-        {navLinks.map((link) => {
+        {links.map((link) => {
           const isActive =
             pathname === link.href || pathname.startsWith(`${link.href}/`);
           return (

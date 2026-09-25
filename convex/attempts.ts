@@ -8,6 +8,7 @@ import {
   blockedStudent,
   studentIdsTaughtBy,
 } from "./access";
+import { verifyAnswer } from "./answerRules";
 
 /**
  * Compute where the current student should resume in a given topic session.
@@ -145,72 +146,6 @@ export const getExerciseAndAttempts = internalQuery({
 });
 
 // ---------------------------------------------------------------------------
-// Answer verification helpers
-// ---------------------------------------------------------------------------
-
-function verifyQcm(submittedAnswer: string, payload: { correctIndex: number }): boolean {
-  return parseInt(submittedAnswer, 10) === payload.correctIndex;
-}
-
-function verifyMatch(
-  submittedAnswer: string,
-  payload: { pairs: { left: string; right: string }[] },
-): boolean {
-  try {
-    const submitted: { left: string; right: string }[] = JSON.parse(submittedAnswer);
-    if (submitted.length !== payload.pairs.length) return false;
-
-    const correctSet = new Set(
-      payload.pairs.map((p) => `${p.left}|||${p.right}`),
-    );
-    for (const pair of submitted) {
-      if (!correctSet.has(`${pair.left}|||${pair.right}`)) return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function verifyOrder(
-  submittedAnswer: string,
-  payload: { correctSequence: string[] },
-): boolean {
-  try {
-    const submitted: string[] = JSON.parse(submittedAnswer);
-    if (submitted.length !== payload.correctSequence.length) return false;
-    return submitted.every((item, i) => item === payload.correctSequence[i]);
-  } catch {
-    return false;
-  }
-}
-
-function verifyDragDrop(
-  submittedAnswer: string,
-  payload: { items: { text: string; correctZone: string }[] },
-): boolean {
-  try {
-    const submitted: Record<string, string> = JSON.parse(submittedAnswer);
-    for (const item of payload.items) {
-      if (submitted[item.text] !== item.correctZone) return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function verifyShortAnswer(
-  submittedAnswer: string,
-  payload: { acceptedAnswers: string[] },
-): boolean {
-  const normalized = submittedAnswer.toLowerCase().trim();
-  return payload.acceptedAnswers.some(
-    (answer) => answer.toLowerCase().trim() === normalized,
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Mutations
 // ---------------------------------------------------------------------------
 
@@ -271,27 +206,17 @@ export const submit = mutation({
       throw new Error("Exercice introuvable");
     }
 
-    // Verify the answer based on exercise type
-    let isCorrect = false;
-    switch (exercise.type) {
-      case "qcm":
-        isCorrect = verifyQcm(args.submittedAnswer, exercise.payload);
-        break;
-      case "match":
-        isCorrect = verifyMatch(args.submittedAnswer, exercise.payload);
-        break;
-      case "order":
-        isCorrect = verifyOrder(args.submittedAnswer, exercise.payload);
-        break;
-      case "drag-drop":
-        isCorrect = verifyDragDrop(args.submittedAnswer, exercise.payload);
-        break;
-      case "short-answer":
-        isCorrect = verifyShortAnswer(args.submittedAnswer, exercise.payload);
-        break;
-      default:
-        throw new Error(`Type d'exercice non supporté: ${exercise.type}`);
-    }
+    // UNE SEULE SÉMANTIQUE DE CORRECTION, celle d'`answerRules.ts`. Ce fichier
+    // portait sa propre copie des cinq vérificateurs, identique à celle de
+    // `palierAttempts.ts` : deux mutations publiques corrigeaient le même
+    // exercice avec deux codes distincts que rien n'obligeait à rester égaux.
+    // Un type hors de l'union du schéma rend désormais `false` au lieu de
+    // lever ; le validateur d'`exercises.type` rend ce cas inatteignable.
+    const isCorrect = verifyAnswer(
+      exercise.type,
+      exercise.payload,
+      args.submittedAnswer,
+    );
 
     // Create the attempt record
     const attemptId = await ctx.db.insert("attempts", {

@@ -1,79 +1,23 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+import {
+  verifyDragDrop,
+  verifyMatch,
+  verifyOrder,
+  verifyQcm,
+  verifyShortAnswer,
+} from "../answerRules";
+
 // ---------------------------------------------------------------------------
 // These tests validate the answer verification logic for each exercise type
 // and the progress update behavior when an answer is correct.
-// We replicate the handler logic inline since Convex function handlers
-// are not directly callable without the Convex runtime.
+//
+// Les vérificateurs étaient RÉÉCRITS ici, en copie de `convex/attempts.ts` :
+// la suite notait donc du code que la production n'exécutait pas, et les deux
+// pouvaient diverger en silence. Ils sont maintenant importés d'`answerRules`,
+// module pur appelé par les mutations. Les cas de refus ajoutés par la
+// correction des laxismes vivent dans `answerRules.test.ts`.
 // ---------------------------------------------------------------------------
-
-// ---- Verification logic (mirrors convex/attempts.ts) ----
-
-function verifyQcm(
-  submittedAnswer: string,
-  payload: { correctIndex: number },
-): boolean {
-  return parseInt(submittedAnswer, 10) === payload.correctIndex;
-}
-
-function verifyMatch(
-  submittedAnswer: string,
-  payload: { pairs: { left: string; right: string }[] },
-): boolean {
-  try {
-    const submitted: { left: string; right: string }[] =
-      JSON.parse(submittedAnswer);
-    if (submitted.length !== payload.pairs.length) return false;
-
-    const correctSet = new Set(
-      payload.pairs.map((p) => `${p.left}|||${p.right}`),
-    );
-    for (const pair of submitted) {
-      if (!correctSet.has(`${pair.left}|||${pair.right}`)) return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function verifyOrder(
-  submittedAnswer: string,
-  payload: { correctSequence: string[] },
-): boolean {
-  try {
-    const submitted: string[] = JSON.parse(submittedAnswer);
-    if (submitted.length !== payload.correctSequence.length) return false;
-    return submitted.every((item, i) => item === payload.correctSequence[i]);
-  } catch {
-    return false;
-  }
-}
-
-function verifyDragDrop(
-  submittedAnswer: string,
-  payload: { items: { text: string; correctZone: string }[] },
-): boolean {
-  try {
-    const submitted: Record<string, string> = JSON.parse(submittedAnswer);
-    for (const item of payload.items) {
-      if (submitted[item.text] !== item.correctZone) return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function verifyShortAnswer(
-  submittedAnswer: string,
-  payload: { acceptedAnswers: string[] },
-): boolean {
-  const normalized = submittedAnswer.toLowerCase().trim();
-  return payload.acceptedAnswers.some(
-    (answer) => answer.toLowerCase().trim() === normalized,
-  );
-}
 
 // ---- Mock Convex context ----
 

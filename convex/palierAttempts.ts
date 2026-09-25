@@ -21,64 +21,7 @@ import {
 import { shuffleDeterministic } from "./paliers";
 import { internal } from "./_generated/api";
 import { checkAccess, requireAccess } from "./access";
-
-// ===========================================================================
-// Verification helpers — server-side only, never expose correctAnswer.
-// ===========================================================================
-
-function verifyQcm(submitted: string, payload: { correctIndex: number }): boolean {
-  return parseInt(submitted, 10) === payload.correctIndex;
-}
-
-function verifyMatch(
-  submitted: string,
-  payload: { pairs: { left: string; right: string }[] },
-): boolean {
-  try {
-    const arr: { left: string; right: string }[] = JSON.parse(submitted);
-    if (arr.length !== payload.pairs.length) return false;
-    const correct = new Set(payload.pairs.map((p) => `${p.left}|||${p.right}`));
-    for (const pair of arr) {
-      if (!correct.has(`${pair.left}|||${pair.right}`)) return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function verifyOrder(submitted: string, payload: { correctSequence: string[] }): boolean {
-  try {
-    const arr: string[] = JSON.parse(submitted);
-    if (arr.length !== payload.correctSequence.length) return false;
-    return arr.every((it, i) => it === payload.correctSequence[i]);
-  } catch {
-    return false;
-  }
-}
-
-function verifyDragDrop(
-  submitted: string,
-  payload: { items: { text: string; correctZone: string }[] },
-): boolean {
-  try {
-    const map: Record<string, string> = JSON.parse(submitted);
-    for (const item of payload.items) {
-      if (map[item.text] !== item.correctZone) return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function verifyShortAnswer(
-  submitted: string,
-  payload: { acceptedAnswers: string[] },
-): boolean {
-  const norm = submitted.toLowerCase().trim();
-  return payload.acceptedAnswers.some((a) => a.toLowerCase().trim() === norm);
-}
+import { verifyAnswer } from "./answerRules";
 
 // ===========================================================================
 // MUTATIONS
@@ -465,27 +408,15 @@ export const listMyAttempts = query({
   },
 });
 
-// Helper used in tests
 export { verifyByType };
 
+/**
+ * La correction elle-même vit dans `answerRules.ts` — fonctions pures, testées
+ * directement (`convex/__tests__/answerRules.test.ts`). Ce module n'en garde
+ * que l'adaptation au document d'exercice.
+ */
 function verifyByType(exercise: Doc<"exercises">, submitted: string): boolean {
-  switch (exercise.type) {
-    case "qcm":
-      return verifyQcm(submitted, exercise.payload as { correctIndex: number });
-    case "match":
-      return verifyMatch(submitted, exercise.payload as { pairs: { left: string; right: string }[] });
-    case "order":
-      return verifyOrder(submitted, exercise.payload as { correctSequence: string[] });
-    case "drag-drop":
-      return verifyDragDrop(
-        submitted,
-        exercise.payload as { items: { text: string; correctZone: string }[] },
-      );
-    case "short-answer":
-      return verifyShortAnswer(submitted, exercise.payload as { acceptedAnswers: string[] });
-    default:
-      return false;
-  }
+  return verifyAnswer(exercise.type, exercise.payload, submitted);
 }
 
 // Re-export for tests / settings-driven shuffle preview

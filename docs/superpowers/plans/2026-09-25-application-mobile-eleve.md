@@ -348,9 +348,42 @@ verifier: {
 }
 ```
 
-L'appareil canonicalise la réponse de l'enfant, calcule l'empreinte, et teste
-l'appartenance. Il ne peut pas LIRE la réponse ; il peut seulement reconnaître
-la bonne quand elle est tapée — ou la chercher par force brute.
+**CORRECTION APPORTÉE EN PHASE 3 — UNE SEULE EMPREINTE NE MARCHE PAS.**
+Ce qui précède tient pour le QCM, la remise en ordre et la réponse courte. Cela
+s'effondre pour « relier » et « ranger », et la raison est dans le code du
+serveur, pas dans la théorie : `verifyMatch` teste une LONGUEUR puis une
+APPARTENANCE par élément, donc pour quatre paires TOUT multi-ensemble de taille
+quatre pris dans les paires correctes est accepté — 35 réponses, aux formes
+canoniques toutes différentes. `verifyDragDrop` ignore les clés en trop, donc
+le nombre de réponses acceptées est littéralement infini. Une empreinte unique
+en aurait reconnu UNE, et l'appareil aurait compté FAUX ce que le serveur
+compte JUSTE — divergence découverte en production, chez un enfant, les lots
+déjà distribués.
+
+**CE QUI MARCHE : L'EMPREINTE SUIT LA STRUCTURE DU VÉRIFICATEUR.** On ne hache
+pas la réponse, on hache ses ATOMES.
+
+| type | atomes livrés | ce que l'appareil teste |
+|---|---|---|
+| qcm | l'indice correct | l'atome soumis est connu |
+| order | la séquence entière | idem |
+| short-answer | chaque réponse acceptée | idem |
+| match | chaque paire correcte | bon NOMBRE, et chacune connue |
+| drag-drop | chaque `étiquette → zone` | chacune posée, et connue |
+
+Les deux laxismes de D21 sont alors reproduits **gratuitement** : ils découlent
+de la même structure. Chaque atome est préfixé de son type, sans quoi la
+réponse courte « 2 » et le QCM d'indice 2 partageraient une empreinte.
+
+**UNE EMPREINTE SALÉE, PAS UN HMAC.** Le HMAC suppose une clé SECRÈTE ; or
+l'appareil doit calculer hors ligne, donc il détient la clé. Un HMAC à clé
+connue n'apporte rien sur un hachage salé — ce qu'il protège en plus
+(l'extension de longueur) n'a aucun rôle ici. Ce serait du décorum. Le sel
+achète qu'une même réponse ne donne pas la même empreinte d'un exercice à
+l'autre ; ce qu'il n'achète pas est écrit en D20.
+
+L'appareil ne peut pas LIRE la réponse ; il peut seulement reconnaître la bonne
+quand elle est tapée — ou la chercher par force brute.
 
 **Coût réel, par type, dit franchement :**
 
@@ -666,10 +699,13 @@ typecheck et le paquet. Le vrai accueil (série, niveau, progression) reste 4.1.
 
 ### Phase 3 — Le hors-ligne
 
-- [ ] 3.1 `canonicalize(type, submitted)` dans `packages/core`, **copie fidèle
-      de `verifyByType`, laxismes compris** (D21), avec tests croisés :
-      pour un corpus d'exercices, `canonicalize` + empreinte et `verifyByType`
-      rendent le même verdict
+- [x] 3.1 **FAIT** — `convex/paliers/offline.ts`, à côté des vérificateurs
+      qu'il doit refléter (et non dans `packages/core`, voir **D23**).
+      24 tests croisés (`convex/__tests__/offline.test.ts`) posent la même
+      question aux deux côtés et exigent le même verdict, sur les cinq types
+      **et sur les deux laxismes**. C'est ce corpus qui a révélé que le schéma
+      d'empreintes de D11 ne pouvait pas fonctionner tel qu'écrit — D11 est
+      corrigée en conséquence
 - [ ] 3.2 Construction du lot côté serveur : `startPalierAttempt` (D14), payload
       assaini + `verifier { salt, digests }` (D11) + échéance d'accès (D18)
 - [ ] 3.3 Base locale (`expo-sqlite`) : lots téléchargés + journal d'`attempts`

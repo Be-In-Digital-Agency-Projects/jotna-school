@@ -9,6 +9,9 @@ import type {
   ShortAnswerClientPayload,
 } from "@convex/paliers/answers";
 import { kidMessages } from "@lib/kidCopy";
+import { correctFeedback, wrongFeedback } from "@/feedback/haptics";
+import { playSound } from "@/feedback/sounds";
+import { Confetti } from "@/ui/confetti";
 import { colors, fontSize, radius, spacing } from "@/theme/tokens";
 import { BigButton } from "@/ui/big-button";
 import { DragDropInput } from "./drag-drop";
@@ -31,6 +34,17 @@ export interface ExercisePlayerProps {
   onVerify: (encoded: string, timeSpentMs: number) => Promise<VerifyOutcome>;
   /** Demande l'indice suivant. Rend son texte. */
   onRequestHint: (hintIndex: number) => Promise<string>;
+  /**
+   * Demande l'explication de l'erreur. Rend son texte.
+   *
+   * Elle n'est proposée QU'À ESSAIS ÉPUISÉS, et ce n'est pas un choix de
+   * rythme : le serveur la fabrique en donnant la bonne réponse à l'IA
+   * (`attemptsExplain`), donc elle la dévoile. L'offrir plus tôt rendrait les
+   * cinq essais décoratifs.
+   */
+  onExplain?: () => Promise<string>;
+  /** Préférence de l'élève, lue côté serveur et passée par la séance. */
+  soundEnabled: boolean;
   /** L'enfant a fini avec cet exercice — juste ou épuisé. */
   onNext: () => void;
 }
@@ -66,13 +80,18 @@ export function ExercisePlayer({
   position,
   onVerify,
   onRequestHint,
+  onExplain,
   onNext,
+  soundEnabled,
 }: ExercisePlayerProps) {
   const [answer, setAnswer] = useState<string | null>(null);
   const [phase, setPhase] = useState<Phase>({ kind: "answering" });
   const [attemptKey, setAttemptKey] = useState(0);
   const [hints, setHints] = useState<string[]>([]);
   const [hintBusy, setHintBusy] = useState(false);
+  const [confettiKey, setConfettiKey] = useState(0);
+  const [explanation, setExplanation] = useState<string | null>(null);
+  const [explainBusy, setExplainBusy] = useState(false);
 
   const startedAt = useRef(Date.now());
 
@@ -82,6 +101,8 @@ export function ExercisePlayer({
     setPhase({ kind: "answering" });
     setAttemptKey(0);
     setHints([]);
+    setConfettiKey(0);
+    setExplanation(null);
   }, [exercise._id]);
 
   const handleAnswer = useCallback((encoded: string | null) => {
@@ -95,9 +116,14 @@ export function ExercisePlayer({
       const outcome = await onVerify(answer, Date.now() - startedAt.current);
       if (outcome.isCorrect) {
         setPhase({ kind: "correct" });
+        correctFeedback();
+        playSound("correct", soundEnabled);
+        setConfettiKey((k) => k + 1);
       } else if (outcome.attemptsRemaining <= 0) {
         setPhase({ kind: "exhausted" });
+        wrongFeedback();
       } else {
+        wrongFeedback();
         setPhase({ kind: "wrong", attemptsRemaining: outcome.attemptsRemaining });
         setAnswer(null);
         setAttemptKey((k) => k + 1);
@@ -120,6 +146,18 @@ export function ExercisePlayer({
       // Un indice qu'on n'a pas pu chercher n'empêche pas de répondre.
     } finally {
       setHintBusy(false);
+    }
+  }
+
+  async function askExplain() {
+    if (onExplain === undefined || explainBusy || explanation !== null) return;
+    setExplainBusy(true);
+    try {
+      setExplanation(await onExplain());
+    } catch {
+      setExplanation(kidMessages.genFailed);
+    } finally {
+      setExplainBusy(false);
     }
   }
 
@@ -156,6 +194,22 @@ export function ExercisePlayer({
 
       <Feedback phase={phase} />
 
+      {phase.kind === "exhausted" && onExplain !== undefined && (
+        explanation === null ? (
+          <BigButton
+            label="Comprendre mon erreur"
+            onPress={() => void askExplain()}
+            busy={explainBusy}
+            tone="quiet"
+          />
+        ) : (
+          <View style={styles.explain}>
+            <Text style={styles.explainTitle}>Voici pourquoi 💡</Text>
+            <Text style={styles.explainText}>{explanation}</Text>
+          </View>
+        )
+      )}
+
       {phase.kind === "correct" || phase.kind === "exhausted" ? (
         <BigButton label={kidMessages.cta.next} onPress={onNext} />
       ) : (
@@ -175,6 +229,7 @@ export function ExercisePlayer({
           tone="quiet"
         />
       )}
+      <Confetti fireKey={confettiKey} />
     </ScrollView>
   );
 }
@@ -289,6 +344,14 @@ const styles = StyleSheet.create({
   feedbackGood: { backgroundColor: "#ecfdf5" },
   feedbackNeutral: { backgroundColor: "#fffbeb" },
   feedbackText: { fontSize: fontSize.label, lineHeight: 26, color: colors.text },
+  explain: {
+    backgroundColor: "#eff6ff",
+    borderRadius: radius.md,
+    padding: spacing.md,
+    gap: spacing.xs,
+  },
+  explainTitle: { fontSize: fontSize.label, fontWeight: "700", color: colors.text },
+  explainText: { fontSize: fontSize.body, lineHeight: 26, color: colors.text },
   pending: {
     backgroundColor: colors.surface,
     borderWidth: 2,

@@ -8,6 +8,7 @@ import { VISIBLE_CLASSES, type VisibleClassName } from "@convex/curriculum";
 import { isAccessDenied } from "@lib/accessCopy";
 import { kidMessages } from "@lib/kidCopy";
 import { ExercisePlayer, type VerifyOutcome } from "@/exercises/exercise-player";
+import { releaseSounds } from "@/feedback/sounds";
 import type { SanitizedExercise } from "@/exercises/types";
 import { PalierResult, type PalierOutcome } from "@/screens/palier-result";
 import { colors, fontSize, radius, spacing } from "@/theme/tokens";
@@ -57,6 +58,14 @@ export function PalierSession({
   const hint = useMutation(api.palierAttempts.requestHint);
   const submit = useMutation(api.palierAttempts.submitPalier);
   const regenerate = useAction(api.paliers.index.regenerateFailedExercises);
+  const explain = useAction(api.attemptsExplain.generateExplanation);
+
+  // La préférence de son vit côté SERVEUR, pour qu'elle suive l'enfant d'un
+  // appareil à l'autre : une tablette d'école n'est pas la sienne. Tant que la
+  // réponse n'est pas là, on ne joue rien — un son qui part chez un enfant qui
+  // les avait coupés est pire que pas de son du tout.
+  const soundPref = useQuery(api.students.getMySoundEnabled, {});
+  const soundEnabled = soundPref?.soundEnabled === true;
 
   const [attemptId, setAttemptId] = useState<Id<"palierAttempts"> | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
@@ -68,6 +77,10 @@ export function PalierSession({
 
   // Le verrou d'amorçage — voir l'en-tête : il évite une seconde génération IA.
   const booting = useRef(false);
+
+  // Les lecteurs audio sont des objets NATIFS : les laisser derrière soi à
+  // chaque séance les accumule. On les libère en quittant.
+  useEffect(() => releaseSounds, []);
 
   useEffect(() => {
     if (topic === undefined || topic === null) return;
@@ -153,6 +166,13 @@ export function PalierSession({
     [exercises, index, attemptId, hint],
   );
 
+  const onExplain = useCallback(async (): Promise<string> => {
+    const current = exercises?.[index];
+    if (!current) throw new Error("Exercice indisponible");
+    const result = await explain({ exerciseId: current._id as Id<"exercises"> });
+    return result.explanation;
+  }, [exercises, index, explain]);
+
   const onNext = useCallback(() => {
     if (exercises === undefined || exercises === null) return;
     if (index < exercises.length - 1) {
@@ -236,7 +256,9 @@ export function PalierSession({
       position={{ index, total: exercises.length }}
       onVerify={onVerify}
       onRequestHint={onRequestHint}
+      onExplain={onExplain}
       onNext={onNext}
+      soundEnabled={soundEnabled}
     />
   );
 }

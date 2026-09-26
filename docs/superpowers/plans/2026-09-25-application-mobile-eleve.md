@@ -606,9 +606,12 @@ se décide dans un chantier technique — voir §5.
 - [x] 2.7 Ranger dans les zones — **tap sur l'étiquette, tap sur la case**
       (D24). La chaîne soumise est rigoureusement celle du glissé
 - [x] 2.8 Indices — un par un, par `requestHint`, avec l'avertissement sur les
-      étoiles AVANT que l'enfant les demande. **L'explication pas à pas reste à
-      faire** : `attemptsExplain.generateExplanation` n'est pas encore appelée
-- [ ] 2.9 Retours : sons (`expo-audio`), haptique, confettis, Pio
+      étoiles AVANT que l'enfant les demande — **et l'explication**, offerte
+      seulement à essais ÉPUISÉS : le serveur la fabrique en donnant la bonne
+      réponse à l'IA, donc elle la dévoile ; plus tôt, les cinq essais
+      deviendraient décoratifs
+- [x] 2.9 Retours : sons, haptique, confettis. **Pio reste à faire** (4.x avec
+      le reste de l'habillage)
 - [x] 2.10 Fin de palier : étoiles, « j'en veux encore », plafond de
       régénération — **tous les chiffres viennent de `submitPalier`**, aucun
       n'est recalculé sur l'appareil
@@ -617,9 +620,28 @@ se décide dans un chantier technique — voir §5.
       types, y compris ceux dont le composant n'existe pas encore. Un composant
       écrit ensuite n'a plus qu'à appeler l'encodeur déjà éprouvé
       (`convex/__tests__/answers.test.ts`)
-- [ ] 2.12 Parcours complet automatisé (Maestro) : code → palier → 10 exos →
-      fin. **Exige un appareil ou un émulateur**, donc invérifiable depuis le
-      conteneur : à écrire là où il peut tourner
+- [~] 2.12 Parcours Maestro — `apps/mobile/e2e/palier.yaml` est écrit et
+      **n'a JAMAIS été exécuté** : ni Maestro ni l'application ne tournent dans
+      ce conteneur. C'est un point de départ, pas une garantie. Son en-tête
+      liste ce qu'il faut vérifier au premier passage, à commencer par poser
+      des `testID` — les sélecteurs visent du texte, ce qui est fragile
+
+**LES RETOURS SENSORIELS, ET CE QU'ILS ÉVITENT.** Trois choix méritent d'être
+relus avant d'y toucher :
+
+- **les confettis sont en `Animated` de React Native, sans bibliothèque.** Vingt
+  carrés qui tombent font soixante lignes ; une dépendance de plus est une
+  montée de version annuelle à honorer (même raison qu'en D24). `useNativeDriver`
+  partout, parce que le fil JavaScript est occupé à charger l'exercice suivant
+  au moment précis où l'animation joue ;
+- **le mouvement réduit est respecté**, et l'état par défaut est « réduire » :
+  au pire on n'anime pas, jamais l'inverse ;
+- **les sons sont ceux du dépôt**, pris dans `public/sounds/` par `require()`
+  — Metro les atteint grâce aux `watchFolders` de la phase 0, et le paquet les
+  embarque (50 Ko, 50 Ko, 18 Ko). Dupliquer trois MP3 dans `apps/mobile/` aurait
+  marché aussi, et les deux copies auraient divergé à la première retouche.
+  La préférence de son vient du SERVEUR, pour qu'elle suive l'enfant d'un
+  appareil à l'autre : une tablette d'école n'est pas la sienne.
 
 **LA SÉANCE EST BRANCHÉE, ET C'EST CE QUI REND LE RESTE RÉEL.**
 `src/session/palier-session.tsx` enchaîne `getBucket` → `startPalierAttempt` →

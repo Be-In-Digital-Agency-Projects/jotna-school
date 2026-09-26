@@ -15,6 +15,20 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Le jeton de ce workflow ne peut QUE LIRE le dépôt.
+#
+# Sans ce bloc, `GITHUB_TOKEN` hérite des permissions par défaut du dépôt, qui
+# peuvent inclure l'écriture : une action tierce compromise — et il y en a
+# quatre ici, toutes à des versions flottantes de tag — pourrait alors pousser
+# sur `main`. Signalé par CodeQL sur la PR #26.
+#
+# `contents: read` est ce dont `actions/checkout` a besoin, et rien de plus.
+# AUCUN des deux jobs n'écrit : ils installent, vérifient et construisent, sans
+# publier ni commenter. Le jour où l'un d'eux devra poster un résultat, c'est
+# à LUI qu'on ajoutera la permission, pas à ce bloc-ci.
+permissions:
+  contents: read
+
 jobs:
   verify:
     name: Lint, typecheck, test, build

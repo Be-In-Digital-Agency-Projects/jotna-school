@@ -3,6 +3,8 @@ import { useFocusEffect, useRouter } from "expo-router";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { ATOM_SCHEME_VERSION } from "@convex/paliers/offline";
+import { isBundlePlayable } from "@/offline/bundle-validity";
 import { listBundles, pendingCount, type BundleSummary } from "@/offline/store";
 import { useChangeStudent } from "@/session/change-student";
 import { MIN_TOUCH_TARGET, colors, fontSize, radius, spacing } from "@/theme/tokens";
@@ -48,8 +50,14 @@ export function OfflineHome() {
       void listBundles()
         .then((rows) => {
           if (!alive) return;
+          // LA MÊME RÈGLE QUE LA SÉANCE, et pour la même raison : un lot
+          // dont le schéma d'atomes a changé sous l'appareil (6.7) ferait
+          // compter faux des réponses justes. L'offrir ici et le refuser
+          // ensuite serait le pire des deux.
           const now = Date.now();
-          setBundles(rows.filter((b) => b.accessValidUntil > now));
+          setBundles(
+            rows.filter((b) => isBundlePlayable(b, now, ATOM_SCHEME_VERSION)),
+          );
         })
         .catch(() => {
           if (alive) setBundles([]);

@@ -101,6 +101,47 @@ interface ShortAnswerServer {
   acceptedAnswers: string[];
 }
 
+/**
+ * LA VERSION DU SCHÉMA D'ATOMES — tâche 6.7, décision D21.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * LE DANGER QU'ELLE DÉSAMORCE, ET IL EST SILENCIEUX.
+ *
+ * Les empreintes d'un lot sont calculées PAR LE SERVEUR, au téléchargement,
+ * avec le code d'atomisation de ce jour-là. L'appareil, lui, recalcule les
+ * atomes de la réponse de l'enfant avec le code EMBARQUÉ DANS SON PAQUET.
+ * Tant que les deux coïncident, tout va bien.
+ *
+ * Une mise à jour à chaud (`expo-updates`) remplace le code de l'appareil sans
+ * toucher aux lots déjà téléchargés. Qu'elle change la moindre chose à la
+ * manière de construire un atome — un `trim()` en plus, une séparation
+ * différente, un `toLowerCase()` retiré — et l'appareil se met à calculer des
+ * atomes que les empreintes livrées ne reconnaissent plus.
+ *
+ * LA PANNE NE RESSEMBLE PAS À UNE PANNE. Rien ne plante : l'enfant répond
+ * juste, l'application lui dit faux, et il recommence. Personne ne voit la
+ * cause, ni sur l'appareil, ni dans les journaux — le serveur, lui, recalcule
+ * tout à la synchronisation et comptera les bonnes réponses, ce qui fait que
+ * même le score finit par être juste. Seul l'enfant aura passé l'après-midi à
+ * se croire nul.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * QUAND LA BOUGER — et il vaut mieux la bouger pour rien que l'oublier une
+ * fois. Tout changement de :
+ *
+ *   • `serverAtoms` ou `submittedAtoms` (les fonctions ci-dessous) ;
+ *   • la forme d'un atome, son préfixe de type, son séparateur ;
+ *   • `saltedInput` ;
+ *   • la canonicalisation employée par les vérificateurs de
+ *     `paliers/answers.ts`, que les atomes reproduisent.
+ *
+ * Le lot porte cette version, l'appareil compare avec la sienne, et un écart
+ * rend le lot INJOUABLE — exactement comme un bail expiré. L'enfant est
+ * renvoyé vers « prépare-le quand tu auras du réseau », ce qui est
+ * désagréable et honnête, là où le laisser jouer serait confortable et faux.
+ */
+export const ATOM_SCHEME_VERSION = 1;
+
 export function serverAtoms(
   type: ExerciseType | string,
   payload: unknown,

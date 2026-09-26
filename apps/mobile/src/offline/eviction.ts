@@ -17,6 +17,10 @@
  * ─────────────────────────────────────────────────────────────────────────
  * LES TROIS PROTECTIONS, PAR ORDRE D'IMPORTANCE.
  *
+ *   0. (depuis 6.7) UN LOT MORT — périmé, ou dont le schéma d'atomes ne
+ *      correspond plus — n'est pas « protégé » : il part EN PREMIER, avant
+ *      qu'on regarde la moindre taille. Ce n'est pas une protection, c'est
+ *      l'inverse, et c'est listé ici pour que l'ordre soit lisible d'un bloc.
  *   1. DES RÉPONSES EN ATTENTE. `flushJournal` relit le lot pour y prendre sa
  *      DATE DE TÉLÉCHARGEMENT, borne basse du bornage d'horloge du serveur
  *      (D17). Sans le lot, elle n'envoie rien — jamais.
@@ -31,11 +35,15 @@
  * tard, le travail d'un enfant ne se refait pas.
  */
 
+import { isBundlePlayable } from "./bundle-validity";
+
 export interface EvictionCandidate {
   palierAttemptId: string;
   /** Croissant : le plus ancien téléchargement d'abord. */
   downloadedAt: number;
   accessValidUntil: number;
+  /** La version du schéma d'atomes du lot, `null` s'il est d'avant 6.7. */
+  atomScheme: number | null;
   bytes: number;
   hasPending: boolean;
   awaitsClose: boolean;
@@ -50,7 +58,13 @@ export interface EvictionPlan {
 
 export function planEviction(
   candidates: readonly EvictionCandidate[],
-  options: { keep?: readonly string[]; now: number; maxBytes: number },
+  options: {
+    keep?: readonly string[];
+    now: number;
+    maxBytes: number;
+    /** Le schéma d'atomes de CET appareil — voir `bundle-validity.ts`. */
+    currentScheme: number;
+  },
 ): EvictionPlan {
   const kept = new Set(options.keep ?? []);
   const byAge = [...candidates].sort((a, b) => a.downloadedAt - b.downloadedAt);
@@ -63,13 +77,18 @@ export function planEviction(
   const doomed = new Set<string>();
   let remaining = byAge.reduce((acc, b) => acc + b.bytes, 0);
 
-  // 1) LES PÉRIMÉS PARTENT D'ABORD, sans regarder la taille : ils ne
-  //    serviront plus (`findUsableBundle` les ignore déjà). Leur place est
-  //    décomptée TOUT DE SUITE — la décompter au fil de l'eau ferait
-  //    condamner un lot encore valable alors que la place des périmés
+  // 1) CE QUI NE SE JOUERA PLUS PART D'ABORD, sans regarder la taille.
+  //
+  //    Deux familles : les lots PÉRIMÉS, et depuis 6.7 ceux dont le SCHÉMA
+  //    D'ATOMES ne correspond plus à celui de l'appareil. Les seconds sont
+  //    aussi morts que les premiers — `findUsableBundle` les ignore — et les
+  //    garder ne ferait que retenir de la place pour rien.
+  //
+  //    Leur place est décomptée TOUT DE SUITE : la décompter au fil de l'eau
+  //    ferait condamner un lot encore valable alors que la place des morts
   //    suffisait à repasser sous le plafond.
   for (const b of evictable) {
-    if (b.accessValidUntil <= options.now) {
+    if (!isBundlePlayable(b, options.now, options.currentScheme)) {
       remove.push(b.palierAttemptId);
       doomed.add(b.palierAttemptId);
       remaining -= b.bytes;

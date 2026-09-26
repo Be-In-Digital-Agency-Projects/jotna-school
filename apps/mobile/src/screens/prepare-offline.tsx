@@ -13,6 +13,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { api } from "@convex/_generated/api";
 import type { Id } from "@convex/_generated/dataModel";
 import { VISIBLE_CLASSES, type VisibleClassName } from "@convex/curriculum";
+import { ATOM_SCHEME_VERSION } from "@convex/paliers/offline";
+import { isBundlePlayable } from "@/offline/bundle-validity";
 import { isUnmeteredNow } from "@/offline/network";
 import { useServerReach } from "@/session/reach";
 import { preparePalier, type PrepareOutcome } from "@/offline/prepare";
@@ -124,7 +126,7 @@ export function PrepareOffline({
   const now = Date.now();
   const readyKeys = new Set(
     bundles
-      .filter((b) => b.accessValidUntil > now)
+      .filter((b) => isBundlePlayable(b, now, ATOM_SCHEME_VERSION))
       .map((b) => `${b.topicId}:${b.palierIndex}`),
   );
   const usedBytes = bundles.reduce((acc, b) => acc + b.bytes, 0);

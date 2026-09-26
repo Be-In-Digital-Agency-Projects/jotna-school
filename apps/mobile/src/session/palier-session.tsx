@@ -202,6 +202,7 @@ export function PalierSession({
         palierIndex,
         downloadedAt: Date.now(),
         accessValidUntil: bundle.accessValidUntil,
+        atomScheme: bundle.atomSchemeVersion,
         exercises: bundle.exercises,
       });
       // Le plafond s'applique à CHAQUE écriture, pas seulement au

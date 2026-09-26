@@ -6,6 +6,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api } from "@convex/_generated/api";
 import type { Id } from "@convex/_generated/dataModel";
+import { ATOM_SCHEME_VERSION } from "@convex/paliers/offline";
+import { isBundlePlayable } from "@/offline/bundle-validity";
 import { listBundles } from "@/offline/store";
 import { palierState, type PalierState } from "@/progress/palier-state";
 import { useServerReach } from "@/session/reach";
@@ -68,7 +70,7 @@ export function SubjectTopics({
           setReady(
             new Set(
               rows
-                .filter((b) => b.accessValidUntil > now)
+                .filter((b) => isBundlePlayable(b, now, ATOM_SCHEME_VERSION))
                 .map((b) => `${b.topicId}:${b.palierIndex}`),
             ),
           );

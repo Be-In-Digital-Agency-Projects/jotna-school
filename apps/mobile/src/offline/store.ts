@@ -1,6 +1,9 @@
 import { randomUUID } from "expo-crypto";
 import * as SQLite from "expo-sqlite";
 
+import { ATOM_SCHEME_VERSION } from "@convex/paliers/offline";
+
+import { isBundlePlayable } from "./bundle-validity";
 import { planEviction } from "./eviction";
 
 /**
@@ -44,7 +47,8 @@ async function db(): Promise<SQLite.SQLiteDatabase> {
           accessValidUntil  INTEGER NOT NULL,
           exercises         TEXT NOT NULL,
           pendingCloseAt    INTEGER,
-          topicName         TEXT
+          topicName         TEXT,
+          atomScheme        INTEGER
         );
         CREATE TABLE IF NOT EXISTS journal (
           clientAttemptId   TEXT PRIMARY KEY NOT NULL,
@@ -95,6 +99,13 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
       `ALTER TABLE bundles ADD COLUMN pendingCloseAt INTEGER`,
     );
   }
+  if (!names.has("atomScheme")) {
+    // LE NUMÉRO DE SCHÉMA D'ATOMES (6.7, D21). Les lots déjà stockés n'en ont
+    // pas, et `bundle-validity.ts` les tient pour INCOMPATIBLES : ils ont été
+    // construits par un serveur qui ne savait pas encore qu'il fallait en
+    // donner un, donc par un code dont on ne peut rien affirmer.
+    await database.execAsync(`ALTER TABLE bundles ADD COLUMN atomScheme INTEGER`);
+  }
   if (!names.has("topicName")) {
     // SANS LUI, UN LOT EST ANONYME HORS LIGNE. La table ne portait que
     // `topicId`, et le nom de la thématique vit côté serveur : l'accueil
@@ -113,6 +124,8 @@ export interface StoredBundle {
   topicId: string;
   /** Le nom de la thématique, figé au téléchargement — voir la migration. */
   topicName: string | null;
+  /** La version du schéma d'atomes qui a produit ses empreintes (6.7). */
+  atomScheme: number | null;
   palierIndex: number;
   downloadedAt: number;
   accessValidUntil: number;
@@ -128,8 +141,8 @@ export async function saveBundle(bundle: StoredBundle): Promise<void> {
     // fini hors ligne ne se clôrait jamais. On le REPREND explicitement.
     `INSERT OR REPLACE INTO bundles
        (palierAttemptId, topicId, topicName, palierIndex, downloadedAt,
-        accessValidUntil, exercises, pendingCloseAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?,
+        accessValidUntil, exercises, atomScheme, pendingCloseAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?,
        (SELECT pendingCloseAt FROM bundles WHERE palierAttemptId = ?))`,
     bundle.palierAttemptId,
     bundle.topicId,
@@ -138,6 +151,7 @@ export async function saveBundle(bundle: StoredBundle): Promise<void> {
     bundle.downloadedAt,
     bundle.accessValidUntil,
     JSON.stringify(bundle.exercises),
+    bundle.atomScheme,
     bundle.palierAttemptId,
   );
 }
@@ -154,9 +168,10 @@ export async function loadBundle(
     downloadedAt: number;
     accessValidUntil: number;
     exercises: string;
+    atomScheme: number | null;
   }>(
     `SELECT palierAttemptId, topicId, topicName, palierIndex, downloadedAt,
-            accessValidUntil, exercises
+            accessValidUntil, exercises, atomScheme
        FROM bundles WHERE palierAttemptId = ?`,
     palierAttemptId,
   );
@@ -170,21 +185,43 @@ export async function loadBundle(
 }
 
 /** Le lot téléchargé pour cette thématique et ce palier, s'il est encore valable. */
+/**
+ * LE SQL NE JUGE PLUS DE LA VALIDITÉ, IL NE FAIT QUE TROUVER LES CANDIDATS.
+ *
+ * La requête filtrait elle-même sur `accessValidUntil > ?`. Avec la seconde
+ * raison d'invalider un lot — le schéma d'atomes qui a changé sous l'appareil
+ * (6.7) —, la règle aurait vécu à DEUX endroits : dans ce `WHERE` et dans
+ * l'écran qui liste ce qui est jouable. Deux copies d'une règle finissent
+ * toujours par diverger, et celle-ci décide si un enfant se voit compter faux
+ * une réponse juste.
+ *
+ * On rend donc les candidats par âge décroissant, et `bundleUnplayableReason`
+ * — pure, éprouvée — tranche. Le coût est de lire quelques lignes de plus :
+ * il y en a au plus une poignée par palier.
+ */
 export async function findUsableBundle(
   topicId: string,
   palierIndex: number,
   now: number,
 ): Promise<StoredBundle | null> {
   const database = await db();
-  const row = await database.getFirstAsync<{ palierAttemptId: string }>(
-    `SELECT palierAttemptId FROM bundles
-      WHERE topicId = ? AND palierIndex = ? AND accessValidUntil > ?
-      ORDER BY downloadedAt DESC LIMIT 1`,
+  const rows = await database.getAllAsync<{
+    palierAttemptId: string;
+    accessValidUntil: number;
+    atomScheme: number | null;
+  }>(
+    `SELECT palierAttemptId, accessValidUntil, atomScheme FROM bundles
+      WHERE topicId = ? AND palierIndex = ?
+      ORDER BY downloadedAt DESC LIMIT 10`,
     topicId,
     palierIndex,
-    now,
   );
-  return row == null ? null : loadBundle(row.palierAttemptId);
+  for (const row of rows) {
+    if (isBundlePlayable(row, now, ATOM_SCHEME_VERSION)) {
+      return loadBundle(row.palierAttemptId);
+    }
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -439,6 +476,7 @@ export interface BundleSummary {
   palierIndex: number;
   downloadedAt: number;
   accessValidUntil: number;
+  atomScheme: number | null;
   bytes: number;
   /** Des réponses de ce lot attendent encore d'être envoyées. */
   hasPending: boolean;
@@ -460,12 +498,13 @@ export async function listBundles(): Promise<BundleSummary[]> {
     palierIndex: number;
     downloadedAt: number;
     accessValidUntil: number;
+    atomScheme: number | null;
     bytes: number;
     pending: number;
     pendingCloseAt: number | null;
   }>(
     `SELECT b.palierAttemptId, b.topicId, b.topicName, b.palierIndex,
-            b.downloadedAt, b.accessValidUntil, b.pendingCloseAt,
+            b.downloadedAt, b.accessValidUntil, b.atomScheme, b.pendingCloseAt,
             LENGTH(CAST(b.exercises AS BLOB)) AS bytes,
             (SELECT COUNT(*) FROM journal j
               WHERE j.palierAttemptId = b.palierAttemptId
@@ -494,7 +533,12 @@ export async function enforceStorageCap(
   maxBytes: number = MAX_BUNDLE_BYTES,
 ): Promise<{ removed: number; bytes: number }> {
   const database = await db();
-  const plan = planEviction(await listBundles(), { keep, now, maxBytes });
+  const plan = planEviction(await listBundles(), {
+    keep,
+    now,
+    maxBytes,
+    currentScheme: ATOM_SCHEME_VERSION,
+  });
 
   if (plan.remove.length > 0) {
     const holes = plan.remove.map(() => "?").join(",");

@@ -1001,7 +1001,52 @@ commandes, les seuils, et ce qu'il faut conclure de chaque résultat.
 
 ### Phase 6 — Publication — **COMMENCÉE**
 
-- [ ] 6.1 Identité : icône, écran de lancement, nom, identifiant de paquet
+- [x] 6.1 **FAIT — et l'icône vient du VRAI logo, pas d'une invention.**
+      `public/jotna-logo.png` existe : un wordmark illustré, superbe et
+      inimitablement sénégalais — djembé, globe, crayon, acacia, toque.
+      **Il ne peut pas servir d'icône** : 1024×656, donc pas carré, et à 48 px
+      sur un écran d'accueil ses huit éléments deviendraient une bouillie.
+      Il est en revanche parfait pour l'ÉCRAN DE LANCEMENT, où il s'affiche
+      centré et en grand — c'est exactement ce pour quoi il a été dessiné.
+      Pour l'icône, on en extrait le **globe**, recadré et masqué en disque
+      (le globe est rond, le masque est donc exact — sans lui le carré
+      emportait des morceaux du « J » et du « t »), posé sur l'ambre de la
+      marque. Le conteneur n'a ni PIL, ni ImageMagick, ni sharp : le PNG à
+      palette a été décodé, masqué, rééchantillonné et réencodé à la main avec
+      `zlib`. **C'est un mark DÉRIVÉ, pas un mark DESSINÉ** : il vaut mieux que
+      l'icône Expo par défaut sur une application pour enfants, et il doit être
+      remplacé par un vrai mark avant la mise en boutique.
+      **Vérifié par `expo prebuild`**, pas par l'export : l'icône et l'écran de
+      lancement sont consommés à la construction NATIVE, et un `expo export`
+      vert n'en dit rien. Le prebuild génère bien les `ic_launcher` et les
+      `splashscreen_logo` — et il a signalé au passage une entrée devenue
+      morte, `android.edgeToEdgeEnabled`, qu'Android 16 rend obligatoire et que
+      le plugin refuse désormais de personnaliser. Retirée
+- [~] 6.7 **LA MOITIÉ QUI COMPTE EST FAITE ; la livraison attend un projet EAS.**
+      Le danger de D21 n'est pas la mise à jour elle-même, c'est ce qu'elle
+      fait aux lots DÉJÀ sur l'appareil. Les empreintes d'un lot ont été
+      calculées par le SERVEUR au téléchargement ; l'appareil, lui, recalcule
+      les atomes avec le code EMBARQUÉ DANS SON PAQUET. Une mise à jour à chaud
+      remplace ce code sans toucher aux lots : qu'elle change un `trim()`, un
+      séparateur, un préfixe de type, et l'appareil calcule des atomes que les
+      empreintes livrées ne reconnaissent plus.
+      **LA PANNE NE RESSEMBLE PAS À UNE PANNE.** Rien ne plante : l'enfant
+      répond juste, l'application lui dit faux, il recommence. Le serveur
+      recalcule tout à la synchronisation et son score finit même par être
+      correct — seul l'enfant aura passé l'après-midi à se croire nul. Aucun
+      journal ne le signale.
+      `ATOM_SCHEME_VERSION` voyage donc AVEC le lot, l'appareil compare, et un
+      écart rend le lot injouable comme un bail expiré. Un lot d'avant cette
+      version, qui n'a pas de numéro, est tenu pour INCOMPATIBLE : le refuser
+      coûte un téléchargement, l'accepter coûte un après-midi. La règle est
+      pure et éprouvée (`offline/bundle-validity.ts`), et l'éviction traite ces
+      lots comme des morts, à évincer AVANT de regarder la moindre taille.
+      `runtimeVersion: { policy: "appVersion" }` est posé : une mise à jour à
+      chaud ne s'applique qu'aux versions d'application identiques, donc
+      **correctifs seulement**, tout changement natif repassant par la boutique.
+      **Ce qui manque** : `expo-updates` et son `updates.url`, qui demandent un
+      projet EAS et son identifiant. On ne les invente pas — une URL de mise à
+      jour fausse est pire que pas de mise à jour du tout
 - [ ] 6.2 Politique de confidentialité + formulaire *Data safety* — **en disant
       que des données d’exercice résident sur l’appareil** (§3)
 - [ ] 6.3 Liste de contrôle Kids Category / Designed for Families (D9)
@@ -1040,8 +1085,7 @@ commandes, les seuils, et ce qu'il faut conclure de chaque résultat.
       d'une première tentative abandonnée
 - [ ] 6.5 Canal APK interne pour les écoles pilotes (D8)
 - [ ] 6.6 Fiches de boutique en français, captures d'écran
-- [ ] 6.7 Mises à jour à chaud (`expo-updates`) : correctifs seulement ; **une
-      version qui change `canonicalize` doit invalider les lots** (D21)
+
 
 ---
 

@@ -29,7 +29,7 @@ import { computeExerciseScore } from "./scoring";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { checkAccess, requireAccess } from "../access";
 import { AI_CONSENT_KID_MESSAGE } from "../aiConsentRules";
-import { buildDigests } from "./offline";
+import { ATOM_SCHEME_VERSION, buildDigests } from "./offline";
 import { saltFor, sha256Hex } from "./digest";
 
 /**
@@ -310,6 +310,11 @@ export const getOfflineBundle = query({
       // L'échéance la plus PROCHE des deux : on ne laisse pas un lot survivre
       // à l'abonnement de l'école, ni traîner deux mois sur une tablette.
       accessValidUntil: Math.min(access.endsAt, Date.now() + OFFLINE_LEASE_MS),
+      // LA VERSION DU SCHÉMA D'ATOMES VOYAGE AVEC LE LOT (6.7, D21). Sans
+      // elle, une mise à jour à chaud qui change l'atomisation ferait compter
+      // FAUX des réponses justes, en silence, chez un enfant hors ligne.
+      // `offline.ts` dit quand la bouger.
+      atomSchemeVersion: ATOM_SCHEME_VERSION,
       exercises,
     };
   },

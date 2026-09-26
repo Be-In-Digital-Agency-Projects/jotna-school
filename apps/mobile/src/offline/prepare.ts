@@ -102,6 +102,7 @@ export async function preparePalier(
     palierIndex: target.palierIndex,
     downloadedAt: Date.now(),
     accessValidUntil: bundle.accessValidUntil,
+    atomScheme: bundle.atomSchemeVersion,
     exercises: bundle.exercises,
   });
 

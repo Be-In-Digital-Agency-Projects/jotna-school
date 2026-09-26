@@ -1,6 +1,8 @@
 import { randomUUID } from "expo-crypto";
 import * as SQLite from "expo-sqlite";
 
+import { planEviction } from "./eviction";
+
 /**
  * LA BASE LOCALE — lots téléchargés et journal des réponses (tâche 3.3).
  *
@@ -56,11 +58,41 @@ async function db(): Promise<SQLite.SQLiteDatabase> {
         );
         CREATE INDEX IF NOT EXISTS journal_pending
           ON journal (palierAttemptId, syncedAt);
+        CREATE TABLE IF NOT EXISTS settings (
+          key    TEXT PRIMARY KEY NOT NULL,
+          value  TEXT NOT NULL
+        );
       `);
+      await migrate(database);
       return database;
     })();
   }
   return dbPromise;
+}
+
+/**
+ * LES MIGRATIONS, ET POURQUOI IL EN FAUT DÉJÀ.
+ *
+ * `CREATE TABLE IF NOT EXISTS` ne fait RIEN sur une base existante : une
+ * colonne ajoutée au schéma ci-dessus n'apparaîtrait jamais chez quelqu'un qui
+ * a déjà lancé une version précédente. L'application n'est pas publiée, mais
+ * les appareils de développement, eux, portent déjà l'ancienne base — et le
+ * jour de la publication, ce même code devra servir aux mises à jour.
+ *
+ * `ALTER TABLE … ADD COLUMN` lève si la colonne existe : on lit donc
+ * `PRAGMA table_info` d'abord, plutôt que d'avaler une erreur au passage, ce
+ * qui masquerait les vraies.
+ */
+async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
+  const columns = await database.getAllAsync<{ name: string }>(
+    `PRAGMA table_info(bundles)`,
+  );
+  const names = new Set(columns.map((c) => c.name));
+  if (!names.has("pendingCloseAt")) {
+    await database.execAsync(
+      `ALTER TABLE bundles ADD COLUMN pendingCloseAt INTEGER`,
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -225,16 +257,48 @@ export async function markSynced(
 }
 
 /**
- * Efface TOUT — « changer d'élève » (D10).
+ * LE MÉNAGE DE « CHANGER D'ÉLÈVE » (D10) — ET IL N'EFFACE PAS TOUT.
  *
- * L'appelant doit avoir tenté la synchronisation AVANT : le travail déjà fait
- * par l'enfant précédent ne se jette pas (même principe que D18). Ce que cette
- * fonction garantit, c'est qu'il n'en reste rien pour le suivant — ses
- * réponses ne doivent en aucun cas partir sous le nom d'un autre.
+ * La première version de cette fonction s'appelait `wipeAll` et faisait ce que
+ * son nom disait. C'était une faute, et voici pourquoi.
+ *
+ * L'ENFANT PRÉCÉDENT PEUT AVOIR DU TRAVAIL NON ENVOYÉ. Une tablette d'école
+ * n'a pas toujours de réseau au moment où l'enfant suivant s'assied. Tout
+ * effacer jetterait alors des réponses qu'il a vraiment données — exactement
+ * ce que D18 interdit, à un autre endroit.
+ *
+ * ET LE GARDER NE RISQUE RIEN, parce que le serveur ne peut pas se tromper de
+ * propriétaire : `syncOfflineJournal` relit la tentative et refuse
+ * (« Accès refusé ») dès que `attempt.userId` n'est pas le profil qui appelle.
+ * Les lignes de l'enfant précédent sont donc INENVOYABLES par le suivant, et
+ * repartiront le jour où leur auteur se reconnectera sur cette tablette.
+ *
+ * ON EFFACE DONC LES LOTS DONT RIEN N'ATTEND — ni réponse, ni clôture — ET
+ * LEUR JOURNAL AVEC EUX.
+ *
+ * ATTENTION AU RAFFINEMENT QUI PARAÎT ÉVIDENT : « tant qu'on y est, effaçons
+ * partout les lignes déjà confirmées ». C'EST FAUX, et ça coûterait des points
+ * à l'enfant. Le serveur ENREGISTRE le `attemptNumber` que l'appareil déclare,
+ * et `scoreExerciseFromAttempts` note selon le RANG du premier succès. Or ce
+ * rang, l'appareil le calcule en comptant ses propres lignes (`countAttempts`).
+ * Effacer les lignes envoyées d'un lot encore jouable ferait repartir le compte
+ * à un : l'enfant qui reprend son palier verrait sa quatrième tentative
+ * enregistrée comme la première, et le serveur la noterait 10 au lieu de 3.
+ *
+ * Un lot qui survit garde donc TOUT son journal. Un lot qui part emmène le
+ * sien, puisque plus rien ne pourra le rejouer.
  */
-export async function wipeAll(): Promise<void> {
+export async function purgeSyncedWork(): Promise<void> {
   const database = await db();
-  await database.execAsync(`DELETE FROM journal; DELETE FROM bundles;`);
+  await database.execAsync(`
+    DELETE FROM bundles
+     WHERE pendingCloseAt IS NULL
+       AND palierAttemptId NOT IN (
+         SELECT palierAttemptId FROM journal WHERE syncedAt IS NULL
+       );
+    DELETE FROM journal
+     WHERE palierAttemptId NOT IN (SELECT palierAttemptId FROM bundles);
+  `);
 }
 
 /**
@@ -273,4 +337,232 @@ export async function countHints(
     exerciseId,
   );
   return row?.n ?? 0;
+}
+
+// ---------------------------------------------------------------------------
+// Réglages (tâche 3.11)
+// ---------------------------------------------------------------------------
+
+/**
+ * Les réglages vivent DANS LA MÊME BASE que les lots, pas dans `SecureStore`.
+ *
+ * `SecureStore` s'adosse au trousseau iOS et au Keystore Android : c'est fait
+ * pour un jeton, pas pour une case à cocher. Et surtout, ces réglages-ci ne
+ * suivent PAS l'enfant : « ne télécharger qu'en Wi-Fi » est une propriété de
+ * l'APPAREIL et de son forfait, pas de l'élève. Ils survivent donc à
+ * « changer d'élève » (D10) — `wipeAll` n'y touche pas, et c'est voulu.
+ */
+async function getSetting(key: string): Promise<string | null> {
+  const database = await db();
+  const row = await database.getFirstAsync<{ value: string }>(
+    `SELECT value FROM settings WHERE key = ?`,
+    key,
+  );
+  return row?.value ?? null;
+}
+
+async function setSetting(key: string, value: string): Promise<void> {
+  const database = await db();
+  await database.runAsync(
+    `INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`,
+    key,
+    value,
+  );
+}
+
+const WIFI_ONLY_KEY = "wifiOnly";
+
+/**
+ * « Préparer seulement en Wi-Fi » — VRAI PAR DÉFAUT, et ce défaut se justifie.
+ *
+ * Au Sénégal, la connexion d'une famille est massivement un forfait mobile
+ * prépayé. Un téléchargement délibéré de plusieurs mégaoctets qui part sur les
+ * données de la mère sans qu'elle l'ait voulu, c'est du crédit dépensé pour
+ * rien — et la prochaine fois, c'est l'application qu'on désinstalle.
+ *
+ * Le réglage ne concerne QUE le téléchargement DÉLIBÉRÉ. Le lot du palier en
+ * cours continue de descendre pendant qu'on y joue : l'enfant a déjà consenti
+ * à cette connexion-là en ouvrant le palier, et c'est elle qui fait qu'une
+ * coupure en pleine séance ne l'arrête pas.
+ */
+export async function getWifiOnly(): Promise<boolean> {
+  return (await getSetting(WIFI_ONLY_KEY)) !== "0";
+}
+
+export async function setWifiOnly(value: boolean): Promise<void> {
+  await setSetting(WIFI_ONLY_KEY, value ? "1" : "0");
+}
+
+// ---------------------------------------------------------------------------
+// Plafond de stockage (tâche 3.11)
+// ---------------------------------------------------------------------------
+
+/**
+ * Le plafond, en octets de contenu d'exercices.
+ *
+ * Huit mégaoctets, parce que la cible est un Android d'entrée de gamme dont le
+ * stockage est souvent plein. Un lot de dix exercices avec ses indices et ses
+ * empreintes pèse quelques dizaines de kilooctets : le plafond laisse donc
+ * largement de quoi préparer une semaine, et empêche qu'un enfant qui prépare
+ * tout, tous les jours, finisse par remplir la tablette de l'école.
+ */
+export const MAX_BUNDLE_BYTES = 8 * 1024 * 1024;
+
+export interface BundleSummary {
+  palierAttemptId: string;
+  topicId: string;
+  palierIndex: number;
+  downloadedAt: number;
+  accessValidUntil: number;
+  bytes: number;
+  /** Des réponses de ce lot attendent encore d'être envoyées. */
+  hasPending: boolean;
+  /** Le palier a été fini hors ligne et n'est pas encore clos (3.7). */
+  awaitsClose: boolean;
+}
+
+/**
+ * `LENGTH(CAST(… AS BLOB))` compte des OCTETS ; `LENGTH` seul compte des
+ * caractères, et les deux diffèrent dès qu'il y a un accent — c'est-à-dire
+ * dans chaque énoncé de cette application.
+ */
+export async function listBundles(): Promise<BundleSummary[]> {
+  const database = await db();
+  const rows = await database.getAllAsync<{
+    palierAttemptId: string;
+    topicId: string;
+    palierIndex: number;
+    downloadedAt: number;
+    accessValidUntil: number;
+    bytes: number;
+    pending: number;
+    pendingCloseAt: number | null;
+  }>(
+    `SELECT b.palierAttemptId, b.topicId, b.palierIndex, b.downloadedAt,
+            b.accessValidUntil, b.pendingCloseAt,
+            LENGTH(CAST(b.exercises AS BLOB)) AS bytes,
+            (SELECT COUNT(*) FROM journal j
+              WHERE j.palierAttemptId = b.palierAttemptId
+                AND j.syncedAt IS NULL) AS pending
+       FROM bundles b
+      ORDER BY b.downloadedAt ASC`,
+  );
+  return rows.map(({ pending, pendingCloseAt, ...rest }) => ({
+    ...rest,
+    hasPending: pending > 0,
+    awaitsClose: pendingCloseAt !== null,
+  }));
+}
+
+/**
+ * FAIT DE LA PLACE — la décision est dans `eviction.ts`, ici c'est le SQL.
+ *
+ * La séparation n'est pas cosmétique : ce qui décide quoi supprimer est le
+ * seul code de l'appareil capable de détruire le travail d'un enfant, et il
+ * doit pouvoir être éprouvé sans appareil. `planEviction` dit pourquoi, et
+ * quelles sont les trois protections.
+ */
+export async function enforceStorageCap(
+  keep: readonly string[] = [],
+  now: number = Date.now(),
+  maxBytes: number = MAX_BUNDLE_BYTES,
+): Promise<{ removed: number; bytes: number }> {
+  const database = await db();
+  const plan = planEviction(await listBundles(), { keep, now, maxBytes });
+
+  if (plan.remove.length > 0) {
+    const holes = plan.remove.map(() => "?").join(",");
+    await database.runAsync(
+      `DELETE FROM bundles WHERE palierAttemptId IN (${holes})`,
+      ...plan.remove,
+    );
+    // Le journal d'un lot supprimé part avec lui : ses lignes sont toutes
+    // confirmées (c'est la condition pour évincer) et plus rien ne peut
+    // rejouer ce lot. Les laisser ferait grossir la base sans fin — le seul
+    // endroit où elles comptaient était le compte des tentatives du lot.
+    await database.runAsync(
+      `DELETE FROM journal WHERE palierAttemptId IN (${holes})`,
+      ...plan.remove,
+    );
+  }
+  return { removed: plan.remove.length, bytes: plan.remaining };
+}
+
+/** La place occupée par les lots, en octets. */
+export async function bundleBytes(): Promise<number> {
+  const database = await db();
+  const row = await database.getFirstAsync<{ n: number | null }>(
+    `SELECT SUM(LENGTH(CAST(exercises AS BLOB))) AS n FROM bundles`,
+  );
+  return row?.n ?? 0;
+}
+
+// ---------------------------------------------------------------------------
+// Clôture différée (tâche 3.7)
+// ---------------------------------------------------------------------------
+
+/**
+ * « L'ENFANT A FINI CE PALIER SANS RÉSEAU, IL RESTE À LE CLORE. »
+ *
+ * POURQUOI UN MARQUEUR EXPLICITE, ET SURTOUT PAS UNE DÉDUCTION. On pourrait
+ * croire qu'il suffit de regarder si chaque exercice du lot porte une réponse.
+ * Ce serait faux et COÛTEUX POUR L'ENFANT : celui qui répond à huit exercices
+ * sur dix puis s'arrête n'a pas fini son palier, et le clore à sa place ferait
+ * noter les deux derniers à zéro — donc, très probablement, échouer un palier
+ * qu'il n'a jamais rendu.
+ *
+ * Le marqueur se pose au SEUL endroit où l'on sait : quand l'enfant passe le
+ * dernier exercice.
+ *
+ * IL S'EFFACE À LA CLÔTURE, et c'est ce qui le rend idempotent : sans cela,
+ * chaque retour du réseau reclôrait les mêmes paliers.
+ */
+export async function markPendingClose(
+  palierAttemptId: string,
+  at: number = Date.now(),
+): Promise<void> {
+  const database = await db();
+  await database.runAsync(
+    `UPDATE bundles SET pendingCloseAt = ? WHERE palierAttemptId = ?`,
+    at,
+    palierAttemptId,
+  );
+}
+
+export async function clearPendingClose(palierAttemptId: string): Promise<void> {
+  const database = await db();
+  await database.runAsync(
+    `UPDATE bundles SET pendingCloseAt = NULL WHERE palierAttemptId = ?`,
+    palierAttemptId,
+  );
+}
+
+/**
+ * Les paliers finis hors ligne qui attendent leur clôture — et dont TOUT est
+ * déjà parti.
+ *
+ * LA CONDITION SUR LE JOURNAL N'EST PAS UNE PRÉCAUTION, C'EST LE CŒUR.
+ * `submitPalier` recalcule la note depuis les lignes `attempts` du serveur :
+ * clore avant que la dernière réponse soit arrivée noterait le palier sur ce
+ * qui a été reçu, et l'enfant perdrait les points des réponses en retard.
+ */
+export async function pendingCloses(): Promise<
+  { palierAttemptId: string; topicId: string; palierIndex: number }[]
+> {
+  const database = await db();
+  return database.getAllAsync<{
+    palierAttemptId: string;
+    topicId: string;
+    palierIndex: number;
+  }>(
+    `SELECT b.palierAttemptId, b.topicId, b.palierIndex
+       FROM bundles b
+      WHERE b.pendingCloseAt IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM journal j
+           WHERE j.palierAttemptId = b.palierAttemptId
+             AND j.syncedAt IS NULL
+        )
+      ORDER BY b.pendingCloseAt ASC`,
+  );
 }

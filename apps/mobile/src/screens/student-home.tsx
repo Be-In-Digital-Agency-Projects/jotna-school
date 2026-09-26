@@ -1,12 +1,14 @@
-import { useQuery } from "convex/react";
-import { useCallback, useState } from "react";
+import { useMutation, useQuery } from "convex/react";
+import { useCallback, useRef, useState } from "react";
 import { useFocusEffect, useRouter } from "expo-router";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api } from "@convex/_generated/api";
+import type { Id } from "@convex/_generated/dataModel";
 import { useNetworkOnline } from "@/offline/network";
 import { pendingCount } from "@/offline/store";
+import { catchUpAll } from "@/offline/sync";
 import { useChangeStudent } from "@/session/change-student";
 import { MIN_TOUCH_TARGET, colors, fontSize, radius, spacing } from "@/theme/tokens";
 import { BigButton } from "@/ui/big-button";
@@ -38,18 +40,62 @@ export function StudentHome() {
   // Un abonnement permanent coûterait une requête SQLite en boucle pour une
   // information qui ne bouge qu'à ces instants-là.
   const [pending, setPending] = useState(0);
+  const [justClosed, setJustClosed] = useState(0);
+
+  // LE RATTRAPAGE SE DÉCLENCHE ICI, ET PAS SEULEMENT DANS LA SÉANCE.
+  //
+  // La séance ne connaît que son palier ; l'accueil est le seul écran que
+  // l'enfant revoit forcément. Sans cette passe, celui qui finit un palier
+  // hors ligne puis ferme l'application ne rendrait jamais ses réponses tant
+  // qu'il ne rouvre pas ce palier-là.
+  //
+  // Le verrou `running` n'est pas une optimisation : `useFocusEffect` peut
+  // repartir avant que la passe précédente ait fini, et deux clôtures
+  // concurrentes appelleraient `submitPalier` deux fois sur la même tentative.
+  const running = useRef(false);
+  const syncJournal = useMutation(api.palierAttempts.syncOfflineJournal);
+  const submit = useMutation(api.palierAttempts.submitPalier);
+
   useFocusEffect(
     useCallback(() => {
       let alive = true;
-      void pendingCount()
-        .then((n) => {
-          if (alive) setPending(n);
-        })
-        .catch(() => {});
+      const read = () =>
+        pendingCount()
+          .then((n) => {
+            if (alive) setPending(n);
+          })
+          .catch(() => {});
+
+      void read();
+
+      if (online && !running.current) {
+        running.current = true;
+        void (async () => {
+          try {
+            const closed = await catchUpAll(
+              (a) => syncJournal(a as never) as never,
+              (a) =>
+                submit({
+                  palierAttemptId: a.palierAttemptId as Id<"palierAttempts">,
+                }),
+            );
+            if (alive && closed.length > 0) setJustClosed(closed.length);
+          } finally {
+            running.current = false;
+            void read();
+          }
+        })();
+      }
+
       return () => {
         alive = false;
+        // Le mot du coffre se dit UNE FOIS, sur la visite où la clôture a eu
+        // lieu. Le laisser en place le ferait réapparaître chaque fois que
+        // l'enfant revient à l'accueil, longtemps après que les étoiles sont
+        // arrivées — une bonne nouvelle répétée cesse d'en être une.
+        setJustClosed(0);
       };
-    }, []),
+    }, [online, syncJournal, submit]),
   );
 
   return (
@@ -64,6 +110,17 @@ export function StudentHome() {
         {profile ? `Bonjour ${profile.name} !` : "Bonjour !"}
       </Text>
       <Text style={styles.sub}>Choisis une matière.</Text>
+
+      {justClosed > 0 && (
+        <View style={styles.arrived}>
+          <Text style={styles.arrivedText}>
+            Ton coffre s&apos;est ouvert 🎁 {justClosed} palier
+            {justClosed > 1 ? "s" : ""} que tu as fini
+            {justClosed > 1 ? "s" : ""} sans réseau {justClosed > 1 ? "ont" : "a"}{" "}
+            été compté{justClosed > 1 ? "s" : ""} — va voir tes étoiles ⭐
+          </Text>
+        </View>
+      )}
 
       {pending > 0 && (
         <View style={styles.pending}>
@@ -126,6 +183,14 @@ const styles = StyleSheet.create({
     padding: spacing.md,
   },
   pendingText: { fontSize: fontSize.body, lineHeight: 22, color: colors.text },
+  arrived: {
+    backgroundColor: "#f7fee7",
+    borderWidth: 2,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    padding: spacing.md,
+  },
+  arrivedText: { fontSize: fontSize.label, lineHeight: 26, color: colors.text },
   card: {
     minHeight: MIN_TOUCH_TARGET + 16,
     flexDirection: "row",

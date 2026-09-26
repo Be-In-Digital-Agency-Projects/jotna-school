@@ -8,7 +8,8 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "typecheck": "tsc --noEmit",
-    "bundle:check": "expo export --platform android --output-dir .expo/export-check"
+    "bundle:check": "expo export --platform android --output-dir .expo/export-check",
+    "test": "vitest run"
   },
   "dependencies": {
     "@auth/core": "^0.37.0",
@@ -35,6 +36,7 @@
   },
   "devDependencies": {
     "@types/react": "~19.2.2",
-    "typescript": "~6.0.3"
+    "typescript": "~6.0.3",
+    "vitest": "^4.1.4"
   }
 }

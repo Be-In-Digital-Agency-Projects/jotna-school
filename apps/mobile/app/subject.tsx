@@ -62,6 +62,18 @@ export default function SubjectRoute() {
         </Pressable>
       ))}
 
+      {/* Le chemin vers le téléchargement délibéré (3.11). Il est ICI, sous
+          les thématiques de la matière, parce que c'est ce qu'on prépare :
+          leur prochain palier à chacune. Le poser sur l'accueil obligerait à
+          choisir une matière deux fois. */}
+      <BigButton
+        label="Je prépare pour plus tard 🎒"
+        onPress={() =>
+          router.push({ pathname: "/prepare", params: { subjectId } })
+        }
+        tone="quiet"
+      />
+
       <BigButton label="Retour" onPress={() => router.back()} tone="quiet" />
     </ScrollView>
   );

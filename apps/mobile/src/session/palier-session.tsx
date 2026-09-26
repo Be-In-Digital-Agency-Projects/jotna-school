@@ -12,9 +12,16 @@ import { releaseSounds } from "@/feedback/sounds";
 import { OfflineBanner } from "@/offline/offline-banner";
 import { useNetworkOnline } from "@/offline/network";
 import { makeOfflineEngine } from "@/offline/offline-engine";
-import { flushJournal } from "@/offline/sync";
-import { findUsableBundle, saveBundle, type StoredBundle } from "@/offline/store";
+import { closePendingPaliers, flushJournal } from "@/offline/sync";
+import {
+  enforceStorageCap,
+  findUsableBundle,
+  markPendingClose,
+  saveBundle,
+  type StoredBundle,
+} from "@/offline/store";
 import type { SanitizedExercise } from "@/exercises/types";
+import { ChestWaiting } from "@/screens/chest-waiting";
 import { PalierResult, type PalierOutcome } from "@/screens/palier-result";
 import { colors, fontSize, radius, spacing } from "@/theme/tokens";
 import { BigButton } from "@/ui/big-button";
@@ -82,6 +89,8 @@ export function PalierSession({
   const [bootError, setBootError] = useState<string | null>(null);
   const [index, setIndex] = useState(0);
   const [outcome, setOutcome] = useState<PalierOutcome | null>(null);
+  /** L'enfant a passé le dernier exercice SANS réseau — 3.7, clôture différée. */
+  const [finishedOffline, setFinishedOffline] = useState(false);
   const [regenBusy, setRegenBusy] = useState(false);
   const [regenMessage, setRegenMessage] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -173,14 +182,21 @@ export function PalierSession({
 
   useEffect(() => {
     if (bundle == null || attemptId === null) return;
-    void saveBundle({
-      palierAttemptId: attemptId,
-      topicId,
-      palierIndex,
-      downloadedAt: Date.now(),
-      accessValidUntil: bundle.accessValidUntil,
-      exercises: bundle.exercises,
-    });
+    void (async () => {
+      await saveBundle({
+        palierAttemptId: attemptId,
+        topicId,
+        palierIndex,
+        downloadedAt: Date.now(),
+        accessValidUntil: bundle.accessValidUntil,
+        exercises: bundle.exercises,
+      });
+      // Le plafond s'applique à CHAQUE écriture, pas seulement au
+      // téléchargement délibéré : c'est ce chemin-ci qui tourne tous les
+      // jours, et c'est donc lui qui remplirait la tablette. Le lot de la
+      // séance en cours est protégé — on ne va pas effacer ce qu'on joue.
+      await enforceStorageCap([attemptId]);
+    })();
   }, [bundle, attemptId, topicId, palierIndex]);
 
   // DÈS QUE LE RÉSEAU REVIENT, ON REND COMPTE. Sans attendre la fin du palier :
@@ -189,8 +205,22 @@ export function PalierSession({
   useEffect(() => {
     const id = attemptId ?? stored?.palierAttemptId ?? null;
     if (!online || id === null) return;
-    void flushJournal(id, (a) => syncJournal(a as never) as never);
-  }, [online, attemptId, stored, syncJournal]);
+    void (async () => {
+      await flushJournal(id, (a) => syncJournal(a as never) as never);
+      // L'ORDRE EST OBLIGATOIRE : on clôt APRÈS avoir envoyé. `submitPalier`
+      // note le palier depuis les lignes `attempts` du serveur — clore avant
+      // que la dernière réponse soit arrivée noterait sur un palier incomplet.
+      // `pendingCloses` le vérifie aussi, en SQL ; la ceinture et les
+      // bretelles, parce que se tromper ici coûte des étoiles à l'enfant.
+      const closed = await closePendingPaliers((a) =>
+        submit({ palierAttemptId: a.palierAttemptId as Id<"palierAttempts"> }),
+      );
+      // Si c'est CE palier-ci qui vient de se clore, l'enfant est encore
+      // devant l'écran du coffre : on l'ouvre, avec les VRAIES étoiles.
+      const mine = closed.find((c) => c.palierAttemptId === id);
+      if (mine) setOutcome(mine.result as PalierOutcome);
+    })();
+  }, [online, attemptId, stored, syncJournal, submit]);
 
   /** Le moteur local, quand on joue sans réseau. */
   const engine = useMemo(
@@ -265,14 +295,16 @@ export function PalierSession({
       setIndex((i) => i + 1);
       return;
     }
-    // FIN DE PALIER HORS LIGNE : on ne peut pas clore, et surtout on ne DOIT
-    // pas faire croire le contraire. Les réponses sont au journal, en sûreté ;
-    // les étoiles se calculeront au retour du réseau, côté serveur, qui seul
-    // en décide (D12). L'enfant lit une phrase qui dit exactement cela.
+    // FIN DE PALIER HORS LIGNE : on ne peut pas clore MAINTENANT, mais on
+    // note qu'il y a un palier à clore. Le marqueur est ce qui transforme
+    // « tes étoiles arriveront » d'une phrase rassurante en une promesse que
+    // du code tient : au retour du réseau, `closePendingPaliers` appelle
+    // vraiment `submitPalier`, et c'est le serveur qui décide des étoiles
+    // (D12). Sans marqueur, le palier resterait ouvert indéfiniment.
     if (engine !== null || attemptId === null) {
-      setRegenMessage(
-        "Tes réponses sont bien gardées 💾 Tes étoiles arriveront quand il y aura du réseau.",
-      );
+      const id = attemptId ?? stored?.palierAttemptId ?? null;
+      if (id !== null) void markPendingClose(id);
+      setFinishedOffline(true);
       return;
     }
     if (submitting) return;
@@ -287,7 +319,7 @@ export function PalierSession({
         setSubmitting(false);
       }
     })();
-  }, [exercises, index, attemptId, submit, submitting, engine]);
+  }, [exercises, index, attemptId, submit, submitting, engine, stored]);
 
   const onRegen = useCallback(() => {
     if (attemptId === null || regenBusy) return;
@@ -326,6 +358,19 @@ export function PalierSession({
         regenBusy={regenBusy}
         regenMessage={regenMessage}
         onRegen={onRegen}
+        onLeave={onLeave}
+      />
+    );
+  }
+
+  // LE COFFRE — le palier est fini, le réseau manque encore. Il passe APRÈS
+  // `outcome` : dès que la clôture aboutit, c'est le vrai résultat qui
+  // s'affiche, et le coffre s'efface de lui-même.
+  if (finishedOffline && sessionAttemptId !== null) {
+    return (
+      <ChestWaiting
+        palierAttemptId={sessionAttemptId}
+        online={online}
         onLeave={onLeave}
       />
     );

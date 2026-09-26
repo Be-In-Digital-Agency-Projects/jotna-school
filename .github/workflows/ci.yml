@@ -79,7 +79,7 @@ jobs:
   # dessus est un autre chantier, qui ne se décide pas dans celui-ci.
   # ---------------------------------------------------------------------------
   mobile:
-    name: Mobile — typecheck et paquet Metro
+    name: Mobile — typecheck, tests et paquet Metro
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -109,6 +109,13 @@ jobs:
 
       - name: Typecheck
         run: pnpm --filter @jotna/mobile typecheck
+
+      # Les tests du mobile tournent avec LEUR PROPRE configuration Vitest
+      # (`apps/mobile/vitest.config.ts`, environnement `node`), séparée de
+      # celle de la racine, qui est en `jsdom` avec l'alias `@` du web. Ils
+      # n'éprouvent que de la logique PURE — voir l'en-tête de ce fichier-là.
+      - name: Tests (logique pure)
+        run: pnpm --filter @jotna/mobile test
 
       # LE GARDE QUI COMPTE. Le typecheck ne dit rien de la résolution à
       # l'exécution : c'est ce paquet-ci qui prouve que Metro traverse le

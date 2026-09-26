@@ -230,9 +230,28 @@ Deux points appellent une action :
 ### D10 — Une tablette, plusieurs enfants.
 
 « Changer d'élève » est une fonction de premier plan : déconnexion complète,
-effacement du jeton, **et purge du journal hors-ligne non synchronisé après
-l'avoir envoyé** (D15). Ce qu'il ne faut SURTOUT pas faire : garder deux
-sessions ouvertes — l'enfant jouerait sous le nom d'un autre.
+effacement du jeton, **et rattrapage du journal hors-ligne avant de partir**
+(D15). Ce qu'il ne faut SURTOUT pas faire : garder deux sessions ouvertes —
+l'enfant jouerait sous le nom d'un autre.
+
+**CORRIGÉ EN PHASE 3 : la « purge » n'en est pas une.** Cette décision disait
+d'effacer le journal non synchronisé après l'avoir envoyé. La première moitié
+est juste, la seconde était une faute. Une tablette d'école n'a pas toujours de
+réseau au moment où l'enfant suivant s'assied : tout effacer jetterait alors
+des réponses vraiment données — ce que D18 interdit, à un autre endroit.
+
+Et le garder ne risque rien, parce que le serveur ne peut pas se tromper de
+propriétaire : `syncOfflineJournal` relit la tentative et refuse dès que
+`attempt.userId` n'est pas le profil qui appelle. Les lignes de l'enfant
+précédent sont donc INENVOYABLES par le suivant, et repartiront le jour où leur
+auteur se reconnectera sur cette tablette.
+
+`purgeSyncedWork` efface donc les lots dont plus rien n'attend, et leur journal
+avec eux. Le raffinement qui paraît évident — « tant qu'on y est, effaçons
+partout les lignes confirmées » — est FAUX : le serveur enregistre le
+`attemptNumber` que l'appareil déclare, et l'appareil le calcule en comptant
+ses propres lignes. Les effacer sur un lot encore jouable ferait repartir le
+compte à un, et une quatrième tentative serait notée 10 au lieu de 3.
 
 ### D23 — Le contrat de réponse vit dans `convex/`, et `packages/core` attend.
 
@@ -708,7 +727,7 @@ thématiques, puis palier — uniquement pour rendre le moteur essayable sur un
 appareil. Sans un chemin qui y mène, la phase 2 ne se vérifie que par le
 typecheck et le paquet. Le vrai accueil (série, niveau, progression) reste 4.1.
 
-### Phase 3 — Le hors-ligne
+### Phase 3 — Le hors-ligne — **FAITE**, sauf 3.13
 
 - [x] 3.1 **FAIT** — `convex/paliers/offline.ts`, à côté des vérificateurs
       qu'il doit refléter (et non dans `packages/core`, voir **D23**).
@@ -746,11 +765,22 @@ typecheck et le paquet. Le vrai accueil (série, niveau, progression) reste 4.1.
       selon le RANG du premier succès : une bonne réponse du premier coup
       rejouée deviendrait 7 au lieu de 10. L'enfant perdrait des points pour
       une coupure réseau
-- [~] 3.7 **PARTIEL** — `api.palierAttempts.syncOfflineJournal` enregistre :
-      idempotent, verdict RECALCULÉ côté serveur (D12), horloge bornée (D17),
-      divergences consignées (D20.4). **Il ne CLÔT pas le palier** — voir §5,
-      point 5 : `submitPalier` commence par `requireAccess`, et l'appeler tel
-      quel rouvrirait le piège que D18 referme
+- [x] 3.7 **FAIT pour le cas ordinaire** — `api.palierAttempts.syncOfflineJournal`
+      enregistre : idempotent, verdict RECALCULÉ côté serveur (D12), horloge
+      bornée (D17), divergences consignées (D20.4). **Et le palier se clôt
+      maintenant**, mais pas là où on le cherchait : la question supposait que
+      la clôture devait venir de la synchronisation, et donc qu'il fallait
+      remanier `submitPalier`. Elle vient de l'APPAREIL. `closePendingPaliers`
+      appelle `submitPalier` TEL QUEL au retour du réseau, une fois le journal
+      parti — aucune modification du serveur, qui recalcule depuis les lignes
+      `attempts` comme pour une séance en ligne.
+      Le marqueur est EXPLICITE (colonne `bundles.pendingCloseAt`, posée quand
+      l'enfant passe le dernier exercice) et jamais DÉDUIT : croire qu'un
+      palier est fini parce que chaque exercice porte une réponse ferait clore
+      à sa place l'enfant qui s'arrête à huit sur dix, et noter les deux
+      derniers à zéro. **Ce qui reste** est le seul cas de l'abonnement expiré :
+      `submitPalier` lève, le marqueur demeure, la clôture se retente à chaque
+      retour du réseau. Voir §5, point 5
 - [x] 3.8 **FAIT** — la synchronisation PLANIFIE `verifyShortAnswerWithAI`
       pour chaque réponse courte qu'elle vient de compter fausse. Hors ligne,
       `verifyShortAnswer` est LITTÉRAL : l'enfant qui écrit « la ville de
@@ -768,26 +798,59 @@ typecheck et le paquet. Le vrai accueil (série, niveau, progression) reste 4.1.
       un défaut de canonicalisation, et le second est infiniment plus probable.
       Une table dédiée viendra si le signal se révèle utile ; un journal suffit
       pour le mesurer d'abord
-- [~] 3.11 **PARTIEL** — le lot du palier EN COURS se télécharge tout seul
+- [x] 3.11 **FAIT** — le lot du palier EN COURS se télécharge tout seul
       pendant qu'on y joue en ligne : l'enfant n'a rien à demander, et une
-      coupure en pleine séance ne l'arrête pas. Les **paliers suivants**, la
-      préférence Wi-Fi et le plafond de stockage restent à faire
-- [~] 3.12 **PARTIEL** — deux écrans sur trois. Une **bannière** pendant la
-      séance dit à l'enfant qu'il joue sans réseau et que ses réponses sont
-      gardées : sans elle, l'explication et « j'en veux encore » disparaissent
-      sans un mot, et à huit ans c'est l'application qui est cassée, pas le
-      réseau. Un **indicateur** sur l'accueil compte ce qui attend d'être
-      envoyé, relu au retour au premier plan. Restent « je prépare pour plus
-      tard » (téléchargement délibéré) et « ton coffre t'attend » (les badges
-      décernés à la synchronisation)
-- [~] 3.13 **PARTIEL, ET LA LIMITE EST STRUCTURELLE.** Ce qui est PUR est
-      testé : 27 tests croisés appareil/serveur (3.1) et 12 sur le bornage
-      d'horloge (D17). Les scénarios restants — double synchronisation,
-      coupure en plein palier, abonnement expiré pendant le jeu — portent sur
-      des MUTATIONS et une base SQLite, et **le dépôt n'a pas `convex-test`**
-      (constat déjà posé dans `convex/pricing.ts`). Les éprouver demande soit
-      d'installer `convex-test`, soit un appareil et un déploiement de
-      développement. À décider ; ce n'est pas un oubli
+      coupure en pleine séance ne l'arrête pas.
+      **Les « paliers suivants » ne sont pas ceux qu'on croyait, et c'est le
+      serveur qui l'impose.** `startPalierAttempt` refuse d'ouvrir le palier N
+      tant que 1..N-1 ne portent pas chacun une tentative `validated` : on ne
+      peut pas prendre d'avance DANS une thématique. Ce qu'on prépare, c'est
+      donc le prochain palier de CHAQUE thématique ouverte — de l'avance en
+      LARGEUR. Pour un enfant qui suit cinq thématiques, cela fait cinq
+      paliers, ce qui était le besoin (partir en week-end).
+      **Préférence Wi-Fi** : VRAIE par défaut, et elle ne gouverne que le
+      téléchargement DÉLIBÉRÉ — le lot du palier en cours continue de
+      descendre, l'enfant ayant déjà consenti à cette connexion en ouvrant le
+      palier. `UNKNOWN` compte comme « décompté » : certains Android ne savent
+      pas dire leur type de connexion, et les mettre du côté gratuit ferait
+      payer ceux-là mêmes qu'on protège. C'est pourquoi l'interrupteur existe.
+      **Plafond** : 8 Mo, et il CÈDE devant trois protections — un lot dont des
+      réponses attendent, un lot qui attend sa clôture, le lot qu'on joue. La
+      décision est extraite en pur (`offline/eviction.ts`) et éprouvée : c'est
+      le seul code de l'appareil capable de détruire le travail d'un enfant
+- [x] 3.12 **FAIT** — les quatre écrans. Une **bannière** pendant la séance dit
+      à l'enfant qu'il joue sans réseau et que ses réponses sont gardées : sans
+      elle, l'explication et « j'en veux encore » disparaissent sans un mot, et
+      à huit ans c'est l'application qui est cassée, pas le réseau. Un
+      **indicateur** sur l'accueil compte ce qui attend d'être envoyé.
+      **« Je prépare pour plus tard »** (`app/prepare.tsx`) répond à la
+      question que l'enfant se pose vraiment — « est-ce que je pourrai jouer
+      tout à l'heure ? » — par un mot par thématique, prêt ou pas prêt ; les
+      mégaoctets sont écrits une fois, en bas, pour l'adulte.
+      **« Ton coffre t'attend »** n'annonce AUCUNE étoile, et c'est le point :
+      le verdict de l'appareil est consultatif (D12), annoncer « 24 ⭐ » serait
+      crédible et pourrait se révéler faux au retour du réseau. On annonce ce
+      qui est certain. La promesse est tenue par du code, pas par une phrase —
+      `closePendingPaliers` clôt vraiment, et l'écran laisse alors place au
+      VRAI résultat. Les deux ont été écrits ensemble ; sans la clôture, cet
+      écran mentirait
+- [~] 3.13 **PARTIEL, ET LA LIMITE RESTE STRUCTURELLE — mais elle a reculé.**
+      Ce qui est PUR est testé : 27 tests croisés appareil/serveur (3.1), 12
+      sur le bornage d'horloge (D17), et désormais **11 sur l'éviction**
+      (`apps/mobile/src/offline/eviction.test.ts`), avec leur propre
+      configuration Vitest en environnement `node` — séparée de celle de la
+      racine, qui est en `jsdom` avec l'alias `@` du web ; les ramener ensemble
+      rouvrirait ce que la phase 0 a fermé. L'éviction méritait ses tests plus
+      que tout le reste : c'est le seul code de l'appareil qui puisse DÉTRUIRE
+      du travail, et son erreur ne se voit pas — elle efface un lot, la
+      synchronisation se met à rendre `null` en silence, et des réponses déjà
+      données disparaissent.
+      Les scénarios restants — double synchronisation, coupure en plein palier,
+      abonnement expiré pendant le jeu — portent sur des MUTATIONS et une base
+      SQLite, et **le dépôt n'a pas `convex-test`** (constat déjà posé dans
+      `convex/pricing.ts`). Les éprouver demande soit d'installer
+      `convex-test`, soit un appareil et un déploiement de développement. À
+      décider ; ce n'est pas un oubli
 
 ### Phase 4 — Autour de l'exercice
 
@@ -834,17 +897,35 @@ Le hors-ligne et le périmètre élève seul sont tranchés. Restent :
    indépendant du mobile. À corriger avant la phase 3 si on le corrige, pour
    n'écrire la forme canonique qu'une fois.
 5. **Qui CLÔT un palier joué hors ligne quand l'abonnement a expiré ?**
+   *(Le cas ORDINAIRE est désormais traité ; celui-ci reste ouvert — lire la
+   réduction plus bas.)*
+
    `syncOfflineJournal` enregistre les réponses sans condition d'accès (D18),
    mais `submitPalier` — qui calcule les étoiles, valide le palier et décerne
    les badges — commence par `requireAccess`. Un enfant dont l'école a laissé
    filer l'abonnement pendant qu'il jouait verrait donc son travail ENREGISTRÉ
    et jamais NOTÉ : son palier resterait `in_progress` pour toujours.
-   **Ma recommandation :** clore un palier que l'enfant a réellement terminé
-   relève de l'ENREGISTREMENT, pas de l'OUVERTURE — le même raisonnement que
-   D18. Cela demande de séparer, dans `submitPalier`, le contrôle d'accès du
-   calcul : la mutation garderait son `requireAccess`, et la synchronisation
-   appellerait le calcul seul. C'est un remaniement d'une fonction EN SERVICE,
-   donc à faire les yeux ouverts plutôt qu'en passant.
+
+   **CE QUI A ÉTÉ FAIT SANS TOUCHER AU SERVEUR.** La question posée ci-dessus
+   supposait que la clôture devait venir de la synchronisation. Elle peut
+   venir de l'APPAREIL : `closePendingPaliers` (`offline/sync.ts`) appelle
+   `submitPalier` tel quel, au retour du réseau, une fois le journal parti.
+   Le serveur recalcule alors depuis les lignes `attempts` — exactement ce
+   qu'il fait pour une séance en ligne. Le cas ordinaire (l'école est
+   abonnée, l'enfant retrouve ses étoiles en revenant) est donc réglé, et
+   c'est lui qui arrivera presque toujours.
+
+   **CE QUI RESTE.** Quand l'accès est fermé, `submitPalier` lève. Le palier
+   garde alors son marqueur et la clôture se retentera à chaque retour du
+   réseau — y compris le jour où l'école renouvelle. Rien n'est détruit, mais
+   un enfant dont l'école ne renouvelle jamais n'aura jamais ses étoiles.
+
+   **Ma recommandation, inchangée :** clore un palier que l'enfant a réellement
+   terminé relève de l'ENREGISTREMENT, pas de l'OUVERTURE — le même
+   raisonnement que D18. Cela demande de séparer, dans `submitPalier`, le
+   contrôle d'accès du calcul. C'est un remaniement d'une fonction EN SERVICE,
+   donc à faire les yeux ouverts plutôt qu'en passant ; la réduction ci-dessus
+   fait qu'il n'est plus urgent.
 
 6. **Les enfants inscrits par un PARENT, pas par une école.**
    `profiles.createChildAccount` leur donne une adresse électronique, pas un

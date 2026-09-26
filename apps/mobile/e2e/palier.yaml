@@ -1,0 +1,63 @@
+# Parcours complet de l'élève — tâche 2.12.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# CE FICHIER N'A JAMAIS ÉTÉ EXÉCUTÉ. Il a été écrit dans un conteneur sans
+# appareil ni émulateur : ni Maestro ni l'application n'y tournent. Il est un
+# POINT DE DÉPART pour qui a un appareil sous la main, pas une garantie.
+#
+# Ce qu'il faudra vérifier au premier passage, dans cet ordre :
+#   1. que les `id:` correspondent — AUCUN `testID` n'est encore posé sur les
+#      composants ; les sélecteurs ci-dessous visent du TEXTE, ce qui est
+#      fragile. Poser des `testID` est la première chose à faire ;
+#   2. que le compte de test existe et que son école a un abonnement en cours,
+#      sans quoi le mur d'accès s'affiche au lieu des matières ;
+#   3. que la matière visée porte bien une thématique avec un palier ouvert.
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Lancer :  maestro test apps/mobile/e2e/palier.yaml
+#
+appId: com.jotna.school
+---
+- launchApp:
+    clearState: true
+
+# --- Entrer par le code (phase 1) ---------------------------------------
+- assertVisible: "Bonjour !"
+- tapOn:
+    text: "CM1A"      # champ « Ta classe » — à remplacer par la classe de test
+    optional: true
+- inputText: "CM1A"
+- tapOn: "Tes quatre chiffres"
+- inputText: "4821"   # code de test — à remplacer
+- tapOn: "Entrer"
+
+# --- L'accueil, puis une matière -----------------------------------------
+- assertVisible:
+    text: "Choisis une matière"
+    timeout: 15000
+- tapOn:
+    index: 0
+    text: ".*"        # première matière de la liste
+
+# --- Une thématique, qui ouvre son palier courant -------------------------
+- assertVisible:
+    text: "Palier .*"
+    timeout: 15000
+- tapOn:
+    index: 0
+    text: "Palier .*"
+
+# --- La séance : le premier exercice s'affiche ---------------------------
+# `getBucket` peut GÉNÉRER par IA : la première ouverture d'un palier froid
+# prend parfois une vingtaine de secondes. D'où le délai large.
+- assertVisible:
+    text: "Exercice 1 sur .*"
+    timeout: 60000
+
+# --- Répondre jusqu'à la fin ---------------------------------------------
+# Ce bloc est volontairement laissé à compléter : répondre JUSTE demande de
+# connaître le contenu du palier de test. Deux façons de le faire :
+#   - figer un palier de test au contenu connu (le plus robuste), ou
+#   - épuiser les cinq essais sur chaque exercice et vérifier qu'on arrive
+#     quand même à l'écran de fin, ce qui teste le parcours sans le score.
+- assertVisible: "Valider"

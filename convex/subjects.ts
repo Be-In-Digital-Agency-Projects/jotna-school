@@ -55,7 +55,9 @@ async function subjectsHiddenWhole(
   const withVisible = new Set<Id<"subjects">>();
   const withHidden = new Set<Id<"subjects">>();
   for (const topic of topics) {
-    (isHiddenClass(topic.class) ? withHidden : withVisible).add(topic.subjectId);
+    (isHiddenClass(topic.class) ? withHidden : withVisible).add(
+      topic.subjectId,
+    );
   }
 
   for (const subjectId of withVisible) withHidden.delete(subjectId);
@@ -88,7 +90,10 @@ export const getById = query({
 
     // Même règle que la liste : une matière entièrement masquée répond comme
     // une matière absente, sinon son identifiant rouvrirait la porte.
-    if (!access.hiddenClasses && (await subjectsHiddenWhole(ctx)).has(args.id)) {
+    if (
+      !access.hiddenClasses &&
+      (await subjectsHiddenWhole(ctx)).has(args.id)
+    ) {
       return null;
     }
 
@@ -186,19 +191,31 @@ export const update = mutation({
  * ensemencement à rebrancher explicitement qu'un ensemencement que n'importe
  * qui déclenche.
  */
+/**
+ * LES MATIÈRES SEMÉES PAR DÉFAUT — sorties de la fonction pour être LUES.
+ *
+ * `icon` porte un nom d'icône Lucide, que web et mobile traduisent en emoji
+ * (`lib/subject-icons.ts`). Les deux traductions avaient oublié `Users`, et
+ * l'EMC s'affichait « US » sur l'accueil d'un enfant. Cette liste est
+ * désormais confrontée à la table par `lib/__tests__/subjectIcons.test.ts` :
+ * ajouter une matière avec une icône inconnue fait rougir la CI, au lieu
+ * d'attendre qu'un enfant la voie.
+ */
+export const DEFAULT_SUBJECTS = [
+  { name: "Mathématiques", icon: "Calculator", color: "#4f46e5", order: 1 },
+  { name: "Français", icon: "Book", color: "#db2777", order: 2 },
+  { name: "Sciences", icon: "Flask", color: "#10b981", order: 3 },
+  { name: "Histoire-Géographie", icon: "Globe", color: "#f59e0b", order: 4 },
+  { name: "Anglais", icon: "Globe", color: "#0ea5e9", order: 5 },
+  { name: "Arts plastiques", icon: "Palette", color: "#ec4899", order: 6 },
+  { name: "Éducation musicale", icon: "Music", color: "#8b5cf6", order: 7 },
+  { name: "EMC", icon: "Users", color: "#6b7280", order: 8 },
+] as const;
+
 export const seedDefaults = internalMutation({
   args: {},
   handler: async (ctx) => {
-    const defaults = [
-      { name: "Mathématiques", icon: "Calculator", color: "#4f46e5", order: 1 },
-      { name: "Français", icon: "Book", color: "#db2777", order: 2 },
-      { name: "Sciences", icon: "Flask", color: "#10b981", order: 3 },
-      { name: "Histoire-Géographie", icon: "Globe", color: "#f59e0b", order: 4 },
-      { name: "Anglais", icon: "Globe", color: "#0ea5e9", order: 5 },
-      { name: "Arts plastiques", icon: "Palette", color: "#ec4899", order: 6 },
-      { name: "Éducation musicale", icon: "Music", color: "#8b5cf6", order: 7 },
-      { name: "EMC", icon: "Users", color: "#6b7280", order: 8 },
-    ];
+    const defaults = DEFAULT_SUBJECTS;
 
     const existing = await ctx.db.query("subjects").take(50);
     const existingNames = new Set(existing.map((s) => s.name));

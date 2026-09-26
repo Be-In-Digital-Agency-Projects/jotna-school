@@ -12,6 +12,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Le mobile n'est pas du Next : `eslint-config-next` y signalerait des
+    // règles qui n'ont pas de sens en React Native (`next/image`, liens,
+    // etc.). Il a sa propre configuration.
+    "apps/**",
   ]),
 ]);
 

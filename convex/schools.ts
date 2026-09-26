@@ -2594,3 +2594,66 @@ export const transferStudent = mutation({
     return null;
   },
 });
+
+// ===========================================================================
+// CONSENTEMENT IA — la déclaration de l'école (tâche 6.4)
+// ===========================================================================
+
+/**
+ * L'ÉCOLE DÉCLARE DÉTENIR L'AUTORISATION DES PARENTS.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * POURQUOI C'EST UNE MUTATION D'ADMINISTRATION, ET NON DU DIRECTEUR.
+ *
+ * La décision du propriétaire dit « l'école déclare ». En l'état du produit,
+ * l'école n'a AUCUN écran où déclarer quoi que ce soit : tout ce module est
+ * réservé à l'`admin` (voir son en-tête), et `app/(admin)/admin/ecoles/[id]`
+ * est le seul endroit où une école se gère. Le rôle `directeur` existe au
+ * schéma mais n'a pas de surface à lui.
+ *
+ * On enregistre donc la déclaration LÀ OÙ LA GESTION DES ÉCOLES VIT
+ * RÉELLEMENT, et `aiConsentDeclaredBy` nomme l'administrateur qui l'a portée.
+ * Ce n'est pas la même chose qu'un directeur qui coche lui-même, et il ne faut
+ * pas faire semblant du contraire : ouvrir un espace directeur est un chantier
+ * à part entière, pas un détail de cette tâche.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * ELLE SE RETIRE. Une déclaration qu'on ne peut pas reprendre est un piège :
+ * une école qui découvre qu'un parent s'y oppose, ou qui change d'avis, doit
+ * pouvoir revenir en arrière sans passer par la base. `declared: false` efface
+ * la date ET l'auteur — on ne garde pas le nom de quelqu'un sous une
+ * déclaration qui n'existe plus.
+ *
+ * ELLE N'EST PAS IDEMPOTENTE SUR LA DATE, et c'est voulu : redéclarer
+ * rafraîchit l'horodatage. C'est ce que fait une confirmation annuelle.
+ */
+export const declareAiConsent = mutation({
+  args: {
+    schoolId: v.id("schools"),
+    declared: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const admin = await callerAdminProfile(ctx);
+    if (!admin) {
+      throw new ConvexError({
+        code: "FORBIDDEN",
+        message: "Seule l'administration peut enregistrer cette déclaration.",
+      });
+    }
+
+    const school = await ctx.db.get(args.schoolId);
+    if (!school) {
+      throw new ConvexError({
+        code: "NOT_FOUND",
+        message: "École introuvable.",
+      });
+    }
+
+    await ctx.db.patch(args.schoolId, {
+      aiConsentDeclaredAt: args.declared ? Date.now() : undefined,
+      aiConsentDeclaredBy: args.declared ? admin._id : undefined,
+    });
+
+    return { declared: args.declared };
+  },
+});

@@ -1,3 +1,12 @@
+# La racine RESTE l'application web (décision D2 du plan mobile) : on n'a pas
+# déplacé `app/`, `components/`, `lib/` dans `apps/web`. Un chantier qui
+# commence par casser les alias, Next, ESLint, Vitest, Playwright et la CI
+# AVANT d'avoir écrit un seul écran mobile se juge mal. La racine est donc à la
+# fois la racine du workspace et le paquet web ; elle n'a pas à figurer ici.
+packages:
+  - apps/*
+  - packages/*
+
 ignoredBuiltDependencies:
   - sharp
   - unrs-resolver

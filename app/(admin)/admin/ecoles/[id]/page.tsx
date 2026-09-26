@@ -18,6 +18,7 @@ import {
 // Le texte d'un refus de `convex/schools.ts`, lu là où il voyage vraiment :
 // le champ `data` de la ConvexError, jamais `message`. Voir le module.
 import { refusalMessage } from "@/lib/refusalMessage";
+import { AI_CONSENT_GRACE_ENDS_AT } from "@/convex/aiConsentRules";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -1330,6 +1331,8 @@ function SchoolDetail({ school }: { school: Doc<"schools"> }) {
 
       <SubscriptionSection schoolId={school._id} outlook={outlook} />
 
+      <AiConsentDeclaration school={school} />
+
       <BillingSection schoolId={school._id} />
 
       <StaffSection
@@ -2571,5 +2574,111 @@ function MembershipHistory({
         );
       })}
     </ul>
+  );
+}
+
+/**
+ * LA DÉCLARATION DE CONSENTEMENT IA DE L'ÉCOLE — tâche 6.4.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * CE QUE CETTE CASE DIT VRAIMENT, ET QU'IL NE FAUT PAS ADOUCIR.
+ *
+ * Elle n'est pas « l'école accepte l'IA ». Elle est « l'école DÉCLARE détenir
+ * l'autorisation des parents ». La nuance est tout le sujet : sous la Loi
+ * 2008-12, c'est le représentant légal qui consent, pas l'établissement. Ce
+ * que l'application enregistre, c'est une garantie apportée par l'école, avec
+ * son auteur et sa date, pour que quelqu'un puisse en répondre.
+ *
+ * ELLE VIT SUR L'ÉCRAN D'ADMINISTRATION parce que c'est le seul endroit où une
+ * école se gère : le rôle `directeur` existe au schéma mais n'a aucune surface
+ * à lui. La mutation le dit en toutes lettres — c'est un pis-aller assumé, pas
+ * un directeur qui coche lui-même.
+ *
+ * LE DÉLAI DE GRÂCE EST AFFICHÉ AVEC SA DATE tant qu'il court. Une échéance
+ * qu'on ne voit pas venir coupe l'aide IA d'une classe un matin, sans un mot.
+ */
+function AiConsentDeclaration({ school }: { school: Doc<"schools"> }) {
+  const declare = useMutation(api.schools.declareAiConsent);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const declared = school.aiConsentDeclaredAt != null;
+
+  // CET ÉCRAN NE LIT PAS L'HORLOGE, ET N'EN A PAS BESOIN.
+  //
+  // La première version comparait `Date.now()` à l'échéance pour choisir entre
+  // « l'aide IA va s'arrêter » et « l'aide IA est arrêtée ». Le lint de React
+  // l'a refusé à juste titre — un appel impur pendant le rendu —, et le
+  // contourner par un `useEffect` qui pose l'instant dans un état n'a fait
+  // qu'échanger cette faute contre une autre (un `setState` synchrone dans un
+  // effet, donc un rendu en cascade).
+  //
+  // La vraie réponse était de ne pas poser la question : une phrase écrite au
+  // FUTUR ANTÉRIEUR — « à partir du 26 octobre » — est vraie des deux côtés de
+  // la date. Le seul endroit où l'instant compte vraiment, c'est le serveur,
+  // et c'est lui qui le lit, dans `decideAiConsent`.
+
+  function toggle(next: boolean) {
+    setBusy(true);
+    setError(null);
+    void declare({ schoolId: school._id, declared: next })
+      .catch((err) =>
+        setError(refusalMessage(err, "Erreur lors de l'enregistrement")),
+      )
+      .finally(() => setBusy(false));
+  }
+
+  return (
+    <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+      <h2 className="text-lg font-semibold text-gray-900">
+        Traitement IA du travail des élèves
+      </h2>
+      <p className="mt-1 text-sm text-gray-600">
+        Pour expliquer une erreur ou proposer des exercices adaptés, le travail
+        de l&apos;élève est envoyé à un prestataire d&apos;IA. La Loi 2008-12
+        demande le consentement du représentant légal.
+      </p>
+
+      <div className="mt-4 rounded-lg border border-gray-100 bg-gray-50 p-4">
+        {declared ? (
+          <p className="text-sm text-gray-900">
+            <span className="font-medium text-green-800">
+              Déclaration enregistrée
+            </span>{" "}
+            le {formatDay(school.aiConsentDeclaredAt!)}.
+          </p>
+        ) : (
+          <p className="text-sm font-medium text-amber-800">
+            Aucune déclaration enregistrée. Sans elle, l&apos;aide IA est
+            arrêtée pour les élèves de cette école à partir du{" "}
+            {formatDay(AI_CONSENT_GRACE_ENDS_AT)}.
+          </p>
+        )}
+
+        <p className="mt-2 text-xs text-gray-500">
+          Un parent rattaché à un élève peut refuser pour son enfant, et son
+          refus l&apos;emporte sur cette déclaration.
+        </p>
+
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => toggle(!declared)}
+          className={
+            declared
+              ? "mt-4 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-100 disabled:opacity-50"
+              : "mt-4 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-indigo-700 disabled:opacity-50"
+          }
+        >
+          {busy
+            ? "Enregistrement..."
+            : declared
+              ? "Retirer la déclaration"
+              : "L'école déclare détenir l'autorisation des parents"}
+        </button>
+
+        {error && <p className="mt-2 text-sm text-red-700">{error}</p>}
+      </div>
+    </section>
   );
 }

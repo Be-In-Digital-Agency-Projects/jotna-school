@@ -28,6 +28,9 @@ import { checkMathExercise } from "../aiGateway/factCheck";
 import { computeExerciseScore } from "./scoring";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { checkAccess, requireAccess } from "../access";
+import { AI_CONSENT_KID_MESSAGE } from "../aiConsentRules";
+import { ATOM_SCHEME_VERSION, buildDigests } from "./offline";
+import { saltFor, sha256Hex } from "./digest";
 
 /**
  * Péremption du contenu d'un palier, PARTAGÉ par tous les élèves d'un niveau,
@@ -210,6 +213,110 @@ export const getExercisesForPalier = query({
     finalSet.sort((a, b) => a.order - b.order);
 
     return finalSet.map((ex) => stripAnswerFromExercise(ex, args.palierAttemptId));
+  },
+});
+
+/**
+ * LE LOT HORS-LIGNE — décisions D11, D14, D18, D19, D20.
+ *
+ * Le pendant de `getExercisesForPalier` pour un enfant qui va perdre le
+ * réseau. Les deux fonctions vivent côte à côte À DESSEIN : elles décrivent le
+ * MÊME exercice tel que l'enfant le voit, et l'une qui dériverait de l'autre
+ * ferait jouer deux versions différentes selon la présence du réseau.
+ *
+ * L'APPELANT DOIT AVOIR CRÉÉ LA TENTATIVE AVANT (D14). C'est pourquoi ceci
+ * prend un `palierAttemptId` et non un `palierId` : `sanitizePayload` sème son
+ * mélange avec l'identifiant de la tentative, donc le lot ne peut pas se
+ * construire sans elle. L'appareil enchaîne `startPalierAttempt` puis cette
+ * requête — le même ordre qu'en ligne, et toute la garde de progression de
+ * `startPalierAttempt` reste en vigueur, sans être dupliquée ici.
+ *
+ * CE QUE LE LOT AJOUTE À LA FORME EN LIGNE, ET RIEN D'AUTRE :
+ *
+ *   - `hints` — les textes, en entier. Ils descendent parce que `requestHint`
+ *     ne passera pas hors ligne. Ils approchent la réponse sans la donner,
+ *     exactement comme en ligne un par un (concession D20.3) ;
+ *   - `verifier` — le sel et les empreintes des ATOMES acceptables, pour que
+ *     l'appareil rende une coche verte sans détenir le corrigé (D11) ;
+ *   - `accessValidUntil` — au-delà, l'appareil redemande le réseau avant de
+ *     laisser commencer (D18).
+ *
+ * LE CORRIGÉ NE DESCEND TOUJOURS PAS. `stripAnswerFromExercise` est la même
+ * fonction qu'en ligne ; seules des EMPREINTES s'y ajoutent.
+ */
+const OFFLINE_LEASE_MS = 14 * 24 * 60 * 60 * 1000;
+
+export const getOfflineBundle = query({
+  args: { palierAttemptId: v.id("palierAttempts") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+
+    const profile = await ctx.db
+      .query("profiles")
+      .withIndex("by_userId", (q) => q.eq("userId", userId as string))
+      .unique();
+    if (!profile) return null;
+
+    // On ne TÉLÉCHARGE pas quand l'accès est fermé. C'est cohérent avec D18,
+    // qui protège le travail DÉJÀ FAIT : enregistrer toujours, ouvrir au cas
+    // par cas. Ouvrir un nouveau lot est une ouverture.
+    const access = await checkAccess(ctx, profile);
+    if (!access.ok) return null;
+
+    const attempt = await ctx.db.get(args.palierAttemptId);
+    if (!attempt) return null;
+    if (attempt.userId !== profile._id) return null;
+
+    const exosByAttempt = await ctx.db
+      .query("exercises")
+      .withIndex("by_palierAttemptId", (q) =>
+        q.eq("palierAttemptId", args.palierAttemptId),
+      )
+      .take(50);
+    const variationOriginalIds = new Set(
+      exosByAttempt
+        .map((e) => e.originalExerciseId)
+        .filter(Boolean) as Id<"exercises">[],
+    );
+
+    const exosByPalier = await ctx.db
+      .query("exercises")
+      .withIndex("by_palierId", (q) => q.eq("palierId", attempt.palierId))
+      .take(50);
+
+    const finalSet: Doc<"exercises">[] = [];
+    for (const ex of exosByPalier) {
+      if (!variationOriginalIds.has(ex._id)) finalSet.push(ex);
+    }
+    for (const ex of exosByAttempt) finalSet.push(ex);
+    finalSet.sort((a, b) => a.order - b.order);
+
+    const exercises = [];
+    for (const ex of finalSet) {
+      const salt = saltFor(args.palierAttemptId, ex._id);
+      exercises.push({
+        ...stripAnswerFromExercise(ex, args.palierAttemptId),
+        hints: Array.isArray(ex.hints) ? ex.hints : [],
+        verifier: {
+          salt,
+          digests: await buildDigests(ex.type, ex.payload, salt, sha256Hex),
+        },
+      });
+    }
+
+    return {
+      palierAttemptId: args.palierAttemptId,
+      // L'échéance la plus PROCHE des deux : on ne laisse pas un lot survivre
+      // à l'abonnement de l'école, ni traîner deux mois sur une tablette.
+      accessValidUntil: Math.min(access.endsAt, Date.now() + OFFLINE_LEASE_MS),
+      // LA VERSION DU SCHÉMA D'ATOMES VOYAGE AVEC LE LOT (6.7, D21). Sans
+      // elle, une mise à jour à chaud qui change l'atomisation ferait compter
+      // FAUX des réponses justes, en silence, chez un enfant hors ligne.
+      // `offline.ts` dit quand la bouger.
+      atomSchemeVersion: ATOM_SCHEME_VERSION,
+      exercises,
+    };
   },
 });
 
@@ -890,6 +997,26 @@ export const regenerateFailedExercises = action({
         ok: false,
         reason: "REGEN_CAP_REACHED",
         kidMessage: "On t'a vu galérer 💪. Voici trois pistes pour t'en sortir.",
+      };
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // CONSENTEMENT IA (tâche 6.4) — les deux invites construites ci-dessous
+    // portent `studentAnswer`, c'est-à-dire ce que l'enfant a VRAIMENT écrit
+    // sur chaque exercice raté. La garde se pose donc avant de les construire.
+    //
+    // ON NE LÈVE PAS : cette action rend déjà `{ ok: false, kidMessage }` sur
+    // ses autres refus (plafond de régénération), et l'écran sait l'afficher.
+    // Le refus emprunte le même chemin plutôt que d'en inventer un.
+    const consent = await ctx.runQuery(
+      internal.access.getAiConsentForProfile,
+      { profileId: callerProfile._id },
+    );
+    if (!consent.allowed) {
+      return {
+        ok: false,
+        reason: "AI_CONSENT_MISSING",
+        kidMessage: AI_CONSENT_KID_MESSAGE,
       };
     }
 

@@ -167,6 +167,23 @@ export default defineSchema({
     submittedAt: v.number(),
     gradedScore: v.optional(v.number()), // 0..10 per scoring.computeExerciseScore
     palierAttemptId: v.optional(v.id("palierAttempts")),
+
+    // ----------------------------------------------------------------------
+    // Identifiant tiré par le CLIENT, pour le hors-ligne (plan mobile, D15).
+    //
+    // POURQUOI IL EXISTE. Une synchronisation coupée puis reprise rejouerait
+    // les mêmes réponses. Sans clé d'idempotence, les tentatives DOUBLERAIENT
+    // — et `computeExerciseScore` note selon le RANG du premier succès : une
+    // bonne réponse du premier coup rejouée deux fois deviendrait une bonne
+    // réponse au deuxième essai, donc 7 au lieu de 10. L'enfant perdrait des
+    // points pour une coupure réseau.
+    //
+    // OPTIONNEL, ET IL LE RESTERA. Le chemin EN LIGNE ne le pose pas : ces
+    // lignes-là n'ont pas besoin d'être dédupliquées, la mutation ne s'exécute
+    // qu'une fois. Un champ facultatif n'invalide par ailleurs aucun document
+    // déjà écrit — l'ajout est purement additif.
+    // ----------------------------------------------------------------------
+    clientAttemptId: v.optional(v.string()),
   })
     .index("by_studentId_exerciseId", ["studentId", "exerciseId"])
     .index("by_studentId", ["studentId"])
@@ -180,7 +197,11 @@ export default defineSchema({
     // pouvait se poser qu'en balayant la table, ce que le code faisait — mal.
     .index("by_exerciseId", ["exerciseId"])
     .index("by_palierAttemptId", ["palierAttemptId"])
-    .index("by_palierAttempt_exercise", ["palierAttemptId", "exerciseId"]),
+    .index("by_palierAttempt_exercise", ["palierAttemptId", "exerciseId"])
+    // « Cette ligne du journal a-t-elle déjà été enregistrée ? » — la seule
+    // question que la synchronisation pose, et elle doit coûter une lecture
+    // d'index, pas un balayage : la table grandit avec l'usage ÉLÈVE.
+    .index("by_clientAttemptId", ["clientAttemptId"]),
 
   // ---------------------------------------------------------------------------
   // studentTopicProgress
@@ -559,6 +580,19 @@ export default defineSchema({
     contactEmail: v.string(),
     contactPhone: v.optional(v.string()),
     ninea: v.optional(v.string()), // identifiant fiscal SN, requis sur la facture
+    // ─────────────────────────────────────────────────────────────────────
+    // CONSENTEMENT IA — l'école déclare détenir l'autorisation des parents.
+    //
+    // Décision du propriétaire (26/09/2026) : l'école enrôle l'enfant et signe
+    // le contrat, donc c'est elle qui déclare ; tout parent rattaché peut
+    // refuser pour son enfant, et son refus l'emporte. La règle complète, son
+    // ordre et son délai de grâce sont dans `convex/aiConsentRules.ts`.
+    //
+    // ON GARDE QUI A DÉCLARÉ, ET QUAND. Une déclaration anonyme ne vaudrait
+    // rien le jour où quelqu'un demande des comptes — ni devant la Loi 2008-12,
+    // ni devant une revue Kids Category.
+    aiConsentDeclaredAt: v.optional(v.number()),
+    aiConsentDeclaredBy: v.optional(v.id("profiles")),
     status: v.union(
       v.literal("prospect"),
       v.literal("active"),

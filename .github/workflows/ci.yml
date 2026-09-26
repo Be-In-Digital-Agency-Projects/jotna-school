@@ -15,6 +15,20 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Le jeton de ce workflow ne peut QUE LIRE le dépôt.
+#
+# Sans ce bloc, `GITHUB_TOKEN` hérite des permissions par défaut du dépôt, qui
+# peuvent inclure l'écriture : une action tierce compromise — et il y en a
+# quatre ici, toutes à des versions flottantes de tag — pourrait alors pousser
+# sur `main`. Signalé par CodeQL sur la PR #26.
+#
+# `contents: read` est ce dont `actions/checkout` a besoin, et rien de plus.
+# AUCUN des deux jobs n'écrit : ils installent, vérifient et construisent, sans
+# publier ni commenter. Le jour où l'un d'eux devra poster un résultat, c'est
+# à LUI qu'on ajoutera la permission, pas à ce bloc-ci.
+permissions:
+  contents: read
+
 jobs:
   verify:
     name: Lint, typecheck, test, build
@@ -53,3 +67,69 @@ jobs:
         env:
           NEXT_PUBLIC_CONVEX_URL: ${{ secrets.NEXT_PUBLIC_CONVEX_URL || 'https://placeholder.convex.cloud' }}
         run: pnpm build
+
+  # ---------------------------------------------------------------------------
+  # Application mobile élève (plan 2026-09-25, tâche 0.8)
+  #
+  # UN JOB SÉPARÉ, et le job web au-dessus n'est pas touché : il reste le
+  # gardien de ce qui est en service. Celui-ci garde ce qui se construit.
+  #
+  # NODE 22, pas 20 comme le web. C'est la version sous laquelle cette chaîne a
+  # été vérifiée ; Expo SDK 57 et React Native 0.86 y tournent. Aligner le web
+  # dessus est un autre chantier, qui ne se décide pas dans celui-ci.
+  # ---------------------------------------------------------------------------
+  mobile:
+    name: Mobile — typecheck, tests et paquet Metro
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # Installation COMPLÈTE du workspace, pas filtrée sur `apps/mobile`.
+      # Le typecheck du mobile suit `@convex/_generated/api` jusqu'aux modules
+      # de `convex/`, qui importent `openai` et `resend` — des dépendances de
+      # la RACINE. TypeScript les résout en remontant depuis le fichier qui
+      # importe, donc depuis `convex/`, donc depuis la racine : elles doivent
+      # y être installées.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm --filter @jotna/mobile typecheck
+
+      # Les tests du mobile tournent avec LEUR PROPRE configuration Vitest
+      # (`apps/mobile/vitest.config.ts`, environnement `node`), séparée de
+      # celle de la racine, qui est en `jsdom` avec l'alias `@` du web. Ils
+      # n'éprouvent que de la logique PURE — voir l'en-tête de ce fichier-là.
+      - name: Tests (logique pure)
+        run: pnpm --filter @jotna/mobile test
+
+      # LE GARDE QUI COMPTE. Le typecheck ne dit rien de la résolution à
+      # l'exécution : c'est ce paquet-ci qui prouve que Metro traverse le
+      # workspace pnpm et trouve `convex/` à la racine. Deux pannes de
+      # résolution ont été prises par cette commande pendant la phase 0, aucune
+      # par le typecheck.
+      - name: Paquet Metro (Android)
+        env:
+          EXPO_PUBLIC_CONVEX_URL: ${{ secrets.NEXT_PUBLIC_CONVEX_URL || 'https://placeholder.convex.cloud' }}
+        run: pnpm --filter @jotna/mobile bundle:check
+
+      # LES SONS DOIVENT RESTER DANS LE PAQUET (tâche 5.2). Remplacer un
+      # `require()` par une URL ne casse ni le typecheck, ni les tests, ni la
+      # construction : la panne n'apparaît que chez un enfant sans réseau qui
+      # répond juste et n'entend rien. Ce garde lit le manifeste de l'export.
+      - name: Assets embarqués
+        run: pnpm --filter @jotna/mobile assets:check

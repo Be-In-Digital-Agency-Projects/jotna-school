@@ -6,17 +6,7 @@ import Link from "next/link";
 import { Loader2, BookOpen, Flame } from "lucide-react";
 import { motion } from "framer-motion";
 import { Pio } from "@/components/student/pio";
-
-const iconMap: Record<string, React.ReactNode> = {
-  Calculator: <span className="text-3xl">🧮</span>,
-  Book: <span className="text-3xl">📖</span>,
-  Flask: <span className="text-3xl">🔬</span>,
-  Globe: <span className="text-3xl">🌍</span>,
-  Music: <span className="text-3xl">🎵</span>,
-  Palette: <span className="text-3xl">🎨</span>,
-  Code: <span className="text-3xl">💻</span>,
-  Hash: <span className="text-3xl">#</span>,
-};
+import { subjectEmoji } from "@/lib/subject-icons";
 
 export default function StudentHomePage() {
   const subjects = useQuery(api.subjects.list);
@@ -88,11 +78,7 @@ export default function StudentHomePage() {
                   className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl text-white shadow-lg"
                   style={{ backgroundColor: subject.color }}
                 >
-                  {iconMap[subject.icon] || (
-                    <span className="text-2xl font-bold">
-                      {subject.icon.slice(0, 2).toUpperCase()}
-                    </span>
-                  )}
+                  <span className="text-3xl">{subjectEmoji(subject.icon)}</span>
                 </div>
 
                 <h3 className="font-display text-xl font-extrabold text-gray-900 group-hover:text-gray-700">

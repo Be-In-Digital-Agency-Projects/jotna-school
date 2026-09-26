@@ -2,43 +2,8 @@ import Link from "next/link";
 import { Mail, ShieldCheck } from "lucide-react";
 
 import { Brand } from "./brand";
-
-type FooterColumn = {
-  title: string;
-  links: Array<{ label: string; href: string; external?: boolean }>;
-};
-
-const COLUMNS: FooterColumn[] = [
-  {
-    title: "Produit",
-    links: [
-      { label: "Comment ça marche", href: "/#comment" },
-      { label: "Exercices", href: "/#exercices" },
-      { label: "Gamification", href: "/#gamification" },
-      { label: "FAQ", href: "/#faq" },
-    ],
-  },
-  {
-    title: "Compte",
-    links: [
-      { label: "Se connecter", href: "/login" },
-      { label: "Créer un compte", href: "/register" },
-      { label: "Espace parent", href: "/parent/dashboard" },
-      { label: "Espace professeur", href: "/teacher/dashboard" },
-    ],
-  },
-  {
-    title: "Légal",
-    links: [
-      { label: "Mentions légales", href: "/legal/mentions" },
-      { label: "Conditions générales", href: "/legal/cgu" },
-      { label: "Politique de confidentialité", href: "/legal/confidentialite" },
-      { label: "Cookies", href: "/legal/cookies" },
-      { label: "Protection des mineurs", href: "/legal/mineurs" },
-      { label: "Accessibilité", href: "/legal/accessibilite" },
-    ],
-  },
-];
+import { FOOTER_COLUMNS } from "./footer-links";
+import { CONTACT_EMAIL } from "@/lib/brand";
 
 export function Footer() {
   return (
@@ -61,15 +26,15 @@ export function Footer() {
               </span>
             </div>
             <a
-              href="mailto:contact@jotnaschool.com"
+              href={`mailto:${CONTACT_EMAIL}`}
               className="mt-2 inline-flex items-center gap-1.5 text-sm font-medium text-gray-700 transition-colors hover:text-gray-900"
             >
               <Mail className="size-4" aria-hidden />
-              contact@jotnaschool.com
+              {CONTACT_EMAIL}
             </a>
           </div>
 
-          {COLUMNS.map((col) => (
+          {FOOTER_COLUMNS.map((col) => (
             <div key={col.title}>
               <h3 className="text-xs font-bold uppercase tracking-wider text-gray-900">
                 {col.title}

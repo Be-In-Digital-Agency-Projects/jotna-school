@@ -102,6 +102,55 @@ export function normalizeCode(raw: string): string {
   return raw.trim().replace(/\s+/g, "").toLowerCase();
 }
 
+/**
+ * La forme IMPRIMÉE d'un code — celle du billet, majuscules comprises.
+ *
+ * C'est ce que `buildLoginCode` produit (préfixe mis en majuscules, tiret,
+ * quatre chiffres), et donc ce que vaut le SECRET du compte.
+ */
+export function printableCode(raw: string): string {
+  return raw.trim().replace(/\s+/g, "").toUpperCase();
+}
+
+/**
+ * Les deux formes d'un même code, telles que `Password.authorize` les attend.
+ *
+ * ELLES NE SONT PAS ÉGALES, et c'est tout l'objet de cette fonction. Vérifié
+ * dans `node_modules/@convex-dev/auth/dist/providers/Password.js`, branche
+ * `signIn` :
+ *
+ *     const profile = config.profile?.(params, ctx) ?? defaultProfile(params);
+ *     const { email } = profile;
+ *     const secret = params.password;
+ *     ...
+ *     retrieveAccount(ctx, { provider, account: { id: email, secret } });
+ *
+ * Seul `email` traverse `config.profile()` — celui de `convex/auth.ts`, qui
+ * fait `.trim().toLowerCase()`. `password` est pris BRUT. Or le compte a été
+ * créé par `studentImportRun.ts` avec
+ * `{ id: normalizeCode(code), secret: initialPassword(code) }`, et
+ * `initialPassword` rend le code TEL QU'IMPRIMÉ.
+ *
+ * L'identifiant cherché est donc en minuscules et le secret en majuscules.
+ * Un écran qui enverrait la même chaîne aux deux champs marcherait pour un
+ * enfant qui tape en majuscules et échouerait pour celui qui tape en
+ * minuscules — sans que rien, nulle part, n'explique pourquoi.
+ *
+ * `studentCredentials.resetStudentLoginCode` réinitialise avec la même paire
+ * (`{ id: normalized, secret: printable }`) : les deux chemins de création du
+ * dépôt produisent la même forme, donc cette fonction les couvre tous les deux.
+ *
+ * Elle est PURE et vit ici, avec le reste du format des codes, pour qu'il n'en
+ * existe qu'une définition — le web, le mobile et les tests la partagent.
+ */
+export function loginCredentials(raw: string): {
+  email: string;
+  password: string;
+} {
+  const printable = printableCode(raw);
+  return { email: normalizeCode(printable), password: printable };
+}
+
 // ---------------------------------------------------------------------------
 // Collage
 // ---------------------------------------------------------------------------

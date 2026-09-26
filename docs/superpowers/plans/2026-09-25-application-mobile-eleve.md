@@ -234,6 +234,45 @@ effacement du jeton, **et purge du journal hors-ligne non synchronisé après
 l'avoir envoyé** (D15). Ce qu'il ne faut SURTOUT pas faire : garder deux
 sessions ouvertes — l'enfant jouerait sous le nom d'un autre.
 
+### D23 — Le contrat de réponse vit dans `convex/`, et `packages/core` attend.
+
+**Ce qui a été fait.** `convex/paliers/answers.ts` tient désormais les DEUX
+bouts de la chaîne `attempts.submittedAnswer` : les `encode*` que les clients
+emploient pour la fabriquer, et les `verify*` que le serveur emploie pour la
+relire. `palierAttempts.ts` délègue et ne porte plus de copie.
+
+**Pourquoi c'est le point qui comptait.** Les vérificateurs étaient côté
+serveur, et chaque composant d'exercice du web fabriquait sa chaîne dans son
+coin. Avec UN client, une divergence se voit tout de suite. Avec DEUX — web et
+mobile — un encodage qui dérive d'un caractère donne un enfant qui a RAISON et
+que le serveur compte FAUX, sans que rien ne signale l'écart. Les deux moitiés
+sont maintenant dans un fichier pur, sous 22 tests d'aller-retour.
+
+**Pourquoi PAS `packages/core`.** Deux raisons, dans cet ordre.
+
+1. **L'extraction ne corrige rien.** Le but de D6 est qu'il n'existe qu'une
+   définition de chaque chose partagée. C'est DÉJÀ le cas : le mobile lit
+   `lib/` et `convex/` par alias, sans copie. `packages/core` ajouterait une
+   frontière de construction et de la clarté — pas une correction.
+2. **Son risque principal n'est pas vérifiable ici.** `convex/explainMistake.ts`
+   importe `lib/kidCopy`, et trois modules Convex importent `lib/accessCopy` ;
+   `lib/refusalMessage.ts` en a **29**. Déplacer ces fichiers dans un paquet du
+   workspace change ce que le bundler de Convex doit résoudre. Or aucun outil
+   Convex ne tourne dans ce conteneur — `npx convex codegen` s'arrête sur
+   `No CONVEX_DEPLOYMENT set`. On ne pousserait donc pas une modification
+   vérifiée, mais une modification espérée, sur un chemin qui sert des enfants.
+
+**Ce qu'il faut pour la faire.** Un déploiement Convex de développement, et
+l'ordre suivant : créer le paquet, y déplacer d'abord UN module consommé par
+`convex/` (`kidCopy`, le plus petit), lancer `npx convex dev --once`, et
+n'enchaîner que si le bundle passe. Tant que ce n'est pas fait, `lib/` reste la
+couche partagée qu'elle est déjà — `convex/` l'utilise depuis bien avant le
+mobile.
+
+**Ce que cela ne coûte pas.** Le jour de l'extraction, le mobile changera
+d'ALIAS, pas de code : `@lib/kidCopy` deviendra `@jotna/core`. Rien de ce qui
+est écrit ici ne la complique.
+
 ### D22 — `StyleSheet` et des jetons, pas NativeWind.
 
 La phase 0 devait trancher sur un écran témoin (tâche 0.6). Trois raisons ont
@@ -518,14 +557,14 @@ connexion dans l'application, réserver le mobile aux élèves scolaires (cohér
 avec le modèle B2B de D7), ou leur faire émettre un code par l'école. Aucune ne
 se décide dans un chantier technique — voir §5.
 
-### Phase 2 — Le moteur d'exercices
+### Phase 2 — Le moteur d'exercices — **EN COURS**
 
-- [ ] 2.1 `packages/core` : extraire `kidCopy`, `accessCopy`, `refusalMessage`,
-      `badges`, `exercise-session-store` **et `paliers/scoring.ts`** avec leurs
-      tests ; le web ET le serveur importent de là (D6)
-- [ ] 2.2 `ExercisePlayer` mobile — 5 essais, chronomètre, indices
-- [ ] 2.3 QCM
-- [ ] 2.4 Réponse courte (clavier qui ne masque pas l'énoncé)
+- [ ] 2.1 `packages/core` — **NON FAIT, ET PAS PAR OUBLI.** Voir **D23** :
+      l'extraction n'apporte aucune correction, et son risque principal n'est
+      pas vérifiable depuis ce conteneur
+- [x] 2.2 `ExercisePlayer` mobile — 5 essais, chronomètre, indices
+- [x] 2.3 QCM
+- [x] 2.4 Réponse courte (clavier qui ne masque pas l'énoncé)
 - [ ] 2.5 Remise en ordre (liste triable reanimated)
 - [ ] 2.6 Relier — **au tap, pas au glissé** : tap sur l'élément, tap sur sa
       paire. Tracer une liaison au doigt sur cinq pouces échoue une fois sur
@@ -534,8 +573,11 @@ se décide dans un chantier technique — voir §5.
 - [ ] 2.8 Indices + explication pas à pas (en ligne)
 - [ ] 2.9 Retours : sons (`expo-audio`), haptique, confettis, Pio
 - [ ] 2.10 Fin de palier : étoiles, « j'en veux encore », plafond de régénération
-- [ ] 2.11 **Tests de conformité par type** : la chaîne soumise par le mobile
-      est acceptée par `verifyByType` exactement comme celle du web
+- [x] 2.11 **Tests de conformité par type** — **REMONTÉ EN TÊTE DE PHASE**, et
+      c'est ce qui la rend sûre : 22 tests d'aller-retour couvrent les CINQ
+      types, y compris ceux dont le composant n'existe pas encore. Un composant
+      écrit ensuite n'a plus qu'à appeler l'encodeur déjà éprouvé
+      (`convex/__tests__/answers.test.ts`)
 - [ ] 2.12 Parcours complet automatisé (Maestro) : code → palier → 10 exos → fin
 
 ### Phase 3 — Le hors-ligne

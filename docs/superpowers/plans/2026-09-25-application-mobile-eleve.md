@@ -455,14 +455,68 @@ exactement **145 problèmes avant comme après** (échec préexistant, d'où le
 produit 3,1 Mo de bytecode Hermes portant `ConvexReactClient` et
 `convexAuthJWT` : l'alias traverse jusqu'au paquet.
 
-### Phase 1 — Entrer
+### Phase 1 — Entrer — **FAITE**
 
-- [ ] 1.1 Pavé « Mon code » : préfixe mémorisé, gros chiffres, majuscules
-- [ ] 1.2 Connexion selon D5 (identifiant normalisé / secret imprimable)
-- [ ] 1.3 Session persistée, reconnexion automatique au lancement
-- [ ] 1.4 « Changer d'élève » : déconnexion, purge du jeton et du journal (D10)
-- [ ] 1.5 Garde de rôle : un adulte voit un écran d'explication et sort (D3)
-- [ ] 1.6 Mur de paiement, message enfant, **sans lien de paiement** (D7)
+- [x] 1.1 Pavé « Mon code » : préfixe mémorisé, gros chiffres, majuscules
+- [x] 1.2 Connexion selon D5 (identifiant normalisé / secret imprimable)
+- [x] 1.3 Session persistée, reconnexion automatique au lancement
+- [x] 1.4 « Changer d'élève » : déconnexion et effacement du jeton (D10) —
+      la purge du journal hors-ligne attend que ce journal existe (phase 3) ;
+      `src/session/change-student.ts` est le seul point de sortie de session,
+      et porte le rappel
+- [x] 1.5 Garde de rôle : un adulte voit un écran d'explication et sort (D3)
+- [x] 1.6 Mur de paiement, message enfant, **sans lien de paiement** (D7)
+
+**UNE SEULE REQUÊTE PORTE 1.5 ET 1.6.** `api.access.getAccessState` suffit,
+parce que `decideAccess` (`convex/accessRules.ts`) ordonne ses motifs :
+`not_authenticated` puis `not_student` sont testés AVANT tous les autres, donc
+le premier désigne exactement un déconnecté, le second exactement un adulte, et
+tout le reste un élève authentifié dont l'école n'est pas à jour. La déduction
+tient par CONSTRUCTION de la fonction — `components/AccessGate.tsx` s'appuie
+déjà dessus côté web et la documente. Demander le profil en plus pour lire
+`role` aurait été une requête de trop, et surtout une SECONDE source de vérité
+sur la même question.
+
+**`loginCredentials` vit dans `convex/importCodes.ts`**, avec le format des
+codes, et non dans l'application mobile. C'est le piège D5 mis sous test par le
+runner qui existe déjà (`convex/__tests__/importCodes.test.ts`, +6 tests) :
+identifiant en minuscules, secret en MAJUSCULES. Le web pourra s'en servir le
+jour où son écran de connexion distinguera un code d'une adresse.
+
+**Le pavé COMPOSE le code, il ne le fait pas saisir.** Deux champs — la classe,
+puis quatre chiffres — suppriment d'un coup les trois erreurs d'un champ libre :
+le tiret, l'espace, la casse. Le préfixe étant retenu, un enfant qui revient ne
+tape plus que quatre chiffres. Le clavier est celui du système
+(`keyboardType="number-pad"`), pas un pavé dessiné : grandes touches connues,
+annoncées par les lecteurs d'écran, mises à l'échelle par le système.
+
+**Une friction résolue au passage :** `lib/accessCopy.ts` importait
+`@/convex/accessRules`, l'alias `@` du WEB. Le mobile mappe `@` vers `src/`, et
+ce module est lu par trois consommateurs aux résolutions différentes. L'import
+est passé en relatif — `convex/explainMistake.ts` importait déjà `../lib/kidCopy`
+de cette façon, la convention existait.
+
+**`packages/core` n'est pas créé, et c'est délibéré.** Le mobile lit
+`lib/kidCopy` et `lib/accessCopy` par un alias `@lib/*`, sans copie. Extraire
+ces fichiers un par un au fil des besoins éparpillerait le chantier ;
+`lib/refusalMessage.ts` compte à lui seul **29 importateurs**. L'extraction
+reste la tâche 2.1, faite d'un coup. Rien ici ne la complique : le mobile
+changera d'alias, pas de code.
+
+**Vérifié, pas supposé** — mobile : typecheck vert, et le paquet Metro porte
+`jotna.classPrefix`, `not_student` et le texte partagé « Ton espace n'est pas
+encore ouvert » (en UTF-16 dans le bytecode Hermes, d'où un `strings -el` pour
+le lire). Web intact : `tsc --noEmit` vert, **512 tests** sur 29 fichiers
+(506 + 6), `next build` réussi, `pnpm lint` toujours à 145 problèmes.
+
+**CE QUE LA PHASE 1 NE COUVRE PAS, et qu'il faut trancher.** `createChildAccount`
+(`convex/profiles.ts`, action publique) crée des comptes enfants avec une
+ADRESSE ÉLECTRONIQUE, pas un code — la voie d'un parent qui inscrit son enfant
+hors école. Ces enfants-là **ne peuvent pas entrer par le pavé**, qui ne compose
+que des codes. Trois sorties possibles : leur ouvrir une seconde voie de
+connexion dans l'application, réserver le mobile aux élèves scolaires (cohérent
+avec le modèle B2B de D7), ou leur faire émettre un code par l'école. Aucune ne
+se décide dans un chantier technique — voir §5.
 
 ### Phase 2 — Le moteur d'exercices
 
@@ -553,6 +607,12 @@ Le hors-ligne et le périmètre élève seul sont tranchés. Restent :
 3. **Resserrer `verifyMatch` et `verifyDragDrop`** (D21) : défaut préexistant,
    indépendant du mobile. À corriger avant la phase 3 si on le corrige, pour
    n'écrire la forme canonique qu'une fois.
+4. **Les enfants inscrits par un PARENT, pas par une école.**
+   `profiles.createChildAccount` leur donne une adresse électronique, pas un
+   code ; le pavé de la phase 1 ne sait pas les faire entrer. Leur ouvrir une
+   seconde voie de connexion, réserver le mobile aux élèves scolaires, ou leur
+   faire émettre un code par une école : c'est une décision de produit, et elle
+   conditionne un écran de la phase 1 bis.
 
 ---
 

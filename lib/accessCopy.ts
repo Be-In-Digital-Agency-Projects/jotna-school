@@ -1,4 +1,9 @@
-import type { AccessReason } from "@/convex/accessRules";
+// Import RELATIF, pas l'alias `@/` : ce module est lu par trois consommateurs
+// aux résolutions différentes — le web (alias `@/` = racine), les fonctions
+// Convex, et depuis 2026-09 l'application mobile (où `@/` désigne `src/`).
+// Un chemin relatif est le seul qui vaille pour les trois. `explainMistake.ts`
+// importe déjà `../lib/kidCopy` de cette façon.
+import type { AccessReason } from "../convex/accessRules";
 
 /**
  * Messages de blocage destinés aux ADULTES (parent, professeur, directeur).

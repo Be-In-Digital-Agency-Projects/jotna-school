@@ -3,7 +3,9 @@ import {
   IMPORT_ROWS_LIMIT,
   buildLoginCode,
   buildParentCode,
+  loginCredentials,
   normalizeCode,
+  printableCode,
   parseImportPaste,
   PARSE_ERROR_MESSAGES,
 } from "../importCodes";
@@ -187,5 +189,53 @@ describe("parseImportPaste", () => {
     ] as const) {
       expect(PARSE_ERROR_MESSAGES[reason]).toBeTruthy();
     }
+  });
+});
+
+describe("loginCredentials", () => {
+  // LE PIÈGE QUE CES TESTS GARDENT : identifiant en minuscules, secret en
+  // MAJUSCULES. Un écran qui enverrait la même chaîne aux deux champs
+  // marcherait pour l'enfant qui tape en majuscules et laisserait l'autre
+  // dehors, sans que rien n'explique pourquoi.
+  it("sépare l'identifiant du secret : minuscules contre majuscules", () => {
+    expect(loginCredentials("CM1A-4821")).toEqual({
+      email: "cm1a-4821",
+      password: "CM1A-4821",
+    });
+  });
+
+  it("l'enfant qui tape tout en minuscules entre quand même", () => {
+    expect(loginCredentials("cm1a-4821")).toEqual({
+      email: "cm1a-4821",
+      password: "CM1A-4821",
+    });
+  });
+
+  it("reproduit exactement ce que la création du compte a posé", () => {
+    // `studentImportRun.ts` fait `{ id: normalizeCode(c), secret: c }` où `c`
+    // sort de `buildLoginCode`. La paire rendue ici doit être la même.
+    const printable = buildLoginCode("CM2", "B", () => 3907);
+    expect(loginCredentials(printable)).toEqual({
+      email: normalizeCode(printable),
+      password: printable,
+    });
+  });
+
+  it("absorbe les espaces d'une saisie hésitante", () => {
+    expect(loginCredentials("  CM1A - 4821 ")).toEqual({
+      email: "cm1a-4821",
+      password: "CM1A-4821",
+    });
+  });
+});
+
+describe("printableCode", () => {
+  it("rend la forme du billet", () => {
+    expect(printableCode(" cm1a-4821 ")).toBe("CM1A-4821");
+  });
+
+  it("est l'inverse de casse de normalizeCode", () => {
+    const raw = "CiB-1000";
+    expect(normalizeCode(printableCode(raw))).toBe(normalizeCode(raw));
   });
 });

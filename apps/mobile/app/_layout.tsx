@@ -5,6 +5,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { StyleSheet, Text, View } from "react-native";
 
 import { secureStorage } from "@/auth/secure-storage";
+import { SessionGate } from "@/session/session-gate";
 import { convex, convexUrl } from "@/convex/client";
 import { colors, fontSize, spacing } from "@/theme/tokens";
 
@@ -19,7 +20,11 @@ export default function RootLayout() {
           `src/auth/secure-storage.ts` pour la citation des types. */}
       <ConvexAuthProvider client={convex} storage={secureStorage}>
         <StatusBar style="dark" />
-        <Stack screenOptions={{ headerShown: false }} />
+        {/* Qui tient l'appareil décide de ce qu'il voit : le pavé de code, un
+            renvoi pour adulte, le mur d'accès, ou l'application. */}
+        <SessionGate>
+          <Stack screenOptions={{ headerShown: false }} />
+        </SessionGate>
       </ConvexAuthProvider>
     </SafeAreaProvider>
   );

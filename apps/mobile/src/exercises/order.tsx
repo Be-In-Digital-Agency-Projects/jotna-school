@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import { encodeOrderAnswer, type OrderClientPayload } from "@convex/paliers/answers";
-import { MIN_TOUCH_TARGET, colors, fontSize, radius, spacing } from "@/theme/tokens";
+import { GLYPH_MAX_SCALE, MIN_TOUCH_TARGET, colors, fontSize, radius, spacing } from "@/theme/tokens";
 import type { ExerciseInputProps } from "./types";
 
 /**
@@ -78,7 +78,10 @@ export function OrderInput({
             ]}
           >
             <View style={[styles.rank, active && styles.rankHeld]}>
-              <Text style={[styles.rankText, active && styles.rankTextHeld]}>
+              <Text
+                maxFontSizeMultiplier={GLYPH_MAX_SCALE}
+                style={[styles.rankText, active && styles.rankTextHeld]}
+              >
                 {index + 1}
               </Text>
             </View>

@@ -930,16 +930,74 @@ inutile dans n'importe quel module du serveur fera rougir le job MOBILE. C'est
 (`convex/linkRequests.ts`, `action`) a été retirée plutôt que contournée — ce
 qui fait passer `pnpm lint` de 145 à **144 problèmes**.
 
-### Phase 5 — Terrain
+### Phase 5 — Terrain — **le code est fait ; deux tâches attendent un appareil**
 
-- [ ] 5.1 Écran « pas de connexion » partout où une requête peut ne pas revenir
-- [ ] 5.2 Sons, icônes et illustrations **dans le paquet**, jamais téléchargés
-      au moment du jeu
-- [ ] 5.3 Budget d'appareil bas de gamme : démarrage et mémoire mesurés sur un
-      Android 2 Go **réel**, pas sur un émulateur — la base locale et les lots
-      pèsent, et c'est là que ça se verra
-- [ ] 5.4 Accessibilité : mouvement réduit, cibles ≥ 48 dp, mise à l'échelle
-- [ ] 5.5 Tablette partagée : bascule d'élève testée sur le terrain
+Le protocole de ce qui demande du matériel est écrit et exécutable tel quel :
+`docs/superpowers/plans/2026-09-26-protocole-terrain-mobile.md`. Il porte les
+commandes, les seuils, et ce qu'il faut conclure de chaque résultat.
+
+- [x] 5.1 **FAIT — et la tâche cachait un défaut qui annulait la phase 3.**
+      `SessionGate` attendait `getAccessState` avant de montrer quoi que ce
+      soit. Sans socket, cette requête ne revient JAMAIS : l'écran restait sur
+      « Un instant… » jusqu'à l'abandon. **Le hors-ligne tombait donc à la
+      porte d'entrée** — l'enfant qui prépare ses paliers le vendredi à l'école
+      et ouvre l'application le samedi au village n'atteignait jamais ce qu'il
+      avait préparé. Tout le travail de la phase 3 ne servait qu'aux coupures
+      survenant en pleine séance.
+      **La source de vérité change.** `useNetworkOnline` (`expo-network`)
+      répondait à « une interface réseau est-elle active ? » ; son propre
+      commentaire admettait que ce n'était pas la bonne question. `session/
+      reach.ts` lit `useConvexConnectionState().isWebSocketConnected` : derrière
+      un portail captif, la socket ne s'ouvre pas, et l'appareil le sait au
+      lieu de lancer des requêtes qui pendent. `expo-network` ne garde que ce
+      qu'il est SEUL à savoir — le type de connexion, donc `isUnmeteredNow`.
+      **Trois états et non deux** : `connecting` est un état d'attente à part
+      entière. Un booléen forcerait à trancher au démarrage, et les deux
+      réponses seraient mauvaises — lancer des requêtes qui pendent, ou envoyer
+      l'enfant sur un lot local alors que le réseau arrivait dans la seconde.
+      **Ce qui est livré** : un verdict d'accès gardé (`session/last-verdict.ts`,
+      deux bornes — abonnement et fraîcheur — éprouvées en pur), un **accueil
+      hors-ligne** qui liste ce qui est jouable, un écran « pas de connexion »
+      SANS bouton « réessayer » (le client Convex se reconnecte seul ; un bouton
+      ferait croire à l'enfant que c'est à lui de réparer), et un état hors-ligne
+      sur chaque écran qui filait sans fin.
+      **Un second défaut au passage, qui se retournait contre l'enfant** : sans
+      réseau, `signIn` lève comme pour un mauvais code, et le pavé répondait
+      « regarde bien ton billet ». Il regardait, retapait, échouait encore, et
+      concluait que son billet était cassé
+- [x] 5.2 **FAIT** — audit puis garde. Tout ce qui joue est dans le paquet :
+      30 assets, dont les 3 sons par `require()`. La seule ressource distante
+      est l'avatar facultatif d'un profil, qui n'est pas un asset de jeu et
+      retombe sur les initiales.
+      **L'audit ne suffisait pas.** Remplacer un `require()` par une URL ne
+      casse ni le typecheck, ni les tests, ni la construction : la panne
+      n'apparaît que chez un enfant sans réseau qui répond juste et n'entend
+      rien. `scripts/check-bundled-assets.mjs` lit le manifeste de l'export et
+      exige les trois sons ; il tourne en CI, et il a été éprouvé dans les deux
+      sens
+- [~] 5.3 **BLOQUÉ SUR LE MATÉRIEL, et mesuré pour ce qui peut l'être.**
+      Bytecode Hermes 3,45 Mo, assets 1,2 Mo, export 4,5 Mo. Ce qui demande
+      l'appareil — démarrage à froid, PSS, poids réel d'un lot, fluidité du
+      glissé — est au §2 du protocole, avec ses seuils. **Un émulateur ne
+      répond pas à la question** : il tourne sur le processeur de l'hôte, et
+      ce qui fait souffrir un Android d'entrée de gamme n'y existe pas
+- [x] 5.4 **FAIT côté code ; l'œil reste à passer (§4 du protocole).**
+      Mouvement réduit : déjà respecté par les confettis, seule animation de
+      l'application. Cibles tactiles : auditées une à une, toutes ≥ 48 dp.
+      **Mise à l'échelle** : tout ce qui se LIT grandit sans plafond ; seuls les
+      glyphes enfermés dans une boîte de taille fixe — l'emoji d'une matière,
+      la flamme du ruban, les initiales, le rang d'un exercice — sont plafonnés
+      à 1,3 (`GLYPH_MAX_SCALE`), faute de quoi ils débordent à 200 %.
+      **Une faute corrigée** : la barre d'onglets portait une `height` fixe, et
+      `getTabBarHeight` rend cette valeur TELLE QUELLE sans plus ajouter
+      l'encoche du bas — sur un téléphone à barre gestuelle, les onglets se
+      seraient retrouvés sous le trait système
+- [~] 5.5 **BLOQUÉ SUR LE MATÉRIEL.** Le code de la bascule est en place et
+      durci (le verdict d'accès s'efface avec le jeton, le travail non envoyé
+      ne se jette pas). Les quatre scénarios sont au §3 du protocole, dont
+      **celui qui compte** : bascule d'élève SANS réseau, où il faut prouver
+      que le travail de l'enfant précédent n'est pas détruit. Si ce test
+      échoue, D18 est violée et il faut s'arrêter
 
 ### Phase 6 — Publication
 

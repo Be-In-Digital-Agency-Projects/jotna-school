@@ -10,8 +10,8 @@ import { kidMessages } from "@lib/kidCopy";
 import { ExercisePlayer, type VerifyOutcome } from "@/exercises/exercise-player";
 import { releaseSounds } from "@/feedback/sounds";
 import { OfflineBanner } from "@/offline/offline-banner";
-import { useNetworkOnline } from "@/offline/network";
 import { makeOfflineEngine } from "@/offline/offline-engine";
+import { useServerReach } from "@/session/reach";
 import { closePendingPaliers, flushJournal } from "@/offline/sync";
 import {
   enforceStorageCap,
@@ -79,7 +79,12 @@ export function PalierSession({
   const soundPref = useQuery(api.students.getMySoundEnabled, {});
   const soundEnabled = soundPref?.soundEnabled === true;
 
-  const online = useNetworkOnline();
+  // TROIS ÉTATS, PAS DEUX (5.1). `connecting` n'est ni « en ligne » ni « hors
+  // ligne » : lancer `getBucket` pendant que la socket s'ouvre donne une
+  // action qui pend, et basculer sur le lot local donnerait à l'enfant un
+  // palier hors-ligne alors que le réseau arrivait dans la seconde.
+  const reach = useServerReach();
+  const online = reach === "online";
   const syncJournal = useMutation(api.palierAttempts.syncOfflineJournal);
 
   /** Le lot local, quand la séance se joue SANS réseau. */
@@ -106,7 +111,12 @@ export function PalierSession({
   // on rejoue celle d'un lot DÉJÀ téléchargé (D14 : la tentative se crée au
   // téléchargement, précisément pour que ce moment-ci soit possible).
   useEffect(() => {
-    if (online || booting.current || attemptId !== null || stored !== null) return;
+    // `reach === "offline"` ET NON `!online` : pendant le délai de grâce, la
+    // condition `!online` est vraie, et l'on ouvrirait un lot local à un
+    // enfant dont le réseau arrivait une seconde plus tard — qui perdrait
+    // alors l'explication et « j'en veux encore » pour rien.
+    if (reach !== "offline" || booting.current) return;
+    if (attemptId !== null || stored !== null) return;
     booting.current = true;
     void (async () => {
       const bundle = await findUsableBundle(topicId, palierIndex, Date.now());
@@ -120,7 +130,7 @@ export function PalierSession({
       }
       setStored(bundle);
     })();
-  }, [online, attemptId, stored, topicId, palierIndex]);
+  }, [reach, attemptId, stored, topicId, palierIndex]);
 
   useEffect(() => {
     if (!online) return;
@@ -186,6 +196,9 @@ export function PalierSession({
       await saveBundle({
         palierAttemptId: attemptId,
         topicId,
+        // Le lot ne se télécharge qu'EN LIGNE, donc `topic` est là. On fige
+        // son nom pour que l'accueil hors-ligne sache dire de quoi il s'agit.
+        topicName: topic?.name ?? null,
         palierIndex,
         downloadedAt: Date.now(),
         accessValidUntil: bundle.accessValidUntil,
@@ -197,7 +210,7 @@ export function PalierSession({
       // séance en cours est protégé — on ne va pas effacer ce qu'on joue.
       await enforceStorageCap([attemptId]);
     })();
-  }, [bundle, attemptId, topicId, palierIndex]);
+  }, [bundle, attemptId, topicId, topic, palierIndex]);
 
   // DÈS QUE LE RÉSEAU REVIENT, ON REND COMPTE. Sans attendre la fin du palier :
   // une tablette d'école repasse en ligne quelques secondes dans un couloir, et

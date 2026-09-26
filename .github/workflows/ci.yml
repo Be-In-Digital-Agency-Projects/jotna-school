@@ -126,3 +126,10 @@ jobs:
         env:
           EXPO_PUBLIC_CONVEX_URL: ${{ secrets.NEXT_PUBLIC_CONVEX_URL || 'https://placeholder.convex.cloud' }}
         run: pnpm --filter @jotna/mobile bundle:check
+
+      # LES SONS DOIVENT RESTER DANS LE PAQUET (tâche 5.2). Remplacer un
+      # `require()` par une URL ne casse ni le typecheck, ni les tests, ni la
+      # construction : la panne n'apparaît que chez un enfant sans réseau qui
+      # répond juste et n'entend rien. Ce garde lit le manifeste de l'export.
+      - name: Assets embarqués
+        run: pnpm --filter @jotna/mobile assets:check

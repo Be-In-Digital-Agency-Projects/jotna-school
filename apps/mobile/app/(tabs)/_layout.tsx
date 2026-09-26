@@ -1,7 +1,7 @@
 import { Tabs } from "expo-router/js-tabs";
 import { StyleSheet, Text } from "react-native";
 
-import { MIN_TOUCH_TARGET, colors, fontSize } from "@/theme/tokens";
+import { colors, fontSize } from "@/theme/tokens";
 
 /**
  * TROIS DESTINATIONS, TOUJOURS VISIBLES — phase 4.
@@ -36,6 +36,13 @@ export default function TabsLayout() {
         tabBarInactiveTintColor: colors.textMuted,
         tabBarStyle: styles.bar,
         tabBarLabelStyle: styles.label,
+        // LA BARRE EST UNE CHROME DE HAUTEUR FIXE (49 dp + encoche, imposés
+        // par le navigateur), et le libellé tient sous une icône de 22. Le
+        // laisser grandir à 200 % le couperait. C'est la seule entorse à la
+        // règle « tout ce qui se lit grandit » (5.4), et elle est compensée :
+        // chaque onglet porte son `accessibilityLabel`, son icône, et le
+        // titre de l'écran auquel il mène, lui, grandit sans plafond.
+        tabBarAllowFontScaling: false,
       }}
     >
       <Tabs.Screen
@@ -68,12 +75,14 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderTopWidth: 2,
     borderTopColor: colors.border,
-    // La barre par défaut est plus basse que la cible tactile recommandée ;
-    // un doigt de huit ans n'est pas plus précis que celui d'un adulte.
-    height: MIN_TOUCH_TARGET + 26,
-    paddingBottom: 6,
-    paddingTop: 6,
   },
+  // PAS DE `height` ICI, ET C'ÉTAIT UNE FAUTE DE L'Y METTRE. `getTabBarHeight`
+  // (`expo-router/build/react-navigation/bottom-tabs/views/BottomTabBar`) rend
+  // la hauteur du style TELLE QUELLE dès qu'elle est un nombre, et n'ajoute
+  // alors PLUS l'encoche du bas. Sur un téléphone à barre gestuelle, la barre
+  // d'onglets se serait retrouvée sous le trait système. Sans `height`, le
+  // navigateur calcule 49 dp + encoche — déjà au-dessus de la cible tactile
+  // recommandée, et juste sur tous les appareils.
   label: { fontSize: fontSize.body - 2, fontWeight: "700" },
   icon: { fontSize: 22 },
 });

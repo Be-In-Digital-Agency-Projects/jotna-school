@@ -9,7 +9,8 @@
     "ios": "expo start --ios",
     "typecheck": "tsc --noEmit",
     "bundle:check": "expo export --platform android --output-dir .expo/export-check",
-    "test": "vitest run"
+    "test": "vitest run",
+    "assets:check": "node scripts/check-bundled-assets.mjs"
   },
   "dependencies": {
     "@auth/core": "^0.37.0",

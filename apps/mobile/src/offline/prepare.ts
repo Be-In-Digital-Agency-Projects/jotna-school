@@ -98,6 +98,7 @@ export async function preparePalier(
   await saveBundle({
     palierAttemptId: attemptId,
     topicId: target.topicId,
+    topicName: target.topicName,
     palierIndex: target.palierIndex,
     downloadedAt: Date.now(),
     accessValidUntil: bundle.accessValidUntil,

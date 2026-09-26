@@ -42,7 +42,9 @@ async function db(): Promise<SQLite.SQLiteDatabase> {
           palierIndex       INTEGER NOT NULL,
           downloadedAt      INTEGER NOT NULL,
           accessValidUntil  INTEGER NOT NULL,
-          exercises         TEXT NOT NULL
+          exercises         TEXT NOT NULL,
+          pendingCloseAt    INTEGER,
+          topicName         TEXT
         );
         CREATE TABLE IF NOT EXISTS journal (
           clientAttemptId   TEXT PRIMARY KEY NOT NULL,
@@ -93,6 +95,13 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
       `ALTER TABLE bundles ADD COLUMN pendingCloseAt INTEGER`,
     );
   }
+  if (!names.has("topicName")) {
+    // SANS LUI, UN LOT EST ANONYME HORS LIGNE. La table ne portait que
+    // `topicId`, et le nom de la thématique vit côté serveur : l'accueil
+    // hors-ligne aurait affiché « palier 3 » sans dire de quoi. Un enfant ne
+    // choisit pas entre trois « palier 3 ».
+    await database.execAsync(`ALTER TABLE bundles ADD COLUMN topicName TEXT`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -102,6 +111,8 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
 export interface StoredBundle {
   palierAttemptId: string;
   topicId: string;
+  /** Le nom de la thématique, figé au téléchargement — voir la migration. */
+  topicName: string | null;
   palierIndex: number;
   downloadedAt: number;
   accessValidUntil: number;
@@ -112,15 +123,22 @@ export interface StoredBundle {
 export async function saveBundle(bundle: StoredBundle): Promise<void> {
   const database = await db();
   await database.runAsync(
+    // `INSERT OR REPLACE` réécrit la ligne entière : `pendingCloseAt` serait
+    // remis à NULL par un simple re-téléchargement du même lot, et le palier
+    // fini hors ligne ne se clôrait jamais. On le REPREND explicitement.
     `INSERT OR REPLACE INTO bundles
-       (palierAttemptId, topicId, palierIndex, downloadedAt, accessValidUntil, exercises)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+       (palierAttemptId, topicId, topicName, palierIndex, downloadedAt,
+        accessValidUntil, exercises, pendingCloseAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?,
+       (SELECT pendingCloseAt FROM bundles WHERE palierAttemptId = ?))`,
     bundle.palierAttemptId,
     bundle.topicId,
+    bundle.topicName,
     bundle.palierIndex,
     bundle.downloadedAt,
     bundle.accessValidUntil,
     JSON.stringify(bundle.exercises),
+    bundle.palierAttemptId,
   );
 }
 
@@ -131,11 +149,17 @@ export async function loadBundle(
   const row = await database.getFirstAsync<{
     palierAttemptId: string;
     topicId: string;
+    topicName: string | null;
     palierIndex: number;
     downloadedAt: number;
     accessValidUntil: number;
     exercises: string;
-  }>(`SELECT * FROM bundles WHERE palierAttemptId = ?`, palierAttemptId);
+  }>(
+    `SELECT palierAttemptId, topicId, topicName, palierIndex, downloadedAt,
+            accessValidUntil, exercises
+       FROM bundles WHERE palierAttemptId = ?`,
+    palierAttemptId,
+  );
   if (row == null) return null;
   try {
     return { ...row, exercises: JSON.parse(row.exercises) as unknown[] };
@@ -411,6 +435,7 @@ export const MAX_BUNDLE_BYTES = 8 * 1024 * 1024;
 export interface BundleSummary {
   palierAttemptId: string;
   topicId: string;
+  topicName: string | null;
   palierIndex: number;
   downloadedAt: number;
   accessValidUntil: number;
@@ -431,6 +456,7 @@ export async function listBundles(): Promise<BundleSummary[]> {
   const rows = await database.getAllAsync<{
     palierAttemptId: string;
     topicId: string;
+    topicName: string | null;
     palierIndex: number;
     downloadedAt: number;
     accessValidUntil: number;
@@ -438,8 +464,8 @@ export async function listBundles(): Promise<BundleSummary[]> {
     pending: number;
     pendingCloseAt: number | null;
   }>(
-    `SELECT b.palierAttemptId, b.topicId, b.palierIndex, b.downloadedAt,
-            b.accessValidUntil, b.pendingCloseAt,
+    `SELECT b.palierAttemptId, b.topicId, b.topicName, b.palierIndex,
+            b.downloadedAt, b.accessValidUntil, b.pendingCloseAt,
             LENGTH(CAST(b.exercises AS BLOB)) AS bytes,
             (SELECT COUNT(*) FROM journal j
               WHERE j.palierAttemptId = b.palierAttemptId

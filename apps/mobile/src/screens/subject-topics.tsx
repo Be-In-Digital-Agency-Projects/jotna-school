@@ -8,8 +8,10 @@ import { api } from "@convex/_generated/api";
 import type { Id } from "@convex/_generated/dataModel";
 import { listBundles } from "@/offline/store";
 import { palierState, type PalierState } from "@/progress/palier-state";
+import { useServerReach } from "@/session/reach";
 import { MIN_TOUCH_TARGET, colors, fontSize, radius, spacing } from "@/theme/tokens";
 import { BigButton } from "@/ui/big-button";
+import { OfflineNotice } from "@/ui/offline-notice";
 
 /** Le nombre de paliers d'une thématique — `nextPalierIndex` est borné là. */
 const PALIERS_PER_TOPIC = 10;
@@ -50,6 +52,7 @@ export function SubjectTopics({
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const map = useQuery(api.students.getStudentSubjectMap, { subjectId });
+  const reach = useServerReach();
 
   // CE QUI EST DÉJÀ SUR L'APPAREIL. On relit au retour au premier plan, donc
   // après « je prépare pour plus tard » et après une séance : ce sont les deux
@@ -90,7 +93,12 @@ export function SubjectTopics({
         <Text style={styles.subtitle}>{map.totalStarsApprox} ⭐ en tout</Text>
       )}
 
-      {map === undefined && <Text style={styles.muted}>Chargement…</Text>}
+      {map === undefined && reach === "offline" && (
+        <OfflineNotice what="tes thématiques" />
+      )}
+      {map === undefined && reach !== "offline" && (
+        <Text style={styles.muted}>Chargement…</Text>
+      )}
       {map === null && (
         <Text style={styles.muted}>Rien à afficher pour le moment.</Text>
       )}

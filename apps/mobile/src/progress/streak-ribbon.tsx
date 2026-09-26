@@ -1,7 +1,7 @@
 import { StyleSheet, Text, View } from "react-native";
 
 import { streakWeek } from "./streak-week";
-import { colors, fontSize, radius, spacing } from "@/theme/tokens";
+import { GLYPH_MAX_SCALE, colors, fontSize, radius, spacing } from "@/theme/tokens";
 
 /**
  * LE RUBAN DE SÉRIE — sept jours, et aucun reproche (D7c côté web).
@@ -45,6 +45,7 @@ export function StreakRibbon({
         {days.map((day, i) => (
           <View key={i} style={styles.day}>
             <Text
+              maxFontSizeMultiplier={GLYPH_MAX_SCALE}
               style={[
                 styles.dayLabel,
                 day.state === "today" && styles.dayLabelToday,
@@ -67,7 +68,10 @@ export function StreakRibbon({
                 day.state === "today" && styles.dotToday,
               ]}
             >
-              <Text style={styles.dotText}>
+              <Text
+                style={styles.dotText}
+                maxFontSizeMultiplier={GLYPH_MAX_SCALE}
+              >
                 {day.state === "active" ? "🔥" : "·"}
               </Text>
             </View>

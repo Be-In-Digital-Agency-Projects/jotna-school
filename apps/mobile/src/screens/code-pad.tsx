@@ -14,6 +14,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { loginCredentials } from "@convex/importCodes";
 import { readClassPrefix, writeClassPrefix } from "@/session/class-prefix";
+import { useServerReach } from "@/session/reach";
 import { colors, fontSize, radius, spacing } from "@/theme/tokens";
 import { BigButton } from "@/ui/big-button";
 
@@ -47,6 +48,7 @@ function cleanPrefix(raw: string): string {
 export function CodePad() {
   const insets = useSafeAreaInsets();
   const { signIn } = useAuthActions();
+  const reach = useServerReach();
 
   const [prefix, setPrefix] = useState("");
   const [prefixKnown, setPrefixKnown] = useState(false);
@@ -74,6 +76,24 @@ export function CodePad() {
     if (!ready) return;
     setBusy(true);
     setError(null);
+    // ON NE PEUT PAS ENTRER SANS SERVEUR, ET IL FAUT LE DIRE AUTREMENT (5.1).
+    //
+    // C'était un défaut, et de ceux qui se retournent contre l'enfant : sans
+    // réseau `signIn` lève comme pour un mauvais code, et le `catch` plus bas
+    // lui répondait « regarde bien ton billet ». Il regardait, retapait,
+    // échouait encore, et concluait que son billet était cassé — alors qu'il
+    // était bon et que c'était le réseau qui manquait.
+    //
+    // On ne bloque pas le bouton pour autant : pendant que la socket s'ouvre
+    // (`connecting`), l'essai a toutes les chances d'aboutir.
+    if (reach === "offline") {
+      setError(
+        "Il n'y a pas de réseau pour le moment 📡 Ton code est peut-être bon — réessaie quand la connexion revient.",
+      );
+      setBusy(false);
+      return;
+    }
+
     try {
       // LE POINT DE LA DÉCISION D5 : identifiant et secret ne sont pas la même
       // chaîne. `loginCredentials` vit dans `convex/importCodes.ts`, avec le
@@ -84,6 +104,16 @@ export function CodePad() {
       // Pas de navigation ici : `SessionGate` voit la session s'ouvrir et
       // remplace cet écran. Une navigation en plus créerait une course avec lui.
     } catch {
+      // L'échec a DEUX causes possibles, et elles ne se disent pas pareil. Si
+      // la socket n'est plus ouverte au moment où l'on retombe ici, c'est le
+      // réseau qui a lâché pendant l'essai, pas le code qui est faux.
+      if (reach !== "online") {
+        // `finally` remet `busy` à faux : pas besoin de le faire ici.
+        setError(
+          "La connexion s'est coupée pendant que tu entrais 📡 Réessaie dans un instant.",
+        );
+        return;
+      }
       // Le serveur dit « Invalid credentials ». Un enfant de huit ans ne lit
       // pas ça, et ne doit pas apprendre que son échec a un nom anglais.
       setError("Ce code ne marche pas. Regarde bien ton billet et réessaie.");

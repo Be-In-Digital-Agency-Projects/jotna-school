@@ -6,13 +6,20 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api } from "@convex/_generated/api";
 import type { Id } from "@convex/_generated/dataModel";
-import { useNetworkOnline } from "@/offline/network";
 import { pendingCount } from "@/offline/store";
 import { catchUpAll } from "@/offline/sync";
+import { useServerReach } from "@/session/reach";
 import { levelPercent } from "@/progress/level";
 import { StreakRibbon } from "@/progress/streak-ribbon";
 import { subjectIcon } from "@/theme/subject-icon";
-import { MIN_TOUCH_TARGET, colors, fontSize, radius, spacing } from "@/theme/tokens";
+import {
+  GLYPH_MAX_SCALE,
+  MIN_TOUCH_TARGET,
+  colors,
+  fontSize,
+  radius,
+  spacing,
+} from "@/theme/tokens";
 import { ProgressBar } from "@/ui/progress-bar";
 
 /**
@@ -40,7 +47,7 @@ export function StudentHome() {
   const stats = useQuery(api.students.getMyStats, {});
   const subjects = useQuery(api.subjects.list, {});
   const markLevelSeen = useMutation(api.students.markLevelSeen);
-  const online = useNetworkOnline();
+  const online = useServerReach() === "online";
 
   const [pending, setPending] = useState(0);
   const [justClosed, setJustClosed] = useState(0);
@@ -226,7 +233,12 @@ export function StudentHome() {
               c'est à elle que l'enfant reconnaît « sa » matière de loin,
               avant même de lire le nom. */}
           <View style={[styles.cardIconBox, { backgroundColor: subject.color }]}>
-            <Text style={styles.cardIcon}>{subjectIcon(subject.icon)}</Text>
+            <Text
+              style={styles.cardIcon}
+              maxFontSizeMultiplier={GLYPH_MAX_SCALE}
+            >
+              {subjectIcon(subject.icon)}
+            </Text>
           </View>
           <View style={styles.cardMain}>
             <Text style={styles.cardTitle}>{subject.name}</Text>

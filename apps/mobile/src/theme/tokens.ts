@@ -77,3 +77,31 @@ export const fontSize = {
 
 /** Cible tactile minimale — 48 dp, recommandation Android. */
 export const MIN_TOUCH_TARGET = 48;
+
+/**
+ * LE PLAFOND D'AGRANDISSEMENT DES GLYPHES ENFERMÉS — tâche 5.4.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * LE TEXTE DOIT GRANDIR. React Native suit le réglage de taille de police du
+ * système par défaut, et c'est la bonne conduite : un adulte presbyte assis à
+ * côté de l'enfant, un enfant qui voit mal, une tablette posée à plat sur une
+ * table. Tout ce qui se LIT dans cette application grandit sans plafond.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * SAUF CE QUI EST ENFERMÉ DANS UNE BOÎTE DE TAILLE FIXE.
+ *
+ * Quelques éléments ne sont pas du texte mais des DESSINS faits de caractères :
+ * l'emoji d'une matière dans sa pastille de 56 points, la flamme dans le rond
+ * de 38 points du ruban de série, les initiales dans l'avatar. Leur boîte a
+ * une dimension fixe parce qu'elle est un repère visuel, pas un paragraphe.
+ * À 200 % — ce que propose Android — un emoji de 28 points en réclame 56 dans
+ * une boîte qui en fait 56 : il déborde, se coupe, ou pousse la mise en page.
+ *
+ * Les plafonner À EUX SEULS, c'est laisser tout le reste grandir vraiment.
+ * L'alternative — enlever les dimensions fixes — coûterait la grille, et une
+ * grille qui bouge à chaque réglage se lit plus mal, pas mieux.
+ *
+ * 1,3 laisse un agrandissement VISIBLE sans casser la boîte : c'est mesuré sur
+ * le rapport le plus serré des trois (38 points de rond pour 16 de glyphe).
+ */
+export const GLYPH_MAX_SCALE = 1.3;

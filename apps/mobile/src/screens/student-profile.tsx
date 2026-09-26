@@ -13,8 +13,17 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { api } from "@convex/_generated/api";
 import { levelPercent } from "@/progress/level";
 import { useChangeStudent } from "@/session/change-student";
-import { MIN_TOUCH_TARGET, colors, fontSize, radius, spacing } from "@/theme/tokens";
+import { useServerReach } from "@/session/reach";
+import {
+  GLYPH_MAX_SCALE,
+  MIN_TOUCH_TARGET,
+  colors,
+  fontSize,
+  radius,
+  spacing,
+} from "@/theme/tokens";
 import { BigButton } from "@/ui/big-button";
+import { OfflineNotice } from "@/ui/offline-notice";
 import { ProgressBar } from "@/ui/progress-bar";
 
 /**
@@ -50,6 +59,7 @@ export function StudentProfile() {
   const stats = useQuery(api.students.getMyStats, {});
   const setSoundEnabled = useMutation(api.streak.setSoundEnabled);
   const { changeStudent, busy } = useChangeStudent();
+  const reach = useServerReach();
 
   const [avatarFailed, setAvatarFailed] = useState(false);
   /** L'état optimiste de l'interrupteur, tant que le serveur n'a pas répondu. */
@@ -70,6 +80,25 @@ export function StudentProfile() {
   );
 
   if (stats === undefined) {
+    // HORS LIGNE, ON NE FILE PAS SANS FIN. Le profil n'a pas de version
+    // locale : niveau, étoiles et badges se comptent côté serveur. Mais
+    // « changer d'élève » doit rester atteignable — sur une tablette
+    // partagée, c'est le geste qui débloque tout le monde, et il fonctionne
+    // sans réseau (voir `change-student.ts`).
+    if (reach === "offline") {
+      return (
+        <View style={styles.center}>
+          <OfflineNotice what="ton profil" />
+          <View style={styles.spacer} />
+          <BigButton
+            label="Changer d'élève"
+            onPress={changeStudent}
+            busy={busy}
+            tone="quiet"
+          />
+        </View>
+      );
+    }
     return (
       <View style={styles.center}>
         <Text style={styles.muted}>Chargement…</Text>
@@ -107,7 +136,12 @@ export function StudentProfile() {
               accessibilityLabel={`Photo de ${stats.student.name}`}
             />
           ) : (
-            <Text style={styles.avatarText}>{initials(stats.student.name)}</Text>
+            <Text
+              style={styles.avatarText}
+              maxFontSizeMultiplier={GLYPH_MAX_SCALE}
+            >
+              {initials(stats.student.name)}
+            </Text>
           )}
         </View>
         <View style={styles.headMain}>
@@ -230,9 +264,10 @@ const styles = StyleSheet.create({
   content: { paddingHorizontal: spacing.lg, gap: spacing.md },
   center: {
     flex: 1,
-    alignItems: "center",
+    alignSelf: "stretch",
     justifyContent: "center",
     padding: spacing.lg,
+    gap: spacing.md,
     backgroundColor: colors.backgroundTop,
   },
   muted: { fontSize: fontSize.label, color: colors.textMuted, textAlign: "center" },

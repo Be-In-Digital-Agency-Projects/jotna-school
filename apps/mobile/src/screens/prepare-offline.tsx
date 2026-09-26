@@ -14,6 +14,7 @@ import { api } from "@convex/_generated/api";
 import type { Id } from "@convex/_generated/dataModel";
 import { VISIBLE_CLASSES, type VisibleClassName } from "@convex/curriculum";
 import { isUnmeteredNow } from "@/offline/network";
+import { useServerReach } from "@/session/reach";
 import { preparePalier, type PrepareOutcome } from "@/offline/prepare";
 import {
   MAX_BUNDLE_BYTES,
@@ -24,6 +25,7 @@ import {
 } from "@/offline/store";
 import { MIN_TOUCH_TARGET, colors, fontSize, radius, spacing } from "@/theme/tokens";
 import { BigButton } from "@/ui/big-button";
+import { OfflineNotice } from "@/ui/offline-notice";
 
 /**
  * « JE PRÉPARE POUR PLUS TARD » — l'écran du téléchargement délibéré (3.12).
@@ -48,6 +50,7 @@ export function PrepareOffline({
   const insets = useSafeAreaInsets();
   const client = useConvex();
   const map = useQuery(api.students.getStudentSubjectMap, { subjectId });
+  const reach = useServerReach();
 
   const [bundles, setBundles] = useState<BundleSummary[]>([]);
   const [wifiOnly, setWifiOnlyState] = useState(true);
@@ -85,6 +88,15 @@ export function PrepareOffline({
   const prepare = useCallback(
     async (targets: { topicId: Id<"topics">; name: string; class: VisibleClassName; palierIndex: number }[]) => {
       if (targets.length === 0) return;
+      // SANS SERVEUR, PRÉPARER N'A AUCUN SENS — et les trois appels
+      // (`getBucket`, `startPalierAttempt`, `getOfflineBundle`) pendraient
+      // jusqu'à ce que l'enfant abandonne, fileur tournant.
+      if (reach === "offline") {
+        setNotice(
+          "Il n'y a pas de réseau 📡 On ne peut pas préparer maintenant — reviens quand la connexion sera là.",
+        );
+        return;
+      }
       if (wifiOnly && !(await isUnmeteredNow())) {
         setNotice(
           "Tu n'es pas en Wi-Fi 📶 Attends d'en trouver un, ou demande à un adulte avant d'utiliser le forfait.",
@@ -106,7 +118,7 @@ export function PrepareOffline({
       }
       setBusyTopic(null);
     },
-    [client, subjectId, wifiOnly, refresh],
+    [client, subjectId, wifiOnly, refresh, reach],
   );
 
   const now = Date.now();
@@ -156,7 +168,12 @@ export function PrepareOffline({
         </View>
       )}
 
-      {map === undefined && <Text style={styles.muted}>Chargement…</Text>}
+      {map === undefined && reach === "offline" && (
+        <OfflineNotice what="ce qu'il y a à préparer" />
+      )}
+      {map === undefined && reach !== "offline" && (
+        <Text style={styles.muted}>Chargement…</Text>
+      )}
       {map === null && (
         <Text style={styles.muted}>Rien à préparer pour le moment.</Text>
       )}

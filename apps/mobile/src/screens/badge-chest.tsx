@@ -12,10 +12,12 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api } from "@convex/_generated/api";
 import type { Id } from "@convex/_generated/dataModel";
+import { useServerReach } from "@/session/reach";
 import { badgeIcon } from "@/theme/badge-icon";
 import { getRarityLabel, rarityStyle, type RarityTier } from "@/theme/rarity";
 import { MIN_TOUCH_TARGET, colors, fontSize, radius, spacing } from "@/theme/tokens";
 import { BigButton } from "@/ui/big-button";
+import { OfflineNotice } from "@/ui/offline-notice";
 
 type Tab = "all" | "earned" | "locked";
 
@@ -58,6 +60,7 @@ export function BadgeChest() {
   const earned = useQuery(api.badges.listMyEarned, {});
   const stats = useQuery(api.students.getMyStats, {});
   const markSeen = useMutation(api.badges.markBadgesSeen);
+  const reach = useServerReach();
 
   const [tab, setTab] = useState<Tab>("all");
   const [detail, setDetail] = useState<{
@@ -85,6 +88,9 @@ export function BadgeChest() {
   });
 
   const loading = all === undefined || earned === undefined;
+  // Il n'existe AUCUNE version locale du catalogue de badges : hors ligne, il
+  // n'y a rien à montrer, et il faut le dire plutôt que de filer sans fin.
+  const unreachable = loading && reach === "offline";
 
   return (
     <ScrollView
@@ -96,10 +102,14 @@ export function BadgeChest() {
     >
       <Text style={styles.title}>Mon coffre 🎁</Text>
       <Text style={styles.sub}>
-        {loading
-          ? "Chargement…"
-          : `${earnedCount} badge${earnedCount > 1 ? "s" : ""} sur ${badges.length}`}
+        {unreachable
+          ? "Pas de connexion"
+          : loading
+            ? "Chargement…"
+            : `${earnedCount} badge${earnedCount > 1 ? "s" : ""} sur ${badges.length}`}
       </Text>
+
+      {unreachable && <OfflineNotice what="tes badges" />}
 
       {unseen.length > 0 && (
         <Pressable
@@ -137,6 +147,7 @@ export function BadgeChest() {
         </Pressable>
       )}
 
+      {!unreachable && (
       <View style={styles.tabs} accessibilityRole="tablist">
         <TabPill
           label="Tous"
@@ -157,6 +168,7 @@ export function BadgeChest() {
           onPress={() => setTab("locked")}
         />
       </View>
+      )}
 
       {!loading && visible.length === 0 && (
         <Text style={styles.muted}>

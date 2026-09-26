@@ -5,6 +5,7 @@ import { useCallback, useState } from "react";
 import { api } from "@convex/_generated/api";
 import type { Id } from "@convex/_generated/dataModel";
 import { purgeSyncedWork } from "@/offline/store";
+import { forgetVerdict } from "@/session/last-verdict";
 import { catchUpAll } from "@/offline/sync";
 
 /**
@@ -31,7 +32,8 @@ import { catchUpAll } from "@/offline/sync";
  *      d'identité : les réponses resteraient sur la tablette jusqu'au jour —
  *      peut-être jamais — où cet enfant-là se reconnecte dessus.
  *   2. RANGER ENSUITE, et seulement ce qui ne sert plus (`purgeSyncedWork`
- *      dit précisément quoi, et pourquoi pas plus).
+ *      dit précisément quoi, et pourquoi pas plus) — plus le dernier verdict
+ *      d'accès, qui, lui, ne se garde JAMAIS d'un enfant à l'autre.
  *   3. QUITTER.
  *
  * RIEN DE TOUT CELA NE BLOQUE LE DÉPART. Si le réseau manque, l'étape 1
@@ -63,6 +65,10 @@ export function useChangeStudent(): { changeStudent: () => void; busy: boolean }
       } catch {
         // Une base illisible ne doit pas retenir l'enfant suivant.
       }
+      // LE VERDICT D'ACCÈS APPARTIENT À L'ENFANT QUI PART. Le laisser ferait
+      // entrer le suivant sur l'accès du précédent — et comme le jeton s'en
+      // va juste après, il entrerait sans aucune identité.
+      await forgetVerdict();
       try {
         await signOut();
       } finally {

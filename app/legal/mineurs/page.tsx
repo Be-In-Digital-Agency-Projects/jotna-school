@@ -7,6 +7,7 @@ import {
   List,
   Section,
   Strong,
+  Term,
 } from "../_components/legal-page";
 
 /**
@@ -65,28 +66,28 @@ export default function MinorsPage() {
               l&apos;application.
             </>,
             <>
-              <Strong>Aucun outil de mesure d&apos;audience</Strong> et aucun
+              <Term>Aucun outil de mesure d&apos;audience</Term>et aucun
               pisteur. L&apos;application ne collecte aucun identifiant
               publicitaire et ne demande jamais l&apos;autorisation de suivi.
             </>,
             <>
-              <Strong>Aucun lien vers l&apos;extérieur.</Strong> Il n&apos;y a
-              pas un seul lien sortant dans l&apos;application élève : un enfant
-              ne peut pas en sortir vers un navigateur, une boutique ou un
-              réseau social.
+              <Term>Aucun lien vers l&apos;extérieur.</Term>Il n&apos;y a pas un
+              seul lien sortant dans l&apos;application élève : un enfant ne
+              peut pas en sortir vers un navigateur, une boutique ou un réseau
+              social.
             </>,
             <>
-              <Strong>Aucun achat.</Strong> Ni prix affiché, ni abonnement, ni
-              bouton menant à un paiement. Les établissements paient hors de
+              <Term>Aucun achat.</Term>Ni prix affiché, ni abonnement, ni bouton
+              menant à un paiement. Les établissements paient hors de
               l&apos;application.
             </>,
             <>
-              <Strong>Aucune communication entre utilisateurs.</Strong> Pas de
+              <Term>Aucune communication entre utilisateurs.</Term>Pas de
               messagerie, pas de commentaire, pas de profil public, pas de photo
               de profil, pas de pseudonyme visible par d&apos;autres.
             </>,
             <>
-              <Strong>Aucun accès aux capteurs.</Strong> Ni appareil photo, ni
+              <Term>Aucun accès aux capteurs.</Term>Ni appareil photo, ni
               microphone, ni position.
             </>,
           ]}
@@ -96,10 +97,9 @@ export default function MinorsPage() {
       <Section title="Comment un enfant entre">
         <p>
           L&apos;enfant ne crée pas de compte et ne saisit aucune donnée
-          personnelle : il entre avec un <Strong>code imprimé</Strong> que son
-          école lui remet. Ce code sert d&apos;identifiant — il n&apos;y a ni
-          adresse électronique, ni mot de passe à inventer, ni question de
-          sécurité.
+          personnelle : il entre avec un <Term>code imprimé</Term>que son école
+          lui remet. Ce code sert d&apos;identifiant — il n&apos;y a ni adresse
+          électronique, ni mot de passe à inventer, ni question de sécurité.
         </p>
         <p>
           Sur une tablette partagée, « changer d&apos;élève » referme la session

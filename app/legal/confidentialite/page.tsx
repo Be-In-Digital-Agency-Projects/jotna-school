@@ -7,6 +7,7 @@ import {
   List,
   Section,
   Strong,
+  Term,
 } from "../_components/legal-page";
 
 /**
@@ -115,10 +116,10 @@ export default function PrivacyPage() {
           de courriels.
         </p>
         <p className="rounded-lg bg-gray-50 p-4 text-sm">
-          Nous ne collectons <Strong>pas</Strong> de données de localisation,
-          pas de contacts, pas de photographies, pas d&apos;identifiant
-          publicitaire, et l&apos;application mobile ne demande l&apos;accès à{" "}
-          <Strong>aucun capteur</Strong> — ni appareil photo, ni microphone, ni
+          Nous ne collectons <Term>pas</Term>de données de localisation, pas de
+          contacts, pas de photographies, pas d&apos;identifiant publicitaire,
+          et l&apos;application mobile ne demande l&apos;accès à{" "}
+          <Term>aucun capteur</Term>— ni appareil photo, ni microphone, ni
           position.
         </p>
       </Section>
@@ -222,7 +223,7 @@ export default function PrivacyPage() {
       <Section title="Les enfants">
         <p>
           L&apos;application destinée aux élèves ne permet{" "}
-          <Strong>pas de créer un compte</Strong> : les codes de connexion sont
+          <Term>pas de créer un compte</Term>: les codes de connexion sont
           produits par l&apos;établissement. Elle ne contient{" "}
           <Strong>aucun lien vers l&apos;extérieur</Strong>, aucun achat, aucun
           message entre utilisateurs, et aucune publicité.

@@ -115,6 +115,44 @@ export function Strong({ children }: { children: React.ReactNode }) {
   return <strong className="font-semibold text-gray-900">{children}</strong>;
 }
 
+/**
+ * UN TERME EN GRAS, SUIVI D'UN ESPACE GARANTI.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * POURQUOI CE COMPOSANT EXISTE — UN DÉFAUT QUE SEUL LE RENDU A MONTRÉ.
+ *
+ * Écrit à la main, le motif « terme en gras puis explication » donne :
+ *
+ *     <Strong>Aucun achat.</Strong> Ni prix affiché, ni abonnement, ni
+ *     bouton menant à un paiement.
+ *
+ * L'espace après `</Strong>` appartient alors à un nœud JSXText qui contient
+ * un retour à la ligne — et le compilateur de Next (SWC, via Turbopack) le
+ * MANGE dès que ce nœud fait trois lignes ou plus. Le HTML prégénéré portait
+ * « Aucun achat.Ni prix affiché », « d'audience et aucun pisteur » devenu
+ * « d'audienceet aucun pisteur », quatre fois sur cinq dans la même liste.
+ * Le cinquième, dont le texte tenait en deux lignes, gardait son espace :
+ * d'où une page incohérente, que rien ne signalait.
+ *
+ * NI LE TYPECHECK NI LES TESTS NE POUVAIENT LE VOIR. Le source est correct,
+ * le build est vert, et Prettier — qui suit la sémantique de Babel, où
+ * l'espace SURVIT — annule toute correction écrite dans la page :
+ * `</Strong>{" "}` y redevient `</Strong> ` au prochain formatage. Le seul
+ * endroit où l'espace tient est donc DERRIÈRE une frontière de composant,
+ * là où il n'y a aucun espace littéral voisin à normaliser.
+ *
+ * `Strong` reste pour l'emphase suivie d'une ponctuation collante
+ * (`<Strong>Aucune publicité</Strong>, d'aucune sorte`), où un espace serait
+ * une faute.
+ */
+export function Term({ children }: { children: React.ReactNode }) {
+  return (
+    <>
+      <Strong>{children}</Strong>{" "}
+    </>
+  );
+}
+
 /** L'encadré d'aveu : ce que la page NE garantit pas. */
 export function Caveat({ children }: { children: React.ReactNode }) {
   return (

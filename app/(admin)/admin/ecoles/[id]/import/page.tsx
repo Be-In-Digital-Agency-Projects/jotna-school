@@ -80,7 +80,9 @@ export default function SchoolImportPage({
   if (school === null) {
     return (
       <div className="mx-auto max-w-md rounded-xl border border-gray-200 bg-white p-8 text-center">
-        <h2 className="text-lg font-semibold text-gray-900">École introuvable</h2>
+        <h2 className="text-lg font-semibold text-gray-900">
+          École introuvable
+        </h2>
       </div>
     );
   }
@@ -100,10 +102,10 @@ export default function SchoolImportPage({
           Importer des élèves
         </h1>
         <p className="mt-1 text-gray-500">
-          Une ligne par élève : <code>Nom complet, CM1</code>, ou{" "}
-          <code>Nom complet, CM1 A</code> si l&apos;école a plusieurs classes à
-          ce niveau. Chaque élève reçoit un code de connexion et un code à
-          remettre à sa famille.
+          Une ligne par élève : <code>Nom complet, CM1</code>, ou, si
+          l&apos;école a plusieurs classes à ce niveau,{" "}
+          <code>Nom complet, CM1 A</code>. Chaque élève reçoit un code de
+          connexion et un code à remettre à sa famille.
         </p>
       </div>
 

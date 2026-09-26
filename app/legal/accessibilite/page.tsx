@@ -7,6 +7,7 @@ import {
   List,
   Section,
   Strong,
+  Term,
 } from "../_components/legal-page";
 
 /**
@@ -66,16 +67,16 @@ export default function AccessibilityPage() {
               précis que celui d&apos;un adulte.
             </>,
             <>
-              <Strong>Mouvement réduit respecté.</Strong> Si le système l&apos;a
+              <Term>Mouvement réduit respecté.</Term>Si le système l&apos;a
               demandé, les animations de récompense ne se jouent pas du tout —
               ce n&apos;est pas une préférence esthétique, c&apos;est une gêne
               réelle pour certaines personnes.
             </>,
             <>
-              <Strong>Agrandissement du texte sans plafond.</Strong> Tout ce qui
-              se lit suit le réglage de taille de police du système. Seuls
-              quelques glyphes décoratifs enfermés dans une forme de taille fixe
-              — l&apos;emoji d&apos;une matière dans sa pastille, les initiales
+              <Term>Agrandissement du texte sans plafond.</Term>Tout ce qui se
+              lit suit le réglage de taille de police du système. Seuls quelques
+              glyphes décoratifs enfermés dans une forme de taille fixe —
+              l&apos;emoji d&apos;une matière dans sa pastille, les initiales
               dans l&apos;avatar — sont plafonnés, sans quoi ils débordent.
             </>,
             <>
@@ -83,14 +84,14 @@ export default function AccessibilityPage() {
               titres bien au-delà.
             </>,
             <>
-              <Strong>Libellés pour les lecteurs d&apos;écran</Strong> sur les
+              <Term>Libellés pour les lecteurs d&apos;écran</Term>sur les
               éléments interactifs et sur les repères visuels — les pastilles de
               paliers, les jours de la série, les badges.
             </>,
             <>
-              <Strong>Retours non exclusivement sonores.</Strong> Une bonne
-              réponse se voit autant qu&apos;elle s&apos;entend, et les sons
-              peuvent être coupés.
+              <Term>Retours non exclusivement sonores.</Term>Une bonne réponse
+              se voit autant qu&apos;elle s&apos;entend, et les sons peuvent
+              être coupés.
             </>,
           ]}
         />

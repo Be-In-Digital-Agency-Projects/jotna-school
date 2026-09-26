@@ -7,6 +7,7 @@ import {
   List,
   Section,
   Strong,
+  Term,
 } from "../_components/legal-page";
 
 /**
@@ -100,8 +101,8 @@ export default function CookiesPage() {
               déconnexion.
             </>,
             <>
-              <Strong>La préférence de son</Strong> de l&apos;espace élève, et
-              le fait qu&apos;on vous ait déjà posé la question.
+              <Term>La préférence de son</Term>de l&apos;espace élève, et le
+              fait qu&apos;on vous ait déjà posé la question.
             </>,
             <>
               <Strong>Les statistiques de la séance en cours</Strong>, le temps

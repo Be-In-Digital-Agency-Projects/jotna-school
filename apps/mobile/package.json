@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "bundle:check": "expo export --platform android --output-dir .expo/export-check",
     "test": "vitest run",
-    "assets:check": "node scripts/check-bundled-assets.mjs"
+    "assets:check": "node scripts/check-bundled-assets.mjs",
+    "preview:web": "expo export --platform web --output-dir .expo/web-preview"
   },
   "dependencies": {
     "@auth/core": "^0.37.0",
@@ -37,6 +38,8 @@
   },
   "devDependencies": {
     "@types/react": "~19.2.2",
+    "react-dom": "19.2.3",
+    "react-native-web": "^0.21.3",
     "typescript": "~6.0.3",
     "vitest": "^4.1.4"
   }

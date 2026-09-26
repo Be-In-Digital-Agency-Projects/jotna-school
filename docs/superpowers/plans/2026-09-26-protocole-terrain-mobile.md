@@ -26,6 +26,42 @@ Ces chiffres bornent l'attente : un APK de l'ordre de 25 à 35 Mo une fois le
 runtime Expo inclus, plus au plus 8 Mo de données locales. Ce sont des ordres
 de grandeur à **confirmer sur l'APK réel**, pas des mesures d'installation.
 
+### VOIR l'application sans appareil — ce que ça vaut, ce que ça ne vaut pas
+
+`pnpm --filter @jotna/mobile preview:web` exporte l'application pour le
+navigateur (`react-native-web`), et l'on peut enfin **regarder un écran**.
+
+```bash
+pnpm --filter @jotna/mobile preview:web
+cd apps/mobile/.expo/web-preview && python3 -m http.server 3120
+# puis ouvrir http://127.0.0.1:3120/ dans une fenêtre de 430 × 932
+```
+
+Il faut poser `EXPO_PUBLIC_CONVEX_URL` : sans elle, l'écran « Configuration
+incomplète » s'affiche à la place de l'application. Avec une URL qui ne
+répond pas, la socket échoue et **seul le pavé de code est atteignable** —
+tout le reste est derrière l'authentification. Pour aller plus loin, il faut
+une URL Convex vivante et un code d'élève de test.
+
+**CE QUE CET APERÇU NE PROUVE PAS, et il faut le dire avant de s'en servir :**
+
+- **ce n'est pas le rendu d'un téléphone.** `react-native-web` traduit les
+  `StyleSheet` en CSS ; les ombres, les polices, les zones sûres, le clavier
+  et le défilement ne se comportent pas pareil. Un écran juste ici peut être
+  faux sur l'appareil, et l'inverse ;
+- **aucune mesure de performance n'en sort.** Il tourne sur le processeur de
+  l'hôte, comme un émulateur — c'est précisément ce que §1 refuse ;
+- **le natif n'est pas exercé** : ni `expo-secure-store` réel, ni SQLite de
+  l'appareil, ni haptique, ni audio natif.
+
+Il sert à **regarder une mise en page et lire des libellés**, ce qui était
+jusqu'ici impossible. Il ne remplace aucune section de ce document.
+
+*(La ligne `config.resolver.assetExts.push("wasm")` de `metro.config.js` n'existe
+que pour cet export : `expo-sqlite` importe un `.wasm` dans sa variante web.
+Le paquet Android est identique avec et sans — vérifié, même taille, mêmes
+assets.)*
+
 ---
 
 ## 1. L'appareil de référence

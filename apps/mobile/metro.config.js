@@ -45,4 +45,17 @@ config.resolver.nodeModulesPaths = [
   path.resolve(workspaceRoot, "node_modules"),
 ];
 
+// ---------------------------------------------------------------------------
+// `wasm` — POUR L'APERÇU WEB, ET SANS EFFET SUR LE PAQUET NATIF.
+//
+// `expo-sqlite` importe `wa-sqlite.wasm` dans sa variante WEB. Sans cette
+// extension, `expo export --platform web` échoue à la résolution et l'on ne
+// peut RIEN afficher sans appareil. Le paquet Android n'importe aucun `.wasm`
+// — vérifié : même taille, mêmes assets, avant et après cette ligne.
+//
+// Ce que l'aperçu web vaut, et ce qu'il ne vaut pas : voir
+// `docs/superpowers/plans/2026-09-26-protocole-terrain-mobile.md`, §0.
+// ---------------------------------------------------------------------------
+config.resolver.assetExts.push("wasm");
+
 module.exports = config;

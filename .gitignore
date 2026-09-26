@@ -46,3 +46,23 @@ next-env.d.ts
 # Espace de travail scratch subagent-driven-development
 .superpowers/
 .ci-local/
+
+# --- Monorepo mobile (plan docs/superpowers/plans/2026-09-25-application-mobile-eleve.md) ---
+# `/node_modules` plus haut est ANCRÉ À LA RACINE : il ne couvre pas
+# `apps/mobile/node_modules`, que pnpm crée dans un workspace.
+node_modules/
+
+# Expo
+.expo/
+apps/mobile/dist/
+# Sorties de `expo prebuild` : régénérables, jamais versionnées tant qu'on
+# n'a pas de modification native à la main.
+apps/mobile/android/
+apps/mobile/ios/
+
+# Signature d'applications — ne DOIT jamais entrer au dépôt.
+*.jks
+*.keystore
+*.p8
+*.p12
+*.mobileprovision

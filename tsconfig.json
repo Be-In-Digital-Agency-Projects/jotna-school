@@ -31,5 +31,13 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules"]
+  // `include` ci-dessus est un GLOB SUR TOUT LE DÉPÔT (`**/*.ts`, `**/*.tsx`).
+  // Sans cette exclusion, `pnpm tsc --noEmit` — le typecheck du job CI web —
+  // tenterait de vérifier le React Native d'`apps/mobile` avec `lib: ["dom"]`,
+  // le plugin Next et `types: ["vitest/globals"]`. Il ÉCHOUERAIT, et l'erreur
+  // n'aurait aucun rapport visible avec l'ajout du mobile.
+  //
+  // `packages/` n'est PAS exclu, et c'est voulu : ce qui y vivra est du
+  // TypeScript pur partagé, que le web importe et doit donc typechecker.
+  "exclude": ["node_modules", "apps"]
 }

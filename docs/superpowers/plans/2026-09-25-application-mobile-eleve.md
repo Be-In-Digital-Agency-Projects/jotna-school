@@ -94,10 +94,29 @@ additif, la racine n'a pas à y figurer.
 copie divergerait au premier `npx convex dev`, et la divergence ne se verrait
 qu'à l'exécution, chez l'enfant.
 
-**Piège Metro, à traiter en phase 0 :** pnpm installe en liens symboliques et
-Metro ne surveille que le dossier de l'application. Sans `watchFolders` sur la
-racine, un `convex` régénéré ne se recharge pas — et l'erreur ressemble à un
-bug applicatif, pas à un problème de bundler.
+**Pièges Metro — CONSTATÉS en phase 0, pas anticipés.** Le premier était
+prévu ; les deux autres ont été trouvés en faisant tourner `expo export`, et
+aucun des deux n'aurait été pris par le typecheck.
+
+1. **`watchFolders` sur la racine.** Metro ne surveille que le dossier de
+   l'application. Sans cela, un `convex` régénéré ne se recharge pas, et
+   l'erreur ressemble à un bug applicatif, pas à un problème de bundler.
+2. **`@expo/metro-runtime` est une dépendance FANTÔME.** `expo-router/entry`
+   l'importe, et ni `expo` ni `expo-router` ne le déclarent — npm le masque
+   par aplatissement, pnpm le révèle. Il est désormais une dépendance
+   explicite d'`apps/mobile`, et ne doit pas en être retiré.
+3. **`disableHierarchicalLookup: true` CASSE pnpm.** C'est la recommandation
+   courante pour les monorepos npm et yarn, et elle était dans la première
+   version de `metro.config.js`. Sous pnpm, les dépendances d'un paquet vivent
+   à côté de lui dans `node_modules/.pnpm/…/node_modules/`, et SEULE la
+   remontée hiérarchique les atteint : la couper interdit à chaque paquet
+   d'atteindre ses propres dépendances. La panne observée était
+   `Unable to resolve module whatwg-fetch from @expo/metro-runtime`.
+
+**Conséquence de méthode, qui vaut pour la suite du chantier :** `expo export`
+est le garde qui compte, pas le typecheck. Les deux pannes ci-dessus sont
+passées sous un `tsc --noEmit` vert. La CI construit donc le paquet Metro à
+chaque fois (tâche 0.8).
 
 ### D3 — L'application est celle de l'ENFANT.
 
@@ -163,7 +182,7 @@ adulte de l'école qui dépanne.
 | `howler` | `expo-audio` | module audio courant d'Expo (`57.0.5`, aligné SDK) |
 | `lottie-react` | `lottie-react-native` | même format de fichier |
 | `lucide-react` | `lucide-react-native` | même jeu d'icônes |
-| Tailwind v4 | `nativewind` v4, ou `StyleSheet` | à trancher en phase 0 sur un écran témoin |
+| Tailwind v4 | `StyleSheet` + jetons | tranché en phase 0 — voir **D22** |
 
 Ce qui PASSE, et qu'il faut extraire plutôt que recopier : les textes enfant
 (`lib/kidCopy.ts`), les messages de refus (`lib/accessCopy.ts`,
@@ -214,6 +233,28 @@ Deux points appellent une action :
 effacement du jeton, **et purge du journal hors-ligne non synchronisé après
 l'avoir envoyé** (D15). Ce qu'il ne faut SURTOUT pas faire : garder deux
 sessions ouvertes — l'enfant jouerait sous le nom d'un autre.
+
+### D22 — `StyleSheet` et des jetons, pas NativeWind.
+
+La phase 0 devait trancher sur un écran témoin (tâche 0.6). Trois raisons ont
+décidé, et aucune n'est « Tailwind c'est moins bien » :
+
+1. **La surface est petite.** L'application élève tient en une quinzaine
+   d'écrans, pas cent. Ce que NativeWind fait gagner — une convention partagée
+   sur un grand nombre d'écrans — ne se rembourse pas ici.
+2. **Le cœur du produit n'est pas stylable par classes.** Les cinq exercices
+   sont animés au doigt, sur `react-native-reanimated` : ces composants
+   écrivent des styles calculés dans un worklet, où une chaîne de classes n'a
+   rien à dire.
+3. **C'est une pièce de moins dans la chaîne de construction.** NativeWind
+   s'insère dans Babel ET dans Metro, et se couple à la version de Reanimated.
+   Sur un chantier qui vise Android d'entrée de gamme et une montée de version
+   annuelle du SDK, chaque pièce du pipeline est un rendez-vous à honorer.
+
+**Ce choix se retourne** : `apps/mobile/src/theme/tokens.ts` porte des
+constantes, pas des classes. Adopter NativeWind plus tard les reprend telles
+quelles dans un thème, sans réécrire un écran. Les couleurs sont les valeurs
+Tailwind qu'emploie déjà `app/(student)/layout.tsx` sur le web.
 
 ---
 
@@ -381,18 +422,38 @@ avec le lot.
 
 ## 4. Phases
 
-### Phase 0 — Socle
+### Phase 0 — Socle — **FAITE**
 
-- [ ] 0.1 `pnpm-workspace.yaml` : `packages: ['apps/*', 'packages/*']`
-- [ ] 0.2 `apps/mobile` — Expo SDK 57, `expo-router`, TypeScript, Hermes
-- [ ] 0.3 `ConvexReactClient` + `ConvexAuthProvider` avec l'adaptateur
+- [x] 0.1 `pnpm-workspace.yaml` : `packages: ['apps/*', 'packages/*']`
+- [x] 0.2 `apps/mobile` — Expo SDK 57, `expo-router`, TypeScript, Hermes
+- [x] 0.3 `ConvexReactClient` + `ConvexAuthProvider` avec l'adaptateur
       `TokenStorage` → `expo-secure-store` (D1)
-- [ ] 0.4 Alias `tsconfig` vers `../../convex` ; `metro.config.js` avec
+- [x] 0.4 Alias `@convex/*` → `../../convex/*` ; `metro.config.js` avec
       `watchFolders` sur la racine (D2)
-- [ ] 0.5 Écran témoin : une requête Convex authentifiée qui s'affiche
-- [ ] 0.6 Trancher le style sur cet écran témoin : `nativewind` ou `StyleSheet`
-- [ ] 0.7 `eas.json` — `development`, `preview` (APK interne), `production`
-- [ ] 0.8 CI : ajouter typecheck + tests du mobile, sans toucher au job web
+- [x] 0.5 Écran témoin — `app/index.tsx`
+- [x] 0.6 Style tranché : `StyleSheet` + jetons (**D22**)
+- [x] 0.7 `eas.json` — `development`, `preview` (APK interne), `production`
+- [x] 0.8 CI : job `mobile` séparé — typecheck **et paquet Metro**
+
+**Trois garde-fous qu'il a fallu poser à la racine**, sans quoi le job CI web
+tombait pour une raison sans rapport visible avec le mobile :
+
+- `tsconfig.json` exclut `apps` — son `include` est un glob sur tout le dépôt
+  (`**/*.ts`), donc `pnpm tsc --noEmit` aurait typechecké du React Native avec
+  `lib: ["dom"]` et le plugin Next ;
+- `vitest.config.ts` exclut `apps/**` — il aurait ramassé les tests mobiles
+  dans un environnement `jsdom` avec l'alias `@` du web ;
+- `eslint.config.mjs` ignore `apps/**`.
+
+`packages/` n'est exclu de rien : ce qui y vivra est du TypeScript pur que le
+web importe et doit typechecker.
+
+**Vérifié, pas supposé** — le web est intact : `tsc --noEmit` vert,
+506 tests sur 29 fichiers passent, `next build` réussit, et `pnpm lint` rend
+exactement **145 problèmes avant comme après** (échec préexistant, d'où le
+`continue-on-error` du workflow). Côté mobile, `expo export --platform android`
+produit 3,1 Mo de bytecode Hermes portant `ConvexReactClient` et
+`convexAuthJWT` : l'alias traverse jusqu'au paquet.
 
 ### Phase 1 — Entrer
 
@@ -495,27 +556,29 @@ Le hors-ligne et le périmètre élève seul sont tranchés. Restent :
 
 ---
 
-## 6. Versions relevées au 25/09/2026
+## 6. Versions — ce qui est ÉPINGLÉ, et d'où ça vient
 
-Interrogées au registre npm le jour du plan. Ce sont des RELEVÉS, pas des
-épinglages : c'est le SDK Expo retenu en 0.2 qui fixera les versions réelles.
+La première version de ce plan relevait les dernières versions du registre npm,
+en les donnant pour des relevés et non des épinglages. **La prudence était
+justifiée** : plusieurs étaient en avance sur le SDK, et les employer aurait
+cassé le paquet.
 
-| Paquet | Version |
-|---|---|
-| `expo` | 57.0.25 |
-| `expo-secure-store` | 57.0.4 |
-| `expo-audio` | 57.0.5 |
-| `expo-haptics` | 57.0.3 |
-| `react-native-reanimated` | 4.7.0 |
-| `react-native-gesture-handler` | 3.3.0 |
-| `moti` | 0.30.0 |
-| `nativewind` | 4.2.7 |
-| `lucide-react-native` | 1.48.0 |
-| `lottie-react-native` | 7.5.0 |
-| `react-native-confetti-cannon` | 1.5.2 |
-| `@convex-dev/auth` | 0.0.95 au registre ; **0.0.91** au dépôt, et c'est cette version-là qui a été lue pour D1 |
+| Paquet | dernière au registre | **retenue (SDK 57)** |
+|---|---|---|
+| `react-native` | 0.87.1 | **0.86.3** |
+| `react-native-gesture-handler` | 3.3.0 | **~2.32.0** |
+| `react-native-reanimated` | 4.7.0 | **4.5.1** |
+| `react` | — | **19.2.3** (le web reste en 19.2.4, pnpm les isole) |
+| `typescript` | — | **~6.0.3** (la racine reste en `^5`) |
 
----
+La source d'autorité est **`expo-template-default@57`**, le paquet dont
+`create-expo-app` tire ses versions. C'est lui qu'il faut relire à chaque
+montée de SDK, et `npx expo install <paquet>` plutôt que `pnpm add` pour toute
+dépendance native.
+
+Versions réellement installées : `apps/mobile/package.json`. S'y ajoute
+`@expo/metro-runtime`, absent du template parce que l'aplatissement de npm le
+masque — voir D2, piège 2.
 
 ## 7. Risques
 

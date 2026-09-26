@@ -526,22 +526,65 @@ L'écran doit le dire en mots d'enfant, pas griser un bouton sans explication.
    (D12). Un taux anormal sur un appareil signale un trafiquage ou un défaut de
    canonicalisation — **on le consigne, on ne punit pas un enfant dessus**.
 
-### D21 — La forme canonique doit copier le serveur, y compris ses laxismes.
+### D21 — La forme canonique doit copier le serveur. **Le corollaire a été honoré : les deux laxismes sont tombés.**
 
 L'empreinte n'est juste que si l'appareil canonicalise **exactement** comme
-`verifyByType` compare. Relevé dans le code, et à reproduire tel quel :
+`verifyByType` compare. Ce qui avait été relevé dans le code :
 
-- `verifyMatch` teste la longueur puis l'appartenance de chaque paire à
-  l'ensemble correct. Il **n'interdit pas les doublons** : quatre fois la même
-  bonne paire passent. `verifyDragDrop` de même ignore les clés en trop.
-- La forme canonique doit donc porter ces laxismes, sinon l'appareil et le
-  serveur rendront des verdicts différents sur la même réponse.
+- `verifyMatch` testait la longueur puis l'appartenance de chaque paire à
+  l'ensemble correct. Il **n'interdisait pas les doublons** : quatre fois la
+  même bonne paire passaient — 35 réponses acceptées là où une seule démontre
+  la compétence. `verifyDragDrop` de même ignorait les clés en trop, ce qui
+  rendait le nombre de réponses acceptées littéralement infini.
+- La forme canonique portait donc ces laxismes, sans quoi l'appareil et le
+  serveur auraient rendu des verdicts différents sur la même réponse.
 
-**Corollaire :** resserrer ces deux vérificateurs est un changement légitime,
-mais il doit alors atterrir **des deux côtés en même temps**, et invalider les
-lots déjà téléchargés. C'est pour cela que `canonicalize` vit dans
-`packages/core` et que le serveur l'importe : une seule définition, versionnée
-avec le lot.
+**LE CORROLAIRE DISAIT : « un changement légitime, mais qui doit atterrir des
+deux côtés en même temps, et invalider les lots déjà téléchargés ». C'est
+exactement ce qui a été fait.**
+
+- `verifyMatch` et `verifyDragDrop` comparent désormais des **multi-ensembles** :
+  la réponse doit être une permutation exacte de ce qui est attendu, ni doublon
+  ni surplus.
+- `verifyOffline` a gagné un **mode de comparaison par type** (`atomMatch`) :
+  `"any"` — un atome connu suffit, pour le QCM, la remise en ordre et la
+  réponse courte ; `"all"` — égalité de multi-ensemble avec les empreintes
+  livrées, pour relier et ranger. La même règle, exprimée en empreintes.
+- `ATOM_SCHEME_VERSION` est passée à **2**, ce qui rend injouables les lots
+  déjà sur les appareils. C'est le prix annoncé ; le scellé
+  (`convex/__tests__/offlineScheme.test.ts`) l'avait rendu visible avant qu'il
+  soit payé, et il fige maintenant le MODE autant que les octets — changer
+  `match` en `"any"` ne touche pas une empreinte et produit pourtant la même
+  panne.
+
+**CE QUI A RENDU LE CHANGEMENT SÛR, ET QUI A ÉTÉ VÉRIFIÉ AVANT D'ÉCRIRE UNE
+LIGNE.** Un resserrement qui transformerait une bonne réponse vécue en mauvaise
+serait pire que le laxisme. Les quatre chemins ont donc été lus un par un :
+
+| chemin | paire répétée ? | clé en trop ? |
+|---|---|---|
+| mobile `match.tsx` → `buildMatchAnswer` | impossible — une paire par élément de gauche | — |
+| web `MatchExercise` | impossible — filtre sur la gauche ET sur la droite | — |
+| mobile `drag-drop.tsx` → `buildDragDropAnswer` | — | impossible — `placed` n'accueille que les étiquettes |
+| web `DragDropExercise` | — | impossible — `assignments` semé depuis `items`, et `key={_id}` remonte le composant entre deux exercices |
+
+Et le changement **n'est pas rétroactif** : `submitPalier` lit le `isCorrect`
+STOCKÉ des lignes `attempts`, il ne revérifie rien. Aucun enfant ne perd une
+étoile déjà acquise.
+
+**UNE TROISIÈME DUPLICATION TROUVÉE EN CHEMIN.** `convex/attempts.ts` portait
+sa PROPRE COPIE des cinq vérificateurs — même logique, mêmes laxismes, noms de
+variables différents — et servait la séance par thématique pendant que
+`paliers/answers.ts` servait les paliers. Resserrer l'un aurait laissé l'autre
+intact. Les copies sont supprimées ; `attempts.ts` importe `verifyAnswer`, en
+gardant sa levée sur un type inconnu (un type inattendu est un défaut de
+données, et le compter FAUX le ferait payer à l'enfant).
+
+**Deux détails fermés au passage**, gratuits une fois la fonction ouverte : la
+clé de paire était `${left}|||${right}`, que deux paires différentes pouvaient
+partager — elle est maintenant un `JSON.stringify` de couple ; et
+`map[item.text]` allait chercher jusque dans `Object.prototype`, là où
+`Object.entries` ne rend que les propriétés propres.
 
 ---
 
@@ -1207,9 +1250,10 @@ Le hors-ligne et le périmètre élève seul sont tranchés. Restent :
    déjà.
 2. **Coûts.** Apple (99 USD/an), Google Play (25 USD une fois), EAS, et au
    moins un Android d'entrée de gamme pour mesurer ce que la phase 5.3 demande.
-3. **Resserrer `verifyMatch` et `verifyDragDrop`** (D21) : défaut préexistant,
-   indépendant du mobile. À corriger avant la phase 3 si on le corrige, pour
-   n'écrire la forme canonique qu'une fois.
+3. ~~**Resserrer `verifyMatch` et `verifyDragDrop`** (D21)~~ — **FAIT.** Les
+   deux comparent des multi-ensembles, l'appareil suit par `atomMatch`,
+   `ATOM_SCHEME_VERSION` est à 2, et `convex/attempts.ts` a perdu sa copie des
+   cinq vérificateurs. Détails en D21.
 5. **Qui CLÔT un palier joué hors ligne quand l'abonnement a expiré ?**
    *(Le cas ORDINAIRE est désormais traité ; celui-ci reste ouvert — lire la
    réduction plus bas.)*

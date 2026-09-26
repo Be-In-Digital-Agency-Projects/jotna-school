@@ -2,6 +2,7 @@ import { query, mutation, internalQuery, internalMutation } from "./_generated/s
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { internal } from "./_generated/api";
+import { verifyAnswer, type ExerciseType } from "./paliers/answers";
 import {
   checkAccess,
   requireAccess,
@@ -145,70 +146,30 @@ export const getExerciseAndAttempts = internalQuery({
 });
 
 // ---------------------------------------------------------------------------
-// Answer verification helpers
+// LA VÉRIFICATION N'EST PLUS ICI — ET C'EST LE CORRECTIF.
+//
+// Ce fichier portait SA PROPRE COPIE des cinq vérificateurs : même logique que
+// `paliers/answers.ts`, mêmes laxismes, noms de variables différents. Deux
+// chemins vivants jugeaient donc les réponses des enfants avec deux morceaux
+// de code distincts — celui-ci pour la séance par thématique, l'autre pour les
+// paliers — et resserrer l'un aurait laissé l'autre intact.
+//
+// C'est la troisième duplication trouvée sur ce chantier, après les quatre
+// en-têtes de courriel et les trois domaines de marque. Elle se répare de la
+// même façon : une seule définition, importée.
+//
+// `verifyAnswer` rend `false` sur un type inconnu là où ce fichier LEVAIT. La
+// garde ci-dessous préserve la levée, parce qu'un type d'exercice inattendu
+// est un défaut de données : le compter FAUX le ferait payer à l'enfant, et
+// personne ne le verrait jamais.
 // ---------------------------------------------------------------------------
-
-function verifyQcm(submittedAnswer: string, payload: { correctIndex: number }): boolean {
-  return parseInt(submittedAnswer, 10) === payload.correctIndex;
-}
-
-function verifyMatch(
-  submittedAnswer: string,
-  payload: { pairs: { left: string; right: string }[] },
-): boolean {
-  try {
-    const submitted: { left: string; right: string }[] = JSON.parse(submittedAnswer);
-    if (submitted.length !== payload.pairs.length) return false;
-
-    const correctSet = new Set(
-      payload.pairs.map((p) => `${p.left}|||${p.right}`),
-    );
-    for (const pair of submitted) {
-      if (!correctSet.has(`${pair.left}|||${pair.right}`)) return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function verifyOrder(
-  submittedAnswer: string,
-  payload: { correctSequence: string[] },
-): boolean {
-  try {
-    const submitted: string[] = JSON.parse(submittedAnswer);
-    if (submitted.length !== payload.correctSequence.length) return false;
-    return submitted.every((item, i) => item === payload.correctSequence[i]);
-  } catch {
-    return false;
-  }
-}
-
-function verifyDragDrop(
-  submittedAnswer: string,
-  payload: { items: { text: string; correctZone: string }[] },
-): boolean {
-  try {
-    const submitted: Record<string, string> = JSON.parse(submittedAnswer);
-    for (const item of payload.items) {
-      if (submitted[item.text] !== item.correctZone) return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function verifyShortAnswer(
-  submittedAnswer: string,
-  payload: { acceptedAnswers: string[] },
-): boolean {
-  const normalized = submittedAnswer.toLowerCase().trim();
-  return payload.acceptedAnswers.some(
-    (answer) => answer.toLowerCase().trim() === normalized,
-  );
-}
+const VERIFIABLE_TYPES: ReadonlySet<string> = new Set<ExerciseType>([
+  "qcm",
+  "match",
+  "order",
+  "drag-drop",
+  "short-answer",
+]);
 
 // ---------------------------------------------------------------------------
 // Mutations
@@ -271,27 +232,15 @@ export const submit = mutation({
       throw new Error("Exercice introuvable");
     }
 
-    // Verify the answer based on exercise type
-    let isCorrect = false;
-    switch (exercise.type) {
-      case "qcm":
-        isCorrect = verifyQcm(args.submittedAnswer, exercise.payload);
-        break;
-      case "match":
-        isCorrect = verifyMatch(args.submittedAnswer, exercise.payload);
-        break;
-      case "order":
-        isCorrect = verifyOrder(args.submittedAnswer, exercise.payload);
-        break;
-      case "drag-drop":
-        isCorrect = verifyDragDrop(args.submittedAnswer, exercise.payload);
-        break;
-      case "short-answer":
-        isCorrect = verifyShortAnswer(args.submittedAnswer, exercise.payload);
-        break;
-      default:
-        throw new Error(`Type d'exercice non supporté: ${exercise.type}`);
+    // Un seul vérificateur pour tout le produit (`paliers/answers.ts`).
+    if (!VERIFIABLE_TYPES.has(exercise.type)) {
+      throw new Error(`Type d'exercice non supporté: ${exercise.type}`);
     }
+    const isCorrect = verifyAnswer(
+      exercise.type,
+      exercise.payload,
+      args.submittedAnswer,
+    );
 
     // Create the attempt record
     const attemptId = await ctx.db.insert("attempts", {

@@ -196,11 +196,15 @@ describe("match", () => {
 
   // LE CAS QUI A FAIT CHANGER LE SCHÉMA D'EMPREINTES.
   //
-  // Une empreinte UNIQUE de la réponse entière aurait compté ceci FAUX, alors
-  // que le serveur le compte JUSTE : `verifyMatch` teste une longueur puis une
-  // appartenance, jamais l'unicité (laxisme D21). Les deux côtés doivent
-  // s'accorder même sur ce que le serveur accepte à tort.
-  it("LAXISME — la même bonne paire répétée : les deux côtés l'acceptent", async () => {
+  // CE TEST A CHANGÉ DE SENS, ET C'EST TOUT L'INTÉRÊT DE `bothAgree`.
+  //
+  // Il épinglait un laxisme partagé : les deux côtés acceptaient la même bonne
+  // paire répétée, l'appareil par construction (un atome connu suffisait), le
+  // serveur par appartenance à un ensemble. Les deux l'ont perdu ENSEMBLE —
+  // `verifyMatch` compare des multi-ensembles de paires, `verifyOffline` des
+  // multi-ensembles d'empreintes. Si l'un des deux avait été resserré seul,
+  // c'est ici que ça se verrait, et pas en production chez un enfant.
+  it("RESSERRÉ — la même bonne paire répétée : les deux côtés la refusent", async () => {
     expect(
       await bothAgree(
         "match",
@@ -211,7 +215,7 @@ describe("match", () => {
           { left: "chat", right: "mammifère" },
         ]),
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("le mauvais NOMBRE de paires", async () => {
@@ -260,7 +264,7 @@ describe("drag-drop", () => {
     ).toBe(false);
   });
 
-  it("LAXISME — une clé en trop est ignorée des deux côtés", async () => {
+  it("RESSERRÉ — une clé en trop est refusée des deux côtés", async () => {
     expect(
       await bothAgree(
         "drag-drop",
@@ -271,7 +275,44 @@ describe("drag-drop", () => {
           inconnu: "fruits",
         }),
       ),
+    ).toBe(false);
+  });
+
+  it("un rangement JUSTE passe toujours, resserrement compris", async () => {
+    // LE GARDE DU GARDE. Un resserrement qui refuserait aussi les bonnes
+    // réponses serait pire que le laxisme : l'enfant ferait tout bien et
+    // l'application lui dirait non. Ce cas-là doit rester vert quoi qu'il
+    // arrive aux deux précédents.
+    expect(
+      await bothAgree(
+        "drag-drop",
+        payload,
+        encodeDragDropAnswer({ carotte: "légumes", pomme: "fruits" }),
+      ),
     ).toBe(true);
+  });
+});
+
+describe("les exercices dégénérés — là où les deux côtés divergeaient", () => {
+  // TROUVÉ EN RELISANT LE RESSERREMENT, pas en le testant. Un exercice sans
+  // paire ni étiquette n'arrive pas par l'interface — les composants le
+  // refusent — mais `verifyAnswer` est la frontière de confiance, et il
+  // répondait JUSTE là où l'appareil répondait FAUX. `bothAgree` l'aurait
+  // signalé si quelqu'un avait pensé à poser le cas. Voilà le cas.
+  it("relier sans aucune paire : les deux refusent", async () => {
+    expect(await bothAgree("match", { pairs: [] }, encodeMatchAnswer([]))).toBe(
+      false,
+    );
+  });
+
+  it("ranger sans aucune étiquette : les deux refusent", async () => {
+    expect(
+      await bothAgree(
+        "drag-drop",
+        { zones: ["a", "b"], items: [] },
+        encodeDragDropAnswer({}),
+      ),
+    ).toBe(false);
   });
 });
 

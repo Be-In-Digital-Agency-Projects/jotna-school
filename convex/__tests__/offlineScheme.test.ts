@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   ATOM_SCHEME_VERSION,
+  type AtomMatch,
+  atomMatch,
   buildDigests,
   saltedInput,
   serverAtoms,
@@ -47,6 +49,15 @@ import {
  * valeurs ont été calculées une fois puis recopiées : elles ne sont
  * RECALCULÉES PAR RIEN. C'est ce qui les rend capables de contredire le code.
  *
+ * IL FIGE AUSSI LE MODE DE COMPARAISON de chaque type (`atomMatch`), et ce
+ * second axe a été ajouté en le payant. Le resserrement des vérificateurs
+ * (version 2) n'a pas touché à un seul octet d'atome : il a changé la RÈGLE,
+ * « un atome connu suffit » devenant « égalité de multi-ensemble » pour
+ * `match` et `drag-drop`. Un scellé qui n'aurait gardé que les octets aurait
+ * laissé passer ce changement-là sans broncher — alors qu'il produit
+ * exactement la même panne : un appareil qui juge autrement que le lot qu'il
+ * a téléchargé.
+ *
  * Si ce fichier casse, vous avez changé la forme canonique. Ce n'est pas une
  * erreur en soi — mais c'est un changement de contrat, et le réparer demande
  * DEUX gestes, jamais un seul :
@@ -74,8 +85,14 @@ import {
  */
 const SALT = "sel-du-scheme-v1";
 
-/** La version de schéma que les valeurs de ce fichier décrivent. */
-const GOLDEN_SCHEME = 1;
+/**
+ * La version de schéma que les valeurs de ce fichier décrivent.
+ *
+ * 1 → 2 : resserrement de `verifyMatch` et `verifyDragDrop` (ex-laxismes D21).
+ * Les atomes n'ont pas bougé, le MODE de comparaison si — d'où le champ
+ * `mode` ci-dessous, ajouté en même temps.
+ */
+const GOLDEN_SCHEME = 2;
 
 const digest = async (input: string): Promise<string> =>
   createHash("sha256").update(input, "utf8").digest("hex");
@@ -87,11 +104,14 @@ interface GoldenCase {
   readonly atoms: readonly string[];
   /** SHA-256 de `saltedInput(SALT, atome)`, en hexadécimal minuscule. */
   readonly digests: readonly string[];
+  /** Comment l'appareil confronte ces atomes aux empreintes livrées. */
+  readonly mode: AtomMatch;
 }
 
 const GOLDEN: readonly GoldenCase[] = [
   {
     type: "qcm",
+    mode: "any",
     serverPayload: { correctIndex: 2, options: ["a", "b", "c", "d"] },
     atoms: ["qcm\u001f2"],
     digests: [
@@ -100,6 +120,7 @@ const GOLDEN: readonly GoldenCase[] = [
   },
   {
     type: "order",
+    mode: "any",
     serverPayload: { correctSequence: ["Lundi", "Mardi", "Mercredi"] },
     atoms: ["order\u001fLundi\u001fMardi\u001fMercredi"],
     digests: [
@@ -112,6 +133,7 @@ const GOLDEN: readonly GoldenCase[] = [
     // donc deux empreintes identiques — c'est le comportement actuel, et le
     // figer le rend visible plutôt que surprenant.
     type: "short-answer",
+    mode: "any",
     serverPayload: { acceptedAnswers: ["Dakar", "  NDAKAARU  "] },
     atoms: ["short-answer\u001fdakar", "short-answer\u001fndakaaru"],
     digests: [
@@ -121,6 +143,7 @@ const GOLDEN: readonly GoldenCase[] = [
   },
   {
     type: "match",
+    mode: "all",
     serverPayload: {
       pairs: [
         { left: "chat", right: "miaule" },
@@ -139,6 +162,7 @@ const GOLDEN: readonly GoldenCase[] = [
     // glissée dans la chaîne, changerait l'empreinte sans changer le texte
     // affiché — et le français d'une application sénégalaise en est plein.
     type: "drag-drop",
+    mode: "all",
     serverPayload: {
       items: [
         { text: "pomme", correctZone: "fruits" },
@@ -178,6 +202,15 @@ describe("le scellé du schéma d'atomes", () => {
       expect(
         await buildDigests(golden.type, golden.serverPayload, SALT, digest),
       ).toEqual(golden.digests);
+    });
+
+    it("le mode de comparaison n'a pas bougé", () => {
+      expect(
+        atomMatch(golden.type),
+        "Changer le mode d'un type change le verdict de l'appareil sans " +
+          "changer une seule empreinte : un lot déjà téléchargé serait jugé " +
+          "avec l'autre règle. C'est un changement de schéma comme un autre.",
+      ).toBe(golden.mode);
     });
 
     it("chaque empreinte est bien celle de l'atome salé", async () => {

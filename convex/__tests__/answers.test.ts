@@ -102,11 +102,11 @@ describe("match", () => {
     ).toBe(false);
   });
 
-  it("LAXISME ÉPINGLÉ (D21) — la même bonne paire répétée passe", () => {
-    // Le vérificateur en service teste la LONGUEUR puis l'APPARTENANCE, jamais
-    // l'unicité. Ce test ne valide pas ce comportement : il l'ÉPINGLE, pour que
-    // le resserrer devienne un changement visible, à faire atterrir des deux
-    // côtés à la fois (appareil et serveur) sous peine de verdicts divergents.
+  it("RESSERRÉ (ex-laxisme D21) — la même bonne paire répétée est refusée", () => {
+    // LE TEST QUI A CHANGÉ DE SENS. Il épinglait le laxisme : longueur puis
+    // appartenance, jamais l'unicité — relier une seule paire quatre fois
+    // valait l'exercice entier. La comparaison porte désormais sur un
+    // multi-ensemble, et chaque paire attendue ne peut servir qu'une fois.
     expect(
       verifyAnswer(
         "match",
@@ -116,7 +116,36 @@ describe("match", () => {
           { left: "chat", right: "mammifère" },
         ]),
       ),
+    ).toBe(false);
+  });
+
+  it("une paire correcte omise, une autre doublée : refusé", () => {
+    // La forme que prendrait la triche : le bon compte, que des paires
+    // connues, et pourtant l'exercice n'est pas fait.
+    expect(
+      verifyAnswer(
+        "match",
+        payload,
+        encodeMatchAnswer([
+          { left: "aigle", right: "oiseau" },
+          { left: "aigle", right: "oiseau" },
+        ]),
+      ),
+    ).toBe(false);
+  });
+
+  it("le séparateur de clé ne confond plus deux paires différentes", () => {
+    // La clé était `${left}|||${right}`. Pour la paire correcte
+    // (« a|||b », « c »), la réponse (« a », « b|||c ») produisait la MÊME
+    // chaîne et passait — un mauvais appariement compté juste. Improbable en
+    // français d'école, gratuit à fermer, et impossible à voir sans ce test.
+    const tricky = { pairs: [{ left: "a|||b", right: "c" }] };
+    expect(
+      verifyAnswer("match", tricky, encodeMatchAnswer([{ left: "a|||b", right: "c" }])),
     ).toBe(true);
+    expect(
+      verifyAnswer("match", tricky, encodeMatchAnswer([{ left: "a", right: "b|||c" }])),
+    ).toBe(false);
   });
 });
 
@@ -154,7 +183,10 @@ describe("drag-drop", () => {
     ).toBe(false);
   });
 
-  it("LAXISME ÉPINGLÉ (D21) — une clé en trop est ignorée", () => {
+  it("RESSERRÉ (ex-laxisme D21) — une clé en trop est refusée", () => {
+    // Le vérificateur ne regardait que les étiquettes attendues : le nombre
+    // de réponses acceptées était littéralement infini. Le compte des clés
+    // est maintenant testé AVANT les zones.
     expect(
       verifyAnswer(
         "drag-drop",
@@ -165,7 +197,20 @@ describe("drag-drop", () => {
           inconnu: "fruits",
         }),
       ),
-    ).toBe(true);
+    ).toBe(false);
+  });
+
+  it("une clé héritée du prototype ne vaut pas un rangement", () => {
+    // `map[item.text]` allait chercher jusque dans `Object.prototype`.
+    // `Object.entries` ne rend que les propriétés propres.
+    const proto = { items: [{ text: "toString", correctZone: "fruits" }] };
+    expect(verifyAnswer("drag-drop", proto, "{}")).toBe(false);
+  });
+
+  it("ce qui n'est pas un objet est refusé sans être interprété", () => {
+    expect(verifyAnswer("drag-drop", payload, "[]")).toBe(false);
+    expect(verifyAnswer("drag-drop", payload, "null")).toBe(false);
+    expect(verifyAnswer("drag-drop", payload, "5")).toBe(false);
   });
 });
 

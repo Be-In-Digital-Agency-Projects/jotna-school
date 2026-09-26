@@ -18,14 +18,11 @@ import type {
  * S'EFFONDRE pour « relier » et « ranger », et la raison est dans le code du
  * serveur, pas dans la théorie :
  *
- *   `verifyMatch` teste une LONGUEUR puis une APPARTENANCE par élément. Pour
- *   quatre paires, TOUT multi-ensemble de taille quatre pris dans les paires
- *   correctes est accepté — la même bonne paire quatre fois comprise (laxisme
- *   D21). Ce sont 35 réponses acceptées, aux formes canoniques toutes
- *   différentes. Une empreinte unique en reconnaîtrait UNE.
+ *   `verifyMatch` compare des MULTI-ENSEMBLES de paires. Pour quatre paires,
+ *   les 24 permutations sont toutes acceptables, et leurs formes canoniques
+ *   sont toutes différentes. Une empreinte unique en reconnaîtrait UNE.
  *
- *   `verifyDragDrop` ignore les clés en trop : le nombre de réponses acceptées
- *   est littéralement infini.
+ *   `verifyDragDrop` accepte de même tout ordre de clés dans l'objet soumis.
  *
  * L'appareil aurait donc compté FAUX des réponses que le serveur compte
  * JUSTE — et la divergence se serait vue en production, chez un enfant, une
@@ -43,13 +40,16 @@ import type {
  *   | qcm           | l'indice correct               | l'atome soumis est connu       |
  *   | order         | la séquence entière            | idem                           |
  *   | short-answer  | chaque réponse acceptée        | idem                           |
- *   | match         | chaque paire correcte          | bon NOMBRE, et chacune connue  |
- *   | drag-drop     | chaque `étiquette -> zone`     | chacune posée, et connue       |
+ *   | match         | chaque paire correcte          | permutation exacte des paires  |
+ *   | drag-drop     | chaque `étiquette -> zone`     | exactement les étiquettes dues |
  *
- * Les deux laxismes de D21 sont alors reproduits GRATUITEMENT, parce qu'ils
- * découlent de la même structure : une paire répétée passe (elle est connue,
- * et le compte est bon), une clé en trop est ignorée (on ne regarde que les
- * étiquettes attendues).
+ * CE QUE LA STRUCTURE NE SUFFIT PAS À DIRE : « chaque atome attendu servi UNE
+ * FOIS ». Reconnaître chaque atome soumis laisserait passer la même bonne
+ * paire quatre fois — c'était le laxisme D21, et le serveur l'avait aussi.
+ * Les deux l'ont perdu ensemble : `atomMatch` plus bas distingue les types où
+ * UN atome connu suffit de ceux où il faut l'ÉGALITÉ DE MULTI-ENSEMBLE avec
+ * les empreintes livrées. C'est la contrepartie exacte, atome pour atome, des
+ * vérificateurs resserrés de `answers.ts`.
  *
  * ---------------------------------------------------------------------------
  * UNE EMPREINTE SALÉE, PAS UN HMAC — et ce n'est pas un raccourci.
@@ -140,7 +140,38 @@ interface ShortAnswerServer {
  * renvoyé vers « prépare-le quand tu auras du réseau », ce qui est
  * désagréable et honnête, là où le laisser jouer serait confortable et faux.
  */
-export const ATOM_SCHEME_VERSION = 1;
+export const ATOM_SCHEME_VERSION = 2;
+
+/**
+ * COMMENT les atomes soumis se comparent aux empreintes livrées, PAR TYPE.
+ *
+ * `"any"` — un atome connu suffit. L'exercice admet plusieurs réponses, et la
+ * liste d'empreintes les énumère : une réponse courte a ses formes acceptées,
+ * un QCM sa bonne option. Le lot livre N empreintes, l'appareil en soumet UNE.
+ *
+ * `"all"` — il faut l'ÉGALITÉ DE MULTI-ENSEMBLE. L'exercice n'admet qu'une
+ * réponse, mais elle s'exprime en PLUSIEURS atomes, un par paire ou par
+ * étiquette. Le lot livre N empreintes, l'appareil en soumet N, et les deux
+ * multi-ensembles doivent coïncider. C'est ce qui interdit la même bonne paire
+ * répétée : son empreinte est connue, mais elle n'est livrée qu'une fois.
+ *
+ * SE TROMPER DE MODE NE SE VOIT PAS EN LISANT. Mettre `match` en `"any"` rend
+ * l'appareil plus laxiste que le serveur, donc l'enfant voit une coche verte
+ * puis perd l'étoile à la synchronisation. Le scellé
+ * (`convex/__tests__/offlineScheme.test.ts`) fige donc aussi ce tableau-ci, et
+ * pas seulement la forme des atomes.
+ */
+export type AtomMatch = "any" | "all";
+
+export function atomMatch(type: ExerciseType | string): AtomMatch {
+  switch (type) {
+    case "match":
+    case "drag-drop":
+      return "all";
+    default:
+      return "any";
+  }
+}
 
 export function serverAtoms(
   type: ExerciseType | string,
@@ -207,15 +238,26 @@ export function submittedAtoms(
         return arr.map((p) => atom("match", p.left, p.right));
       }
       case "drag-drop": {
-        const map = JSON.parse(submitted) as Record<string, string>;
-        if (map === null || typeof map !== "object") return null;
+        const raw: unknown = JSON.parse(submitted);
+        if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+          return null;
+        }
+        // `Object.entries` ne rend que les propriétés PROPRES — même raison
+        // que côté serveur : une clé `toString` ne doit pas emprunter sa
+        // valeur au prototype.
+        const placed = new Map(Object.entries(raw as Record<string, unknown>));
         const items = (clientPayload as DragDropClientPayload).items;
+        // LE COMPTE D'ABORD, comme `verifyDragDrop` : une clé en trop est
+        // désormais un refus STRUCTUREL, avant toute empreinte. Le compte se
+        // fait sur les étiquettes DISTINCTES, deux éléments au même texte ne
+        // pouvant produire qu'une clé.
+        const expected = new Set(items.map((it) => it.text));
+        if (placed.size !== expected.size) return null;
         const atoms: string[] = [];
         for (const it of items) {
-          const zone = map[it.text];
-          // `verifyDragDrop` échoue sur `map[text] !== correctZone`, et une
-          // étiquette non posée vaut `undefined`. Les clés EN TROP ne sont
-          // jamais regardées — laxisme D21, reproduit ici par construction.
+          const zone = placed.get(it.text);
+          // Une étiquette non posée vaut `undefined` : refus, comme le
+          // serveur qui compare à `correctZone`.
           if (typeof zone !== "string") return null;
           atoms.push(atom("drag-drop", it.text, zone));
         }
@@ -270,9 +312,26 @@ export async function verifyOffline(
 ): Promise<boolean> {
   const atoms = submittedAtoms(type, clientPayload, submitted);
   if (atoms === null || atoms.length === 0) return false;
-  const known = new Set(digests);
-  for (const a of atoms) {
-    if (!known.has(await digest(saltedInput(salt, a)))) return false;
+
+  const submittedDigests = await Promise.all(
+    atoms.map((a) => digest(saltedInput(salt, a))),
+  );
+
+  if (atomMatch(type) === "any") {
+    const known = new Set(digests);
+    return submittedDigests.every((d) => known.has(d));
+  }
+
+  // `"all"` — ÉGALITÉ DE MULTI-ENSEMBLE, et non d'ensemble : chaque empreinte
+  // livrée est consommée une fois. C'est ici, et nulle part ailleurs, que la
+  // même bonne paire répétée se fait refuser.
+  if (submittedDigests.length !== digests.length) return false;
+  const remaining = new Map<string, number>();
+  for (const d of digests) remaining.set(d, (remaining.get(d) ?? 0) + 1);
+  for (const d of submittedDigests) {
+    const left = remaining.get(d);
+    if (left === undefined || left === 0) return false;
+    remaining.set(d, left - 1);
   }
   return true;
 }

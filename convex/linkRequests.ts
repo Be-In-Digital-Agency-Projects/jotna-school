@@ -1,7 +1,6 @@
 import {
   query,
   mutation,
-  action,
   internalMutation,
   internalQuery,
 } from "./_generated/server";

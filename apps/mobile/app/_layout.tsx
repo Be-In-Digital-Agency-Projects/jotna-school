@@ -6,7 +6,7 @@ import { StyleSheet, Text, View } from "react-native";
 
 import { secureStorage } from "@/auth/secure-storage";
 import { SessionGate } from "@/session/session-gate";
-import { convex, convexUrl } from "@/convex/client";
+import { convex } from "@/convex/client";
 import { colors, fontSize, spacing } from "@/theme/tokens";
 
 export default function RootLayout() {

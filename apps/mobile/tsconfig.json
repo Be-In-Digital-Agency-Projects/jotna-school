@@ -2,6 +2,21 @@
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "strict": true,
+    // LE LINT DE LA RACINE IGNORE `apps/**` (voir `eslint.config.mjs`, phase 0 :
+    // `eslint-config-next` linterait du React Native). Rien ne rattrapait donc
+    // un import devenu inutile après un remaniement — et un écran en traîne
+    // vite trois. Le compilateur, lui, est déjà là.
+    //
+    // CE DRAPEAU JUGE AUSSI `convex/`, ET IL FAUT LE SAVOIR. L'alias
+    // `@convex/*` fait entrer `_generated/api.d.ts`, qui importe TOUS les
+    // modules du serveur : un import inutile laissé dans n'importe lequel
+    // d'entre eux fera rougir le job MOBILE de la CI, pour une raison qui
+    // n'a rien de mobile. Ce n'est pas un piège caché — c'est écrit ici, et
+    // la correction est d'une ligne. Un tel import existait déjà quand ce
+    // drapeau a été posé (`convex/linkRequests.ts`, `action`) ; il a été
+    // retiré plutôt que contourné.
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "paths": {
       "@/*": ["./src/*"],
       "@convex/*": ["../../convex/*"],

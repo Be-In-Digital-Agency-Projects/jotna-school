@@ -852,12 +852,83 @@ typecheck et le paquet. Le vrai accueil (série, niveau, progression) reste 4.1.
       `convex-test`, soit un appareil et un déploiement de développement. À
       décider ; ce n'est pas un oubli
 
-### Phase 4 — Autour de l'exercice
+### Phase 4 — Autour de l'exercice — **FAITE**
 
-- [ ] 4.1 Accueil : matières, série, niveau
-- [ ] 4.2 Matière → thématiques → paliers 1 à 10, avec l'état de téléchargement
-- [ ] 4.3 Coffre à badges + animation de déblocage (y compris différée, D19)
-- [ ] 4.4 Profil : avatar, statistiques, son
+**Une barre d'onglets est apparue**, et ce n'était pas au plan. Les phases 0 à
+3 n'avaient qu'un écran ; avec le coffre et le profil, trois boutons qu'il faut
+faire DÉFILER pour trouver, c'est-à-dire pour savoir qu'ils existent. À huit
+ans, ce qu'on ne voit pas n'existe pas. `app/(tabs)/` porte les trois
+destinations, le reste (matière, palier, préparation) se empile par-dessus.
+L'import vient de `expo-router/js-tabs` : `Tabs` est toujours exporté par
+`expo-router`, mais ses propres types le marquent déprécié, et prendre le
+chemin déprécié c'est une panne à la prochaine montée de SDK.
+
+- [x] 4.1 **FAIT** — l'accueil répond à trois questions, dans l'ordre où un
+      enfant se les pose : « est-ce qu'on me reconnaît » (son prénom),
+      « où j'en suis » (série, niveau, étoiles), « qu'est-ce que je fais »
+      (ses matières). Le DÉMARRAGE À FROID est un écran à part (D8 du web) :
+      trois zéros disent « tu n'as rien », donc on les cache.
+      **Un défaut de la phase 2 est corrigé au passage** : `subjects.icon`
+      contient un nom d'icône Lucide — `convex/testSeeds.ts` y écrit
+      « Calculator » —, et l'accueil affichait `subject.icon ?? "📘"`, donc le
+      MOT « Calculator » en corps 32 sur la carte d'un enfant. Personne ne
+      l'aurait vu avant un appareil. `theme/subject-icon.ts` porte la table du
+      web, et ses tests exigent qu'aucun nom Lucide ne ressorte tel quel
+      **Le ruban de série se calcule en UTC**, pas dans le fuseau de
+      l'appareil : le serveur définit le jour en Africa/Dakar, qui EST l'UTC
+      (`convex/streak.ts` le dit). Le ruban du web emploie `new Date()` et
+      coïncide à Dakar ; sur un téléphone réglé ailleurs il dessinerait une
+      semaine décalée d'un jour par rapport à la série comptée
+- [x] 4.2 **FAIT** — dix pastilles par thématique, et non plus une flèche vers
+      « la suite ». L'enfant voit le chemin parcouru, ce qui reste, et peut
+      revenir sur un palier réussi — le serveur l'autorise, `startPalierAttempt`
+      ne vérifie que les paliers PRÉCÉDENTS. Un 💾 discret marque ce qui est
+      déjà sur l'appareil.
+      **`nextPalierIndex` ne suffit pas à dessiner la grille**, et c'est le
+      piège de cette tâche : il vaut `min(10, maxValidé + 1)`, donc 10 se lit
+      aussi bien « le dixième reste à faire » que « tout est fini ». Le
+      `status` de la thématique tranche. `validatedPaliers` ne le pourrait
+      PAS — il compte des TENTATIVES validées, pas des paliers distincts, et
+      refaire deux fois le palier 3 le fait passer à 2. La logique est en pur
+      (`progress/palier-state.ts`) et éprouvée sur les deux lectures du 10
+- [x] 4.3 **FAIT** — le coffre montre les badges VERROUILLÉS autant que les
+      autres, avec leur `criteriaText` : un enfant qui ne voit que ce qu'il a
+      n'a rien à viser, et sur un téléphone il n'y a pas de page voisine où
+      aller chercher la liste.
+      **La fête DIFFÉRÉE (D19) est la vraie raison d'être de cet écran sur
+      mobile.** Un badge gagné sans réseau n'est décerné qu'à la
+      synchronisation, longtemps après que l'enfant a fermé l'application :
+      personne ne l'a fêté. `getMyStats().unseenBadges` s'en souvient CÔTÉ
+      SERVEUR, donc la fête suit l'enfant d'une tablette à l'autre. On ne
+      marque « vu » qu'au GESTE, jamais à l'affichage — marquer au rendu
+      ferait disparaître une fête que l'enfant n'a pas regardée, et elle ne
+      revient pas.
+      Les icônes de badges sont des emojis : `badges.icon` porte un nom Lucide,
+      et `lucide-react-native` tirerait `react-native-svg`, un module natif, pour
+      quarante pictogrammes décoratifs (le raisonnement de D22, encore)
+- [x] 4.4 **FAIT** — l'avatar est des INITIALES, comme sur le web : aucun écran
+      élève ne permet d'en choisir un et l'import scolaire n'en pose pas, donc
+      inventer un choix ici donnerait une fonction que la moitié de
+      l'application ignore. Une image distante s'affiche si le champ en porte
+      une, et retombe sur les initiales si elle échoue — ce qui, sans réseau,
+      arrive.
+      Le son est un réglage de SERVEUR (il suit l'enfant d'une tablette à
+      l'autre) mais l'interrupteur est OPTIMISTE : attendre le serveur pour
+      bouger un interrupteur donne l'impression qu'il est cassé.
+      **« Changer d'élève » a quitté l'accueil** pour ce profil : c'est un geste
+      d'adulte, et il était exposé au doigt d'un enfant qui fait défiler
+
+**Deux garde-fous posés pendant cette phase, hors périmètre annoncé.**
+
+`apps/mobile/tsconfig.json` prend `noUnusedLocals` et `noUnusedParameters` :
+le lint de la racine ignore `apps/**` depuis la phase 0, donc RIEN ne
+rattrapait un import devenu inutile après un remaniement — le drapeau en a
+trouvé un dès la première exécution. **Il juge aussi `convex/`**, que l'alias
+`@convex/*` fait entrer en entier via `_generated/api.d.ts` : un import
+inutile dans n'importe quel module du serveur fera rougir le job MOBILE. C'est
+écrit dans le `tsconfig.json`, et l'unique violation existante
+(`convex/linkRequests.ts`, `action`) a été retirée plutôt que contournée — ce
+qui fait passer `pnpm lint` de 145 à **144 problèmes**.
 
 ### Phase 5 — Terrain
 

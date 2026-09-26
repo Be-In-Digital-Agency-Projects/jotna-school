@@ -9,36 +9,39 @@ import type { Id } from "@convex/_generated/dataModel";
 import { useNetworkOnline } from "@/offline/network";
 import { pendingCount } from "@/offline/store";
 import { catchUpAll } from "@/offline/sync";
-import { useChangeStudent } from "@/session/change-student";
+import { levelPercent } from "@/progress/level";
+import { StreakRibbon } from "@/progress/streak-ribbon";
+import { subjectIcon } from "@/theme/subject-icon";
 import { MIN_TOUCH_TARGET, colors, fontSize, radius, spacing } from "@/theme/tokens";
-import { BigButton } from "@/ui/big-button";
+import { ProgressBar } from "@/ui/progress-bar";
 
 /**
- * L'accueil de l'élève — NAVIGATION MINIMALE, PROVISOIRE.
+ * L'ACCUEIL DE L'ÉLÈVE — tâche 4.1.
  *
- * Le vrai accueil est la phase 4 : série, niveau, progression, matières
- * illustrées. Ce qui est ici est le strict nécessaire pour que le moteur
- * d'exercices de la phase 2 soit ESSAYABLE sur un appareil — sans un chemin
- * qui y mène, ni vous ni moi ne pouvons le vérifier autrement que par le
- * typecheck et le paquet.
+ * Il répond à trois questions, dans cet ordre, et c'est l'ordre qui compte
+ * pour un enfant de huit ans :
  *
- * Il porte aussi « changer d'élève » (D10), sans quoi une tablette partagée
- * resterait bloquée sur le premier enfant connecté.
+ *   1. « Est-ce qu'on me reconnaît ? »  — son prénom, tout en haut.
+ *   2. « Où j'en suis ? »               — sa série, son niveau, ses étoiles.
+ *   3. « Qu'est-ce que je fais ? »      — ses matières, en grand.
+ *
+ * LE DÉMARRAGE À FROID EST UN ÉCRAN À PART (D8 côté web). Un enfant qui ouvre
+ * l'application pour la première fois ne doit pas voir « 0 étoile, 0 badge, 0
+ * jour de série » : trois zéros disent « tu n'as rien », ce qui est vrai et
+ * décourageant. On les cache, et on ne montre qu'une invitation.
+ *
+ * « CHANGER D'ÉLÈVE » A QUITTÉ CET ÉCRAN pour le profil (4.4). Il y était
+ * faute d'ailleurs où le mettre ; c'est un geste d'adulte, et le laisser sous
+ * les matières l'exposait au doigt d'un enfant qui fait défiler.
  */
 export function StudentHome() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const profile = useQuery(api.profiles.getCurrentProfile, {});
+  const stats = useQuery(api.students.getMyStats, {});
   const subjects = useQuery(api.subjects.list, {});
-  const { changeStudent, busy } = useChangeStudent();
+  const markLevelSeen = useMutation(api.students.markLevelSeen);
   const online = useNetworkOnline();
 
-  // CE QUI ATTEND ENCORE D'ÊTRE ENVOYÉ.
-  //
-  // On relit à chaque fois que l'écran revient au premier plan — donc au
-  // retour d'une séance, au moment précis où le compte vient de changer.
-  // Un abonnement permanent coûterait une requête SQLite en boucle pour une
-  // information qui ne bouge qu'à ces instants-là.
   const [pending, setPending] = useState(0);
   const [justClosed, setJustClosed] = useState(0);
 
@@ -98,6 +101,20 @@ export function StudentHome() {
     }, [online, syncJournal, submit]),
   );
 
+  const firstName = (stats?.student.name ?? "").split(" ")[0] ?? "";
+
+  // D8 — démarrage à froid : compte neuf, aucune progression nulle part.
+  const coldStart =
+    stats != null &&
+    stats.totalExercises === 0 &&
+    stats.totalStars === 0 &&
+    (!stats.streaksEnabled || stats.currentStreak === 0);
+
+  const showStreak =
+    stats != null && stats.streaksEnabled && stats.currentStreak > 0;
+
+  const unseenLevel = stats?.unseenLevelUp?.level;
+
   return (
     <ScrollView
       style={styles.screen}
@@ -107,9 +124,35 @@ export function StudentHome() {
       ]}
     >
       <Text style={styles.hello}>
-        {profile ? `Bonjour ${profile.name} !` : "Bonjour !"}
+        {coldStart
+          ? `Bienvenue${firstName ? ` ${firstName}` : ""} ! 👋`
+          : `Bonjour${firstName ? ` ${firstName}` : ""} !`}
       </Text>
-      <Text style={styles.sub}>Choisis une matière.</Text>
+      <Text style={styles.sub}>
+        {coldStart
+          ? "Choisis ta première matière pour commencer."
+          : "Choisis une matière."}
+      </Text>
+
+      {/* LA MONTÉE DE NIVEAU SE DIT ICI QUAND ELLE A ÉTÉ MANQUÉE (D19).
+          Un niveau gagné pendant une séance sans réseau n'a été fêté nulle
+          part : le serveur garde `unseenLevelUp` jusqu'à ce qu'on le montre,
+          et `markLevelSeen` referme la fête — une seule fois. */}
+      {unseenLevel !== undefined && (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Niveau ${unseenLevel} atteint, appuie pour fermer`}
+          onPress={() => {
+            void markLevelSeen({ level: unseenLevel }).catch(() => {});
+          }}
+          style={styles.levelUp}
+        >
+          <Text style={styles.levelUpTitle}>🎉 Niveau {unseenLevel} !</Text>
+          <Text style={styles.levelUpBody}>
+            Bravo, tu as monté d&apos;un niveau. Appuie pour continuer.
+          </Text>
+        </Pressable>
+      )}
 
       {justClosed > 0 && (
         <View style={styles.arrived}>
@@ -128,6 +171,33 @@ export function StudentHome() {
             {online
               ? `On envoie ${pending} réponse${pending > 1 ? "s" : ""} que tu as faite${pending > 1 ? "s" : ""} sans réseau… 📤`
               : `${pending} réponse${pending > 1 ? "s" : ""} t'attend${pending > 1 ? "ent" : ""} bien au chaud 💾 Elles partiront dès qu'il y aura du réseau.`}
+          </Text>
+        </View>
+      )}
+
+      {showStreak && stats != null && (
+        <StreakRibbon
+          currentStreak={stats.currentStreak}
+          longestStreak={stats.longestStreak}
+        />
+      )}
+
+      {stats != null && !coldStart && (
+        <View style={styles.levelCard}>
+          <View style={styles.levelHead}>
+            <Text style={styles.levelTitle}>Niveau {stats.level}</Text>
+            <Text style={styles.levelCounts}>
+              {stats.totalStars} ⭐ · {stats.badgeCount} 🏅
+            </Text>
+          </View>
+          <ProgressBar
+            percent={levelPercent(stats.exosToNextLevel)}
+            label={`Progression vers le niveau ${stats.level + 1}`}
+          />
+          <Text style={styles.levelFoot}>
+            Encore {stats.exosToNextLevel} exercice
+            {stats.exosToNextLevel > 1 ? "s" : ""} pour le niveau{" "}
+            {stats.level + 1}.
           </Text>
         </View>
       )}
@@ -152,21 +222,18 @@ export function StudentHome() {
           }
           style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}
         >
-          <Text style={styles.cardIcon}>{subject.icon ?? "📘"}</Text>
+          {/* La pastille prend la couleur de la matière, comme sur le web :
+              c'est à elle que l'enfant reconnaît « sa » matière de loin,
+              avant même de lire le nom. */}
+          <View style={[styles.cardIconBox, { backgroundColor: subject.color }]}>
+            <Text style={styles.cardIcon}>{subjectIcon(subject.icon)}</Text>
+          </View>
           <View style={styles.cardMain}>
             <Text style={styles.cardTitle}>{subject.name}</Text>
           </View>
           <Text style={styles.chevron}>›</Text>
         </Pressable>
       ))}
-
-      <View style={styles.spacer} />
-      <BigButton
-        label="Changer d'élève"
-        onPress={changeStudent}
-        busy={busy}
-        tone="quiet"
-      />
     </ScrollView>
   );
 }
@@ -177,12 +244,16 @@ const styles = StyleSheet.create({
   hello: { fontSize: fontSize.display, fontWeight: "800", color: colors.text },
   sub: { fontSize: fontSize.label, color: colors.textMuted, marginTop: -spacing.sm },
   muted: { fontSize: fontSize.body, color: colors.textMuted },
-  pending: {
-    backgroundColor: "#fffbeb",
-    borderRadius: radius.md,
+  levelUp: {
+    backgroundColor: "#fef3c7",
+    borderWidth: 2,
+    borderColor: colors.accent,
+    borderRadius: radius.lg,
     padding: spacing.md,
+    gap: spacing.xs,
   },
-  pendingText: { fontSize: fontSize.body, lineHeight: 22, color: colors.text },
+  levelUpTitle: { fontSize: fontSize.title, fontWeight: "800", color: colors.text },
+  levelUpBody: { fontSize: fontSize.body, lineHeight: 22, color: colors.text },
   arrived: {
     backgroundColor: "#f7fee7",
     borderWidth: 2,
@@ -191,6 +262,29 @@ const styles = StyleSheet.create({
     padding: spacing.md,
   },
   arrivedText: { fontSize: fontSize.label, lineHeight: 26, color: colors.text },
+  pending: {
+    backgroundColor: "#fffbeb",
+    borderRadius: radius.md,
+    padding: spacing.md,
+  },
+  pendingText: { fontSize: fontSize.body, lineHeight: 22, color: colors.text },
+  levelCard: {
+    backgroundColor: colors.surface,
+    borderWidth: 2,
+    borderColor: colors.border,
+    borderRadius: radius.lg,
+    padding: spacing.md,
+    gap: spacing.sm,
+  },
+  levelHead: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: spacing.sm,
+  },
+  levelTitle: { fontSize: fontSize.label, fontWeight: "700", color: colors.text },
+  levelCounts: { fontSize: fontSize.label, color: colors.text },
+  levelFoot: { fontSize: fontSize.body, color: colors.textMuted },
   card: {
     minHeight: MIN_TOUCH_TARGET + 16,
     flexDirection: "row",
@@ -203,9 +297,15 @@ const styles = StyleSheet.create({
     padding: spacing.md,
   },
   cardPressed: { transform: [{ scale: 0.99 }] },
-  cardIcon: { fontSize: 32 },
+  cardIconBox: {
+    width: 56,
+    height: 56,
+    borderRadius: radius.md,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  cardIcon: { fontSize: 28, color: colors.surface, fontWeight: "800" },
   cardMain: { flex: 1 },
   cardTitle: { fontSize: fontSize.title, fontWeight: "700", color: colors.text },
   chevron: { fontSize: 28, color: colors.textMuted },
-  spacer: { height: spacing.md },
 });

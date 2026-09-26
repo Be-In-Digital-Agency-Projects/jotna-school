@@ -2,10 +2,15 @@ import { query, mutation, action, internalMutation } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
 import { createAccount, getAuthUserId } from "@convex-dev/auth/server";
 import { internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import { decideLinkChild } from "./linkRules";
 import { decideProfileUpdate } from "./profileRules";
 import type { ProfileUpdateDecision } from "./profileRules";
-import { studentIdsTaughtBy } from "./access";
+import { checkAccess, studentIdsTaughtBy } from "./access";
+import {
+  AI_CONSENT_GRACE_ENDS_AT,
+  decideAiConsent,
+} from "./aiConsentRules";
 
 // ---------------------------------------------------------------------------
 // Queries
@@ -452,5 +457,150 @@ export const linkChild = internalMutation({
       guardianId: guardian._id,
       relation: args.relation,
     });
+  },
+});
+
+// ===========================================================================
+// CONSENTEMENT IA — le levier du parent (tâche 6.4)
+// ===========================================================================
+
+/**
+ * LE PARENT SE PRONONCE POUR SON ENFANT — et son refus l'emporte sur tout.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * TROIS VALEURS, PAS DEUX, et c'est ce qui rend le levier honnête.
+ *
+ *   `refused`  → l'IA se ferme IMMÉDIATEMENT pour cet enfant. Ni la
+ *                déclaration de son école ni le délai de grâce n'y changent
+ *                quoi que ce soit : un « non » qui attendrait trente jours
+ *                n'en serait pas un.
+ *   `granted`  → le parent, représentant légal, autorise. C'est l'accord le
+ *                plus fort qui existe, et il vaut même si l'école n'a rien
+ *                déclaré.
+ *   `unset`    → le parent retire son avis et laisse l'école décider. Sans
+ *                cette troisième valeur, un parent qui a cliqué une fois ne
+ *                pourrait plus jamais revenir à « je m'en remets à l'école ».
+ *
+ * L'ordre dans lequel ces états sont lus est dans `aiConsentRules.ts`, avec
+ * le test qui verrouille précisément qu'un refus passe AVANT la déclaration
+ * de l'école.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * LA GARDE EST LE LIEN DE TUTELLE, pas le rôle. Un parent ne peut se
+ * prononcer que pour les enfants dont il est tuteur (`studentGuardians`), et
+ * la vérification porte sur le couple — pas sur « l'appelant est un parent »,
+ * qui laisserait n'importe quel parent décider pour l'enfant d'un autre.
+ */
+export const setChildAiConsent = mutation({
+  args: {
+    childId: v.id("profiles"),
+    decision: v.union(
+      v.literal("granted"),
+      v.literal("refused"),
+      v.literal("unset"),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) throw new Error("Non authentifié");
+
+    const guardian = await ctx.db
+      .query("profiles")
+      .withIndex("by_userId", (q) => q.eq("userId", userId))
+      .unique();
+    if (!guardian) throw new Error("Profil introuvable");
+
+    const link = await ctx.db
+      .query("studentGuardians")
+      .withIndex("by_guardianId", (q) => q.eq("guardianId", guardian._id))
+      .take(50);
+    if (!link.some((l) => l.studentId === args.childId)) {
+      throw new ConvexError({
+        code: "FORBIDDEN",
+        message: "Cet enfant n'est pas rattaché à votre compte.",
+      });
+    }
+
+    // `unset` EFFACE aussi la date. Garder « accordé le 12 mars » sous un avis
+    // retiré ferait mentir le registre le jour où quelqu'un le relit.
+    await ctx.db.patch(args.childId, {
+      aiDataConsentGranted:
+        args.decision === "unset" ? undefined : args.decision === "granted",
+      aiDataConsentGrantedAt: args.decision === "unset" ? undefined : Date.now(),
+    });
+
+    return { decision: args.decision };
+  },
+});
+
+/**
+ * L'ÉTAT DU CONSENTEMENT IA POUR CHAQUE ENFANT DU PARENT CONNECTÉ.
+ *
+ * Elle existe séparément de `getChildren` plutôt que d'en élargir le retour :
+ * répondre demande, pour chaque enfant, de remonter jusqu'à son école et à sa
+ * déclaration. `getChildren` est lue par le tableau de bord et par le
+ * sélecteur d'enfant, à chaque chargement ; lui ajouter ces lectures ferait
+ * payer ce coût à des écrans qui n'en ont pas l'usage.
+ *
+ * ELLE REND LA DÉCISION COMPLÈTE, pas seulement l'avis du parent. Un écran qui
+ * n'afficherait que « vous n'avez rien dit » laisserait le parent croire que
+ * l'IA est fermée alors que l'école a déclaré — ou l'inverse. C'est
+ * `decideAiConsent`, la même fonction que les trois chemins IA appellent, qui
+ * répond : il ne peut donc pas y avoir d'écart entre ce que le parent lit et
+ * ce qui se passe vraiment.
+ *
+ * Une requête ne lève jamais : `[]` si l'appelant n'a pas de profil.
+ */
+export const getChildrenAiConsent = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) return [];
+
+    const guardian = await ctx.db
+      .query("profiles")
+      .withIndex("by_userId", (q) => q.eq("userId", userId))
+      .unique();
+    if (!guardian) return [];
+
+    const links = await ctx.db
+      .query("studentGuardians")
+      .withIndex("by_guardianId", (q) => q.eq("guardianId", guardian._id))
+      .take(50);
+
+    const now = Date.now();
+    const rows = [];
+    for (const link of links) {
+      const child = await ctx.db.get(link.studentId);
+      if (!child) continue;
+
+      const access = await checkAccess(ctx, child);
+      const school =
+        access.ok === true
+          ? await ctx.db.get(access.schoolId as Id<"schools">)
+          : null;
+
+      const decision = decideAiConsent({
+        parentDecision: child.aiDataConsentGranted,
+        schoolDeclaredAt: school?.aiConsentDeclaredAt ?? null,
+        graceEndsAt: AI_CONSENT_GRACE_ENDS_AT,
+        now,
+      });
+
+      rows.push({
+        childId: child._id,
+        name: child.name,
+        /** L'avis du parent : `true`, `false`, ou absent. */
+        parentDecision: child.aiDataConsentGranted,
+        parentDecidedAt: child.aiDataConsentGrantedAt ?? null,
+        schoolName: school?.name ?? null,
+        schoolDeclaredAt: school?.aiConsentDeclaredAt ?? null,
+        allowed: decision.allowed,
+        reason: decision.reason,
+        onGrace: decision.onGrace,
+        graceEndsAt: AI_CONSENT_GRACE_ENDS_AT,
+      });
+    }
+    return rows;
   },
 });

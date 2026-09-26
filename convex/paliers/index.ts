@@ -28,6 +28,7 @@ import { checkMathExercise } from "../aiGateway/factCheck";
 import { computeExerciseScore } from "./scoring";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { checkAccess, requireAccess } from "../access";
+import { AI_CONSENT_KID_MESSAGE } from "../aiConsentRules";
 import { buildDigests } from "./offline";
 import { saltFor, sha256Hex } from "./digest";
 
@@ -991,6 +992,26 @@ export const regenerateFailedExercises = action({
         ok: false,
         reason: "REGEN_CAP_REACHED",
         kidMessage: "On t'a vu galérer 💪. Voici trois pistes pour t'en sortir.",
+      };
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // CONSENTEMENT IA (tâche 6.4) — les deux invites construites ci-dessous
+    // portent `studentAnswer`, c'est-à-dire ce que l'enfant a VRAIMENT écrit
+    // sur chaque exercice raté. La garde se pose donc avant de les construire.
+    //
+    // ON NE LÈVE PAS : cette action rend déjà `{ ok: false, kidMessage }` sur
+    // ses autres refus (plafond de régénération), et l'écran sait l'afficher.
+    // Le refus emprunte le même chemin plutôt que d'en inventer un.
+    const consent = await ctx.runQuery(
+      internal.access.getAiConsentForProfile,
+      { profileId: callerProfile._id },
+    );
+    if (!consent.allowed) {
+      return {
+        ok: false,
+        reason: "AI_CONSENT_MISSING",
+        kidMessage: AI_CONSENT_KID_MESSAGE,
       };
     }
 

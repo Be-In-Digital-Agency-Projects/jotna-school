@@ -999,13 +999,45 @@ commandes, les seuils, et ce qu'il faut conclure de chaque résultat.
       que le travail de l'enfant précédent n'est pas détruit. Si ce test
       échoue, D18 est violée et il faut s'arrêter
 
-### Phase 6 — Publication
+### Phase 6 — Publication — **COMMENCÉE**
 
 - [ ] 6.1 Identité : icône, écran de lancement, nom, identifiant de paquet
 - [ ] 6.2 Politique de confidentialité + formulaire *Data safety* — **en disant
       que des données d’exercice résident sur l’appareil** (§3)
 - [ ] 6.3 Liste de contrôle Kids Category / Designed for Families (D9)
-- [ ] 6.4 Consentement IA parental : le brancher (D9, point 1)
+- [x] 6.4 **FAIT — et c'était le défaut le plus ancien de ce chantier.**
+      `profiles.aiDataConsentGranted` et `aiDataConsentGrantedAt` étaient au
+      schéma depuis le début, avec le commentaire « Loi 2008-12, Sénégal »,
+      et **lus par personne**. Pendant ce temps trois chemins envoyaient le
+      travail d'enfants de huit ans chez OpenAI sans qu'aucune garde ne se
+      pose la question. Ce n'est pas un défaut du mobile : il vit sur le web
+      depuis le premier jour, et la garde vivant dans `convex/`, la corriger
+      la corrige partout.
+      **Trois chemins sur quatre sont gardés**, et le quatrième ne l'est pas
+      pour une raison vérifiée ligne à ligne : `explainMistake.explainExercise`
+      n'envoie que le type, l'énoncé et le corrigé — aucune donnée personnelle
+      ne part, et le garder coûterait une fonction pédagogique pour rien.
+      **Modèle d'autorité, décidé par le propriétaire :** l'école déclare
+      détenir l'autorisation des parents, tout parent rattaché peut refuser, et
+      son refus l'emporte — immédiatement, sans délai de grâce. Un « non » qui
+      attendrait trente jours n'en serait pas un, et c'est le test qui
+      verrouille l'ordre des règles.
+      **Délai de grâce de 30 jours**, jusqu'au 26 octobre 2026, écrit en clair
+      comme une DATE et non comme « trente jours après le déploiement » — un
+      délai relatif repartirait à zéro à chaque redéploiement et l'échéance ne
+      tomberait jamais. Un test échoue si quelqu'un le remplace par un calcul.
+      **Le mobile n'a rien eu à changer** : les trois refus empruntent les
+      formes de retour existantes (`{isCorrect:false}`, `{explanation}`,
+      `{ok:false, kidMessage}`), que les écrans affichent déjà. Le pari des
+      rappels de la phase 2 paie une troisième fois.
+      **Deux surfaces posées** : la déclaration sur l'écran d'administration de
+      l'école — et non chez le directeur, qui n'a aucune surface à lui, ce que
+      la mutation dit en toutes lettres plutôt que de faire semblant — et le
+      levier à trois états dans les réglages du parent, hors du formulaire
+      pour qu'un refus prenne effet au clic.
+      **Une trace morte retirée** : `app/(auth)/register/page.tsx` portait un
+      état `aiConsent` jamais affiché, jamais lu, jamais envoyé — le vestige
+      d'une première tentative abandonnée
 - [ ] 6.5 Canal APK interne pour les écoles pilotes (D8)
 - [ ] 6.6 Fiches de boutique en français, captures d'écran
 - [ ] 6.7 Mises à jour à chaud (`expo-updates`) : correctifs seulement ; **une

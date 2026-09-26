@@ -580,6 +580,19 @@ export default defineSchema({
     contactEmail: v.string(),
     contactPhone: v.optional(v.string()),
     ninea: v.optional(v.string()), // identifiant fiscal SN, requis sur la facture
+    // ─────────────────────────────────────────────────────────────────────
+    // CONSENTEMENT IA — l'école déclare détenir l'autorisation des parents.
+    //
+    // Décision du propriétaire (26/09/2026) : l'école enrôle l'enfant et signe
+    // le contrat, donc c'est elle qui déclare ; tout parent rattaché peut
+    // refuser pour son enfant, et son refus l'emporte. La règle complète, son
+    // ordre et son délai de grâce sont dans `convex/aiConsentRules.ts`.
+    //
+    // ON GARDE QUI A DÉCLARÉ, ET QUAND. Une déclaration anonyme ne vaudrait
+    // rien le jour où quelqu'un demande des comptes — ni devant la Loi 2008-12,
+    // ni devant une revue Kids Category.
+    aiConsentDeclaredAt: v.optional(v.number()),
+    aiConsentDeclaredBy: v.optional(v.id("profiles")),
     status: v.union(
       v.literal("prospect"),
       v.literal("active"),

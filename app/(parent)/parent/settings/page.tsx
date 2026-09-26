@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import Link from "next/link";
-import { Settings, Save, User, UserCircle } from "lucide-react";
+import { Settings, Save, Sparkles, User, UserCircle } from "lucide-react";
 import { refusalMessage } from "@/lib/refusalMessage";
 
 export default function ParentSettingsPage() {
@@ -164,6 +164,123 @@ export default function ParentSettingsPage() {
           )}
         </div>
       </form>
+
+      <AiConsentSection />
     </div>
+  );
+}
+
+/**
+ * LE LEVIER DU PARENT SUR LE TRAITEMENT IA — tâche 6.4.
+ *
+ * ─────────────────────────────────────────────────────────────────────────
+ * IL EST HORS DU FORMULAIRE, et ce n'est pas une question de mise en page.
+ * Le formulaire ci-dessus s'enregistre sur « Enregistrer » ; un refus de
+ * consentement, lui, doit prendre effet à la seconde où le parent le clique.
+ * Un « non » qui attend qu'on pense à valider un formulaire n'en est pas un.
+ *
+ * ON AFFICHE LA DÉCISION COMPLÈTE, pas seulement l'avis du parent : c'est
+ * `decideAiConsent` côté serveur qui la rend, la même fonction que les trois
+ * chemins IA consultent. Le parent lit donc exactement ce qui se passe, et
+ * non une reconstitution qui pourrait en diverger.
+ *
+ * LE DÉLAI DE GRÂCE EST DIT, AVEC SA DATE. Sans cela, l'IA s'éteindrait un
+ * matin pour les enfants d'une école qui n'a pas déclaré, sans que personne
+ * ait vu venir l'échéance.
+ */
+function AiConsentSection() {
+  const children = useQuery(api.profiles.getChildrenAiConsent);
+  const setConsent = useMutation(api.profiles.setChildAiConsent);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  if (children === undefined || children.length === 0) return null;
+
+  return (
+    <section className="mt-6 space-y-4 rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+      <div>
+        <h2 className="flex items-center gap-2 font-semibold text-gray-900">
+          <Sparkles className="h-5 w-5 text-gray-400" />
+          Aide par intelligence artificielle
+        </h2>
+        <p className="mt-1 text-sm text-gray-600">
+          Pour expliquer une erreur ou proposer des exercices adaptés, nous
+          envoyons le travail de votre enfant à un prestataire d&apos;IA. Vous
+          pouvez l&apos;autoriser ou le refuser, enfant par enfant. Votre refus
+          s&apos;applique immédiatement.
+        </p>
+      </div>
+
+      <ul className="space-y-4">
+        {children.map((child) => (
+          <li
+            key={child.childId}
+            className="rounded-lg border border-gray-100 bg-gray-50 p-4"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="font-medium text-gray-900">{child.name}</span>
+              <span
+                className={
+                  child.allowed
+                    ? "rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800"
+                    : "rounded-full bg-gray-200 px-2.5 py-0.5 text-xs font-medium text-gray-700"
+                }
+              >
+                {child.allowed ? "Aide IA active" : "Aide IA désactivée"}
+              </span>
+            </div>
+
+            <p className="mt-1 text-xs text-gray-500">
+              {child.parentDecision === false
+                ? "Vous avez refusé."
+                : child.parentDecision === true
+                  ? "Vous avez autorisé."
+                  : child.schoolDeclaredAt !== null
+                    ? `Autorisé par ${child.schoolName ?? "l'école"}.`
+                    : child.onGrace
+                      ? `Aucune déclaration : l'aide IA s'arrêtera le ${new Date(child.graceEndsAt).toLocaleDateString("fr-FR")} si rien ne change.`
+                      : "Aucune déclaration : l'aide IA est arrêtée."}
+            </p>
+
+            <div className="mt-3 flex flex-wrap gap-2">
+              {(
+                [
+                  ["granted", "Autoriser"],
+                  ["unset", "M'en remettre à l'école"],
+                  ["refused", "Refuser"],
+                ] as const
+              ).map(([decision, label]) => {
+                const current =
+                  child.parentDecision === true
+                    ? "granted"
+                    : child.parentDecision === false
+                      ? "refused"
+                      : "unset";
+                const active = current === decision;
+                return (
+                  <button
+                    key={decision}
+                    type="button"
+                    disabled={busyId === child.childId || active}
+                    onClick={() => {
+                      setBusyId(child.childId);
+                      void setConsent({ childId: child.childId, decision })
+                        .catch(() => {})
+                        .finally(() => setBusyId(null));
+                    }}
+                    className={
+                      active
+                        ? "rounded-lg bg-teal-600 px-3 py-1.5 text-xs font-medium text-white"
+                        : "rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-100 disabled:opacity-50"
+                    }
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }

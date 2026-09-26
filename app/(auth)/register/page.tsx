@@ -18,7 +18,6 @@ export default function RegisterPage() {
   // ceux-là. Ce menu ne doit proposer que ce que le serveur accepte — sans quoi
   // l'écran promettrait un compte que l'inscription rejette.
   const [role, setRole] = useState<"parent" | "student">("parent");
-  const [aiConsent, setAiConsent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 

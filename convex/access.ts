@@ -15,6 +15,11 @@ import {
   type AccessInput,
   type AccessState,
 } from "./accessRules";
+import {
+  AI_CONSENT_GRACE_ENDS_AT,
+  decideAiConsent,
+  type AiConsentDecision,
+} from "./aiConsentRules";
 
 /**
  * L'abonnement d'une école que le paywall tient pour COURANT.
@@ -669,5 +674,70 @@ export const getAccessStateForProfile = internalQuery({
   args: { profileId: v.id("profiles") },
   handler: async (ctx, args): Promise<AccessState> => {
     return await checkAccess(ctx, await ctx.db.get(args.profileId));
+  },
+});
+
+// ===========================================================================
+// CONSENTEMENT IA — tâche 6.4
+//
+// Le résolveur vit ICI, à côté du paywall, pour deux raisons.
+//
+// D'ABORD PARCE QUE C'EST LA MÊME FORME DE QUESTION : « cet élève a-t-il le
+// droit que l'on fasse cela pour lui ? » Les trois actions IA appellent déjà
+// `getAccessStateForProfile` juste au-dessus ; poser la seconde question au
+// même endroit évite qu'un futur chemin n'en pose qu'une des deux.
+//
+// ENSUITE PARCE QU'UN NOUVEAU MODULE N'EST PAS TYPÉ TANT QUE
+// `_generated/api.d.ts` n'a pas été régénéré par `npx convex dev`, ce qui
+// demande un déploiement. Un nouvel EXPORT dans un module existant l'est
+// immédiatement — la même contrainte qui avait placé `syncOfflineJournal` dans
+// `palierAttempts.ts` en phase 3.
+//
+// LA RÈGLE, ELLE, N'EST PAS ICI : elle est pure dans `aiConsentRules.ts`, avec
+// ses quatorze tests. Ce qui suit ne fait que lui apporter les trois faits
+// dont elle a besoin.
+// ===========================================================================
+
+/**
+ * Le droit d'envoyer le travail de CET élève à l'IA.
+ *
+ * `internalQuery`, donc inatteignable depuis le réseau public, et sans danger
+ * à prendre un `profileId` en argument : elle n'évalue qu'un droit, n'autorise
+ * rien et n'expose aucune donnée — même raisonnement que
+ * `getAccessStateForProfile` ci-dessus.
+ *
+ * L'ÉLÈVE SANS ÉCOLE N'EST PAS UN OUBLI. Un enfant inscrit par un PARENT
+ * (`profiles.createChildAccount`) n'a pas d'inscription scolaire : aucune
+ * école ne peut déclarer pour lui, et il tombe donc sur la grâce puis sur le
+ * refus. C'est la bonne réponse — dans ce cas précis le parent est présent par
+ * construction, puisque c'est lui qui a créé le compte, et son accord
+ * explicite (`aiDataConsentGranted === true`) suffit à tout débloquer.
+ */
+export const getAiConsentForProfile = internalQuery({
+  args: { profileId: v.id("profiles") },
+  handler: async (ctx, args): Promise<AiConsentDecision> => {
+    const profile = await ctx.db.get(args.profileId);
+    if (!profile) {
+      // Un profil introuvable n'a rien consenti. On ne retombe pas sur la
+      // grâce : elle existe pour les écoles qui n'ont pas encore cliqué, pas
+      // pour un identifiant qui ne désigne personne.
+      return { allowed: false, reason: "no_declaration", onGrace: false };
+    }
+
+    // `checkAccess` résout déjà l'école de l'élève et la rend sur son chemin
+    // nominal ; la relire à la main dupliquerait la logique d'inscription et
+    // d'abonnement, avec le risque que les deux divergent.
+    const access = await checkAccess(ctx, profile);
+    const school =
+      access.ok === true
+        ? await ctx.db.get(access.schoolId as Id<"schools">)
+        : null;
+
+    return decideAiConsent({
+      parentDecision: profile.aiDataConsentGranted,
+      schoolDeclaredAt: school?.aiConsentDeclaredAt ?? null,
+      graceEndsAt: AI_CONSENT_GRACE_ENDS_AT,
+      now: Date.now(),
+    });
   },
 });

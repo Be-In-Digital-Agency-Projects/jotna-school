@@ -103,6 +103,30 @@ export const verifyShortAnswerWithAI = action({
       };
     } | null;
 
+
+    // ─────────────────────────────────────────────────────────────────────
+    // CONSENTEMENT IA (tâche 6.4) — ce chemin envoie LE TRAVAIL DE L'ENFANT.
+    //
+    // La garde se pose APRÈS le paywall et AVANT l'appel : refuser plus tard
+    // aurait déjà transmis la réponse de l'enfant, ce qui est exactement ce
+    // que le consentement existe pour empêcher.
+    //
+    // ON NE LÈVE PAS. Un enfant de huit ans ne doit pas lire une erreur parce
+    // que son école n'a pas cliqué sur une case. Le refus dégrade la fonction
+    // en silence — voir `aiConsentRules.ts` pour ce qu'il lui reste.
+    //
+    // ICI, LE REFUS EST UN NON-ÉVÉNEMENT, et c'est une propriété de D16 : ce
+    // rattrapage ne corrige que VERS LE HAUT. Rendre `isCorrect: false`, c'est
+    // laisser le verdict littéral tel qu'il est — l'enfant ne perd rien qu'il
+    // avait déjà gagné.
+    const consent = await ctx.runQuery(
+      internal.access.getAiConsentForProfile,
+      { profileId: callerProfile._id },
+    );
+    if (!consent.allowed) {
+      return { isCorrect: false, reason: "Consentement IA non accordé" };
+    }
+
     const data = (await ctx.runQuery(
       internal.attempts.getAttemptContextForVerification,
       { attemptId, studentId: callerProfile._id },

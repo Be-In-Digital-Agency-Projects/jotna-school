@@ -3,6 +3,7 @@
 import { v, ConvexError } from "convex/values";
 import { action } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { AI_CONSENT_KID_MESSAGE } from "./aiConsentRules";
 import { getAuthUserId } from "@convex-dev/auth/server";
 
 /** Message servi quand l'IA ne peut pas expliquer. Jamais de page vide. */
@@ -108,6 +109,28 @@ ${wrongAnswers.map((a, i) => `${i + 1}. "${a}"`).join("\n") || "(aucune réponse
 - Termine par un encouragement positif
 
 N'utilise pas de jargon technique. Écris comme un professeur patient qui parle directement à l'enfant. Tutoie l'enfant.`;
+
+    // ─────────────────────────────────────────────────────────────────────
+    // CONSENTEMENT IA (tâche 6.4) — l'invite construite juste au-dessus porte
+    // LES RÉPONSES FAUSSES DE L'ENFANT, une par ligne. C'est la donnée la plus
+    // personnelle que cette application envoie à un tiers.
+    //
+    // La garde se pose APRÈS le paywall et AVANT l'appel : refuser plus tard
+    // aurait déjà transmis ces réponses.
+    //
+    // ON NE LÈVE PAS, et l'enfant garde ce qui ne dépend pas de l'IA : le
+    // corrigé part quand même, parce qu'il n'est pas SA donnée — c'est le
+    // contenu de l'exercice, et il l'a demandé pour comprendre.
+    const consent = await ctx.runQuery(
+      internal.access.getAiConsentForProfile,
+      { profileId: callerProfile._id },
+    );
+    if (!consent.allowed) {
+      return {
+        explanation: AI_CONSENT_KID_MESSAGE,
+        correctAnswer: data.exercise.answerKey,
+      };
+    }
 
     // `userId` porte le profil de L'APPELANT, pas `args.studentId` : c'est son
     // droit qu'on a vérifié plus haut, et c'est lui qui déclenche la dépense.

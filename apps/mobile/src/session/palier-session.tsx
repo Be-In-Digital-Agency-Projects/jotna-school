@@ -9,6 +9,7 @@ import { isAccessDenied } from "@lib/accessCopy";
 import { kidMessages } from "@lib/kidCopy";
 import { ExercisePlayer, type VerifyOutcome } from "@/exercises/exercise-player";
 import { releaseSounds } from "@/feedback/sounds";
+import { OfflineBanner } from "@/offline/offline-banner";
 import { useNetworkOnline } from "@/offline/network";
 import { makeOfflineEngine } from "@/offline/offline-engine";
 import { flushJournal } from "@/offline/sync";
@@ -354,16 +355,21 @@ export function PalierSession({
   const current = exercises[Math.min(index, exercises.length - 1)];
 
   return (
-    <ExercisePlayer
-      key={current._id}
-      exercise={current}
-      position={{ index, total: exercises.length }}
-      onVerify={onVerify}
-      onRequestHint={onRequestHint}
-      onExplain={onExplain}
-      onNext={onNext}
-      soundEnabled={soundEnabled}
-    />
+    <View style={styles.flex}>
+      {/* L'enfant doit savoir POURQUOI l'explication et « j'en veux encore »
+          ne sont pas là (D19). */}
+      {engine !== null && <OfflineBanner />}
+      <ExercisePlayer
+        key={current._id}
+        exercise={current}
+        position={{ index, total: exercises.length }}
+        onVerify={onVerify}
+        onRequestHint={onRequestHint}
+        onExplain={onExplain}
+        onNext={onNext}
+        soundEnabled={soundEnabled}
+      />
+    </View>
   );
 }
 
@@ -402,6 +408,7 @@ function Blocked({ message, onLeave }: { message: string; onLeave: () => void })
 }
 
 const styles = StyleSheet.create({
+  flex: { flex: 1, backgroundColor: colors.backgroundTop },
   screen: { flex: 1, backgroundColor: colors.backgroundTop },
   center: {
     flex: 1,

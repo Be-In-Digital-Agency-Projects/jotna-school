@@ -26,7 +26,7 @@ import {
   clampTimeSpent,
   lowerBound,
 } from "./paliers/journal";
-import { internal } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { checkAccess, requireAccess } from "./access";
 
 // ===========================================================================
@@ -449,7 +449,7 @@ export const syncOfflineJournal = mutation({
       const submittedAt = clampSubmittedAt(entry.submittedAt, lower, now);
       const timeSpentMs = clampTimeSpent(entry.timeSpentMs);
 
-      await ctx.db.insert("attempts", {
+      const attemptId = await ctx.db.insert("attempts", {
         studentId: profile._id,
         exerciseId: entry.exerciseId,
         submittedAnswer: entry.submittedAnswer,
@@ -462,6 +462,30 @@ export const syncOfflineJournal = mutation({
         clientAttemptId: entry.clientAttemptId,
       });
       inserted++;
+
+      // --- LE RATTRAPAGE DE LA RÉPONSE COURTE (D16) ---------------------
+      //
+      // Hors ligne, `verifyShortAnswer` est LITTÉRAL : l'enfant qui écrit
+      // « la ville de Dakar » quand on attend « Dakar » est compté faux. En
+      // ligne, le lecteur web rattrape en faisant relire la réponse par l'IA ;
+      // hors ligne, personne ne pouvait le faire. C'est ici que ça se rattrape.
+      //
+      // VERS LE HAUT SEULEMENT. `verifyShortAnswerWithAI` ne bascule que
+      // `false` → `true` : il ne reprend jamais une bonne réponse. Une coche
+      // verte montrée à un enfant ne se retire pas.
+      //
+      // ON PLANIFIE, ON N'ATTEND PAS. Une mutation est une transaction : y
+      // attendre un appel réseau vers OpenAI la tiendrait ouverte pendant des
+      // secondes. Le `scheduler` la referme et laisse l'action travailler à
+      // côté ; si le plafond de dépense IA la refuse, le verdict littéral
+      // reste — c'est le repli documenté d'`attemptsVerify`.
+      if (!isHint && !isCorrect && exercise.type === "short-answer") {
+        await ctx.scheduler.runAfter(
+          0,
+          api.attemptsVerify.verifyShortAnswerWithAI,
+          { attemptId },
+        );
+      }
     }
 
     return { inserted, skipped, divergences };

@@ -1,9 +1,12 @@
 import { useQuery } from "convex/react";
-import { useRouter } from "expo-router";
+import { useCallback, useState } from "react";
+import { useFocusEffect, useRouter } from "expo-router";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api } from "@convex/_generated/api";
+import { useNetworkOnline } from "@/offline/network";
+import { pendingCount } from "@/offline/store";
 import { useChangeStudent } from "@/session/change-student";
 import { MIN_TOUCH_TARGET, colors, fontSize, radius, spacing } from "@/theme/tokens";
 import { BigButton } from "@/ui/big-button";
@@ -26,6 +29,28 @@ export function StudentHome() {
   const profile = useQuery(api.profiles.getCurrentProfile, {});
   const subjects = useQuery(api.subjects.list, {});
   const { changeStudent, busy } = useChangeStudent();
+  const online = useNetworkOnline();
+
+  // CE QUI ATTEND ENCORE D'ÊTRE ENVOYÉ.
+  //
+  // On relit à chaque fois que l'écran revient au premier plan — donc au
+  // retour d'une séance, au moment précis où le compte vient de changer.
+  // Un abonnement permanent coûterait une requête SQLite en boucle pour une
+  // information qui ne bouge qu'à ces instants-là.
+  const [pending, setPending] = useState(0);
+  useFocusEffect(
+    useCallback(() => {
+      let alive = true;
+      void pendingCount()
+        .then((n) => {
+          if (alive) setPending(n);
+        })
+        .catch(() => {});
+      return () => {
+        alive = false;
+      };
+    }, []),
+  );
 
   return (
     <ScrollView
@@ -39,6 +64,16 @@ export function StudentHome() {
         {profile ? `Bonjour ${profile.name} !` : "Bonjour !"}
       </Text>
       <Text style={styles.sub}>Choisis une matière.</Text>
+
+      {pending > 0 && (
+        <View style={styles.pending}>
+          <Text style={styles.pendingText}>
+            {online
+              ? `On envoie ${pending} réponse${pending > 1 ? "s" : ""} que tu as faite${pending > 1 ? "s" : ""} sans réseau… 📤`
+              : `${pending} réponse${pending > 1 ? "s" : ""} t'attend${pending > 1 ? "ent" : ""} bien au chaud 💾 Elles partiront dès qu'il y aura du réseau.`}
+          </Text>
+        </View>
+      )}
 
       {subjects === undefined && <Text style={styles.muted}>Chargement…</Text>}
       {subjects !== undefined && subjects.length === 0 && (
@@ -85,6 +120,12 @@ const styles = StyleSheet.create({
   hello: { fontSize: fontSize.display, fontWeight: "800", color: colors.text },
   sub: { fontSize: fontSize.label, color: colors.textMuted, marginTop: -spacing.sm },
   muted: { fontSize: fontSize.body, color: colors.textMuted },
+  pending: {
+    backgroundColor: "#fffbeb",
+    borderRadius: radius.md,
+    padding: spacing.md,
+  },
+  pendingText: { fontSize: fontSize.body, lineHeight: 22, color: colors.text },
   card: {
     minHeight: MIN_TOUCH_TARGET + 16,
     flexDirection: "row",

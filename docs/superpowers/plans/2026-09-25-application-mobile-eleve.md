@@ -751,7 +751,13 @@ typecheck et le paquet. Le vrai accueil (série, niveau, progression) reste 4.1.
       divergences consignées (D20.4). **Il ne CLÔT pas le palier** — voir §5,
       point 5 : `submitPalier` commence par `requireAccess`, et l'appeler tel
       quel rouvrirait le piège que D18 referme
-- [ ] 3.8 Rattrapage IA des réponses courtes, vers le haut seulement (D16)
+- [x] 3.8 **FAIT** — la synchronisation PLANIFIE `verifyShortAnswerWithAI`
+      pour chaque réponse courte qu'elle vient de compter fausse. Hors ligne,
+      `verifyShortAnswer` est LITTÉRAL : l'enfant qui écrit « la ville de
+      Dakar » quand on attend « Dakar » est compté faux, et personne ne pouvait
+      le rattraper. Vers le haut seulement, et **planifié, pas attendu** — une
+      mutation est une transaction, y attendre OpenAI la tiendrait ouverte
+      plusieurs secondes
 - [x] 3.9 **FAIT** — `syncOfflineJournal` n'appelle PAS `requireAccess`, et un
       commentaire de quinze lignes dit pourquoi, pour que personne ne l'ajoute
       « par cohérence » avec les cinq autres chemins. Le mur se tient sur
@@ -766,10 +772,22 @@ typecheck et le paquet. Le vrai accueil (série, niveau, progression) reste 4.1.
       pendant qu'on y joue en ligne : l'enfant n'a rien à demander, et une
       coupure en pleine séance ne l'arrête pas. Les **paliers suivants**, la
       préférence Wi-Fi et le plafond de stockage restent à faire
-- [ ] 3.12 Écrans : « je prépare pour plus tard », « pas de réseau, tu peux
-      quand même jouer », « ton coffre t'attend » (D19)
-- [ ] 3.13 Tests : coupure en plein palier, synchronisation coupée puis reprise,
-      double synchronisation, horloge avancée, abonnement expiré pendant le jeu
+- [~] 3.12 **PARTIEL** — deux écrans sur trois. Une **bannière** pendant la
+      séance dit à l'enfant qu'il joue sans réseau et que ses réponses sont
+      gardées : sans elle, l'explication et « j'en veux encore » disparaissent
+      sans un mot, et à huit ans c'est l'application qui est cassée, pas le
+      réseau. Un **indicateur** sur l'accueil compte ce qui attend d'être
+      envoyé, relu au retour au premier plan. Restent « je prépare pour plus
+      tard » (téléchargement délibéré) et « ton coffre t'attend » (les badges
+      décernés à la synchronisation)
+- [~] 3.13 **PARTIEL, ET LA LIMITE EST STRUCTURELLE.** Ce qui est PUR est
+      testé : 27 tests croisés appareil/serveur (3.1) et 12 sur le bornage
+      d'horloge (D17). Les scénarios restants — double synchronisation,
+      coupure en plein palier, abonnement expiré pendant le jeu — portent sur
+      des MUTATIONS et une base SQLite, et **le dépôt n'a pas `convex-test`**
+      (constat déjà posé dans `convex/pricing.ts`). Les éprouver demande soit
+      d'installer `convex-test`, soit un appareil et un déploiement de
+      développement. À décider ; ce n'est pas un oubli
 
 ### Phase 4 — Autour de l'exercice
 

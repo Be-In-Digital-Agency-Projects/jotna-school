@@ -605,15 +605,42 @@ se décide dans un chantier technique — voir §5.
       l'écran et se décale dès que la police grandit)
 - [x] 2.7 Ranger dans les zones — **tap sur l'étiquette, tap sur la case**
       (D24). La chaîne soumise est rigoureusement celle du glissé
-- [ ] 2.8 Indices + explication pas à pas (en ligne)
+- [x] 2.8 Indices — un par un, par `requestHint`, avec l'avertissement sur les
+      étoiles AVANT que l'enfant les demande. **L'explication pas à pas reste à
+      faire** : `attemptsExplain.generateExplanation` n'est pas encore appelée
 - [ ] 2.9 Retours : sons (`expo-audio`), haptique, confettis, Pio
-- [ ] 2.10 Fin de palier : étoiles, « j'en veux encore », plafond de régénération
+- [x] 2.10 Fin de palier : étoiles, « j'en veux encore », plafond de
+      régénération — **tous les chiffres viennent de `submitPalier`**, aucun
+      n'est recalculé sur l'appareil
 - [x] 2.11 **Tests de conformité par type** — **REMONTÉ EN TÊTE DE PHASE**, et
       c'est ce qui la rend sûre : 22 tests d'aller-retour couvrent les CINQ
       types, y compris ceux dont le composant n'existe pas encore. Un composant
       écrit ensuite n'a plus qu'à appeler l'encodeur déjà éprouvé
       (`convex/__tests__/answers.test.ts`)
-- [ ] 2.12 Parcours complet automatisé (Maestro) : code → palier → 10 exos → fin
+- [ ] 2.12 Parcours complet automatisé (Maestro) : code → palier → 10 exos →
+      fin. **Exige un appareil ou un émulateur**, donc invérifiable depuis le
+      conteneur : à écrire là où il peut tourner
+
+**LA SÉANCE EST BRANCHÉE, ET C'EST CE QUI REND LE RESTE RÉEL.**
+`src/session/palier-session.tsx` enchaîne `getBucket` → `startPalierAttempt` →
+`getExercisesForPalier` → lecteur → `submitPalier` → écran de fin. Trois points
+qui viennent du serveur et non du goût :
+
+- **l'amorçage est verrouillé par un `ref`** : `getBucket` peut déclencher une
+  génération IA, longue et facturée. Un effet qui repartirait à chaque rendu en
+  lancerait plusieurs pour un seul enfant ;
+- **la tentative se crée AVANT les exercices**, parce que le mélange des
+  colonnes est semé avec son identifiant (Décision 75). C'est exactement ce que
+  la phase 3 exigera du téléchargement hors-ligne (D14), pour la même raison ;
+- **le compilateur a trouvé un garde** : `getBucket` n'accepte que les classes
+  primaires VISIBLES, or un topic peut porter une classe de collège ou aucune.
+  Le garde est posé à l'exécution plutôt que le type forcé, sans quoi l'appel
+  lèverait côté serveur et l'enfant lirait une erreur de validateur.
+
+**Une navigation MINIMALE a été tirée de la phase 4** — matières, puis
+thématiques, puis palier — uniquement pour rendre le moteur essayable sur un
+appareil. Sans un chemin qui y mène, la phase 2 ne se vérifie que par le
+typecheck et le paquet. Le vrai accueil (série, niveau, progression) reste 4.1.
 
 ### Phase 3 — Le hors-ligne
 

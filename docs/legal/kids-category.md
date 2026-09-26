@@ -57,17 +57,33 @@ plugin refuse désormais de le personnaliser. L'entrée est retirée. Les écran
 gèrent déjà les encoches par `useSafeAreaInsets`, et la barre d'onglets calcule
 la sienne depuis la tâche 5.4.
 
-### 3. Cinq liens légaux morts sur le site public — **partiellement corrigé**
+### 3. Six liens légaux morts sur le site public — **quatre corrigés**
 
 `components/landing/footer.tsx` annonce six pages légales. **Aucune n'existait.**
 Un relecteur de boutique qui clique « Politique de confidentialité » depuis le
 site tombait sur un 404 — et c'est la première chose qu'il vérifie.
 
-`/legal/confidentialite` existe désormais. **Les cinq autres sont toujours
-mortes** : `mentions`, `cgu`, `cookies`, `mineurs`, `accessibilite`. Elles
-demandent des informations d'entreprise (forme juridique, adresse, NINEA) et
-une relecture juridique. Elles ne s'inventent pas, et je ne les ai pas
-inventées.
+Quatre existent désormais, et toutes les quatre sont écrites à partir de faits
+vérifiés dans le dépôt, pas d'un gabarit :
+
+| Page | Ce qui la rendait écrivable |
+|---|---|
+| `/legal/confidentialite` | l'inventaire des données, lu au schéma et aux trois chemins IA |
+| `/legal/mineurs` | l'audit ci-dessus — c'est la page qu'un parent cherche après la politique |
+| `/legal/cookies` | l'inventaire réel : **un seul cookie** (`sidebar_state`, 7 jours), le jeton en `localStorage`, aucun traceur |
+| `/legal/accessibilite` | la passe de la tâche 5.4 — et elle dit aussi ce qui N'A PAS été audité |
+
+**Deux restent mortes, et elles le resteront tant que le dépôt ne portera pas
+les informations nécessaires** : `mentions` et `cgu`. Elles demandent la forme
+juridique, l'adresse, le NINEA et une relecture juridique. Elles ne s'inventent
+pas, et je ne les ai pas inventées.
+
+> **Le cas des cookies méritait d'être vérifié plutôt que supposé.** On aurait
+> pu écrire une page générique sur les cookies « de mesure d'audience et de
+> personnalisation ». Le dépôt en a **un seul**, purement technique, et le
+> jeton de connexion n'en est même pas un — il vit dans le `localStorage`.
+> D'où l'absence de bandeau de consentement, qui est une conséquence et non un
+> oubli.
 
 `/legal/mineurs` est la plus proche du sujet de cette page : c'est elle qu'un
 parent cherchera après avoir lu la politique.
@@ -76,8 +92,8 @@ parent cherchera après avoir lu la politique.
 
 ## Ce qui reste à faire avant de soumettre
 
-1. **Écrire les cinq pages légales manquantes** — elles demandent des données
-   d'entreprise que le dépôt ne contient pas.
+1. **Écrire les deux pages légales manquantes** — `mentions` et `cgu`. Elles
+   demandent des données d'entreprise que le dépôt ne contient pas.
 2. **Faire relire la politique de confidentialité par un conseil**, au regard
    de la Loi 2008-12 et des exigences d'Apple et de Google. Le document décrit
    fidèlement le logiciel ; il ne prétend pas être un avis juridique.

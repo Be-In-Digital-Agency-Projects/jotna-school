@@ -1079,9 +1079,17 @@ commandes, les seuils, et ce qu'il faut conclure de chaque résultat.
       **aucun analytics nulle part** (zéro occurrence dans tout le dépôt) et
       **aucun lien sortant dans l'application mobile**, donc aucune barrière
       parentale à construire — il n'y a rien à barrer.
-      **Cinq liens légaux du pied de page restent morts** (`mentions`, `cgu`,
-      `cookies`, `mineurs`, `accessibilite`) : ils demandent des informations
-      d'entreprise et une relecture juridique, et ne s'inventent pas
+      **Quatre des six liens légaux du pied de page sont désormais vivants** :
+      `confidentialite`, `mineurs`, `cookies`, `accessibilite` — toutes
+      écrites à partir de faits vérifiés dans le dépôt. Celle des cookies
+      méritait la vérification : il y en a **un seul**, `sidebar_state`,
+      purement technique, et le jeton de connexion n'en est même pas un
+      (`localStorage`). D'où l'absence de bandeau, qui est une conséquence et
+      non un oubli. Celle de l'accessibilité dit aussi ce qui N'A PAS été
+      audité — le site web n'a rien reçu d'équivalent à la tâche 5.4.
+      **Deux restent mortes** : `mentions` et `cgu`. Elles demandent la forme
+      juridique, l'adresse, le NINEA et une relecture juridique. Elles ne
+      s'inventent pas
 - [x] 6.4 **FAIT — et c'était le défaut le plus ancien de ce chantier.**
       `profiles.aiDataConsentGranted` et `aiDataConsentGrantedAt` étaient au
       schéma depuis le début, avec le commentaire « Loi 2008-12, Sénégal »,

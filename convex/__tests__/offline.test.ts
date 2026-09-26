@@ -10,6 +10,7 @@ import {
   verifyAnswer,
   type ExerciseType,
 } from "../paliers/answers";
+import { saltFor, sha256Hex } from "../paliers/digest";
 import { buildDigests, verifyOffline } from "../paliers/offline";
 
 /**
@@ -308,5 +309,46 @@ describe("le sel et le type isolent les empreintes", () => {
         digest,
       ),
     ).toBe(false);
+  });
+});
+
+describe("l'empreinte RÉELLE du serveur", () => {
+  it("sha256Hex accorde l'appareil et le serveur, comme celle de Node", async () => {
+    // Les tests ci-dessus injectent le hachage de Node. Celui-ci éprouve la
+    // fonction que le serveur emploie VRAIMENT — `crypto.subtle`, disponible
+    // dans l'exécution Convex comme dans l'environnement de test.
+    const payload = {
+      pairs: [
+        { left: "chat", right: "mammifère" },
+        { left: "aigle", right: "oiseau" },
+      ],
+    };
+    const salt = saltFor("attempt_abc", "exo_123");
+    const digests = await buildDigests("match", payload, salt, sha256Hex);
+
+    const juste = await verifyOffline(
+      "match",
+      { left: ["chat", "aigle"], right: ["oiseau", "mammifère"] },
+      encodeMatchAnswer([
+        { left: "chat", right: "mammifère" },
+        { left: "aigle", right: "oiseau" },
+      ]),
+      digests,
+      salt,
+      sha256Hex,
+    );
+    expect(juste).toBe(true);
+  });
+
+  it("rend de l'hexadécimal minuscule — c'est le contrat entre les deux côtés", async () => {
+    const d = await sha256Hex("peu importe");
+    expect(d).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("le sel dérivé est unique par couple (tentative, exercice)", async () => {
+    expect(saltFor("a", "x")).not.toBe(saltFor("a", "y"));
+    expect(saltFor("a", "x")).not.toBe(saltFor("b", "x"));
+    // Et STABLE : une mutation rejouée doit livrer les mêmes empreintes.
+    expect(saltFor("a", "x")).toBe(saltFor("a", "x"));
   });
 });

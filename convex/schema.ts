@@ -167,6 +167,23 @@ export default defineSchema({
     submittedAt: v.number(),
     gradedScore: v.optional(v.number()), // 0..10 per scoring.computeExerciseScore
     palierAttemptId: v.optional(v.id("palierAttempts")),
+
+    // ----------------------------------------------------------------------
+    // Identifiant tiré par le CLIENT, pour le hors-ligne (plan mobile, D15).
+    //
+    // POURQUOI IL EXISTE. Une synchronisation coupée puis reprise rejouerait
+    // les mêmes réponses. Sans clé d'idempotence, les tentatives DOUBLERAIENT
+    // — et `computeExerciseScore` note selon le RANG du premier succès : une
+    // bonne réponse du premier coup rejouée deux fois deviendrait une bonne
+    // réponse au deuxième essai, donc 7 au lieu de 10. L'enfant perdrait des
+    // points pour une coupure réseau.
+    //
+    // OPTIONNEL, ET IL LE RESTERA. Le chemin EN LIGNE ne le pose pas : ces
+    // lignes-là n'ont pas besoin d'être dédupliquées, la mutation ne s'exécute
+    // qu'une fois. Un champ facultatif n'invalide par ailleurs aucun document
+    // déjà écrit — l'ajout est purement additif.
+    // ----------------------------------------------------------------------
+    clientAttemptId: v.optional(v.string()),
   })
     .index("by_studentId_exerciseId", ["studentId", "exerciseId"])
     .index("by_studentId", ["studentId"])
@@ -180,7 +197,11 @@ export default defineSchema({
     // pouvait se poser qu'en balayant la table, ce que le code faisait — mal.
     .index("by_exerciseId", ["exerciseId"])
     .index("by_palierAttemptId", ["palierAttemptId"])
-    .index("by_palierAttempt_exercise", ["palierAttemptId", "exerciseId"]),
+    .index("by_palierAttempt_exercise", ["palierAttemptId", "exerciseId"])
+    // « Cette ligne du journal a-t-elle déjà été enregistrée ? » — la seule
+    // question que la synchronisation pose, et elle doit coûter une lecture
+    // d'index, pas un balayage : la table grandit avec l'usage ÉLÈVE.
+    .index("by_clientAttemptId", ["clientAttemptId"]),
 
   // ---------------------------------------------------------------------------
   // studentTopicProgress

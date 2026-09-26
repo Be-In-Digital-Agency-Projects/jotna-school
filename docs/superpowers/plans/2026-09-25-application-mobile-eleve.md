@@ -706,18 +706,41 @@ typecheck et le paquet. Le vrai accueil (série, niveau, progression) reste 4.1.
       **et sur les deux laxismes**. C'est ce corpus qui a révélé que le schéma
       d'empreintes de D11 ne pouvait pas fonctionner tel qu'écrit — D11 est
       corrigée en conséquence
-- [ ] 3.2 Construction du lot côté serveur : `startPalierAttempt` (D14), payload
-      assaini + `verifier { salt, digests }` (D11) + échéance d'accès (D18)
+- [x] 3.2 **FAIT** — `api.paliers.index.getOfflineBundle`, une REQUÊTE posée
+      juste à côté de `getExercisesForPalier` pour que les deux ne dérivent
+      pas. Elle prend un `palierAttemptId` : l'appareil appelle
+      `startPalierAttempt` d'abord (D14), ce qui garde toute la garde de
+      progression sans la dupliquer. Le lot ajoute `hints`, `verifier` et
+      `accessValidUntil` — rien d'autre, et le corrigé ne descend toujours pas.
+      Le SEL est DÉRIVÉ de `(tentative, exercice)` plutôt que tiré : une
+      mutation Convex peut être rejouée, et un sel tiré devrait être persisté
+      pour que le rejeu ne change pas des empreintes déjà livrées
 - [ ] 3.3 Base locale (`expo-sqlite`) : lots téléchargés + journal d'`attempts`
 - [ ] 3.4 Le lecteur d'exercices sait rendre un verdict local (D12) — même
       composant, deux sources de vérité selon l'état du réseau
 - [ ] 3.5 Indices hors ligne : textes embarqués, comptage journalisé (D20.2)
-- [ ] 3.6 Schéma : `attempts.clientAttemptId` optionnel + index (D15)
-- [ ] 3.7 Mutation de synchronisation : insertion idempotente, re-vérification
-      serveur, bornage d'horloge (D17), puis logique `submitPalier` inchangée
+- [x] 3.6 **FAIT** — `attempts.clientAttemptId` optionnel + index
+      `by_clientAttemptId`. Sans clé d'idempotence, une synchronisation coupée
+      puis reprise DOUBLERAIT les tentatives, et `computeExerciseScore` note
+      selon le RANG du premier succès : une bonne réponse du premier coup
+      rejouée deviendrait 7 au lieu de 10. L'enfant perdrait des points pour
+      une coupure réseau
+- [~] 3.7 **PARTIEL** — `api.palierSync.syncOfflineJournal` enregistre :
+      idempotent, verdict RECALCULÉ côté serveur (D12), horloge bornée (D17),
+      divergences consignées (D20.4). **Il ne CLÔT pas le palier** — voir §5,
+      point 5 : `submitPalier` commence par `requireAccess`, et l'appeler tel
+      quel rouvrirait le piège que D18 referme
 - [ ] 3.8 Rattrapage IA des réponses courtes, vers le haut seulement (D16)
-- [ ] 3.9 Enregistrer même si l'abonnement a expiré (D18)
-- [ ] 3.10 Journaliser les divergences verdict local / verdict serveur (D20.4)
+- [x] 3.9 **FAIT** — `syncOfflineJournal` n'appelle PAS `requireAccess`, et un
+      commentaire de quinze lignes dit pourquoi, pour que personne ne l'ajoute
+      « par cohérence » avec les cinq autres chemins. Le mur se tient sur
+      `getOfflineBundle`, qui refuse d'OUVRIR un lot quand l'accès est fermé
+- [x] 3.10 **FAIT** — une divergence entre ce que l'appareil a montré et ce que
+      le serveur relit est comptée et journalisée (`console.warn` structuré),
+      **sans jamais retomber sur l'enfant** : un écart signale un trafiquage OU
+      un défaut de canonicalisation, et le second est infiniment plus probable.
+      Une table dédiée viendra si le signal se révèle utile ; un journal suffit
+      pour le mesurer d'abord
 - [ ] 3.11 Politique de téléchargement : palier courant + 2 suivants par
       matière, en Wi-Fi de préférence, TTL aligné sur `paliers.expiresAt`
 - [ ] 3.12 Écrans : « je prépare pour plus tard », « pas de réseau, tu peux
@@ -769,7 +792,20 @@ Le hors-ligne et le périmètre élève seul sont tranchés. Restent :
 3. **Resserrer `verifyMatch` et `verifyDragDrop`** (D21) : défaut préexistant,
    indépendant du mobile. À corriger avant la phase 3 si on le corrige, pour
    n'écrire la forme canonique qu'une fois.
-4. **Les enfants inscrits par un PARENT, pas par une école.**
+5. **Qui CLÔT un palier joué hors ligne quand l'abonnement a expiré ?**
+   `syncOfflineJournal` enregistre les réponses sans condition d'accès (D18),
+   mais `submitPalier` — qui calcule les étoiles, valide le palier et décerne
+   les badges — commence par `requireAccess`. Un enfant dont l'école a laissé
+   filer l'abonnement pendant qu'il jouait verrait donc son travail ENREGISTRÉ
+   et jamais NOTÉ : son palier resterait `in_progress` pour toujours.
+   **Ma recommandation :** clore un palier que l'enfant a réellement terminé
+   relève de l'ENREGISTREMENT, pas de l'OUVERTURE — le même raisonnement que
+   D18. Cela demande de séparer, dans `submitPalier`, le contrôle d'accès du
+   calcul : la mutation garderait son `requireAccess`, et la synchronisation
+   appellerait le calcul seul. C'est un remaniement d'une fonction EN SERVICE,
+   donc à faire les yeux ouverts plutôt qu'en passant.
+
+6. **Les enfants inscrits par un PARENT, pas par une école.**
    `profiles.createChildAccount` leur donne une adresse électronique, pas un
    code ; le pavé de la phase 1 ne sait pas les faire entrer. Leur ouvrir une
    seconde voie de connexion, réserver le mobile aux élèves scolaires, ou leur

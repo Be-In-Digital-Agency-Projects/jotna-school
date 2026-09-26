@@ -1047,9 +1047,41 @@ commandes, les seuils, et ce qu'il faut conclure de chaque résultat.
       **Ce qui manque** : `expo-updates` et son `updates.url`, qui demandent un
       projet EAS et son identifiant. On ne les invente pas — une URL de mise à
       jour fausse est pire que pas de mise à jour du tout
-- [ ] 6.2 Politique de confidentialité + formulaire *Data safety* — **en disant
-      que des données d’exercice résident sur l’appareil** (§3)
-- [ ] 6.3 Liste de contrôle Kids Category / Designed for Families (D9)
+- [x] 6.2 **FAIT** — la politique est une PAGE PUBLIQUE, `/legal/confidentialite`,
+      parce qu'Apple et Google exigent une URL atteignable sans compte et
+      qu'un document rangé dans `docs/` ne se soumet pas.
+      **Son chemin n'a pas été choisi, il était imposé** :
+      `components/landing/footer.tsx` pointait vers `/legal/confidentialite`
+      depuis le premier jour — vers une route inexistante. Le pied de page du
+      site annonçait donc une politique et rendait un 404, ce qu'un relecteur
+      de boutique vérifie en premier.
+      Chaque phrase est vérifiée dans le code, pas recopiée d'un modèle : une
+      politique générique promet ce que le produit ne fait pas et tait ce
+      qu'il fait. Les deux faits inhabituels sont dits en toutes lettres — un
+      élève scolaire n'a **ni adresse, ni téléphone, ni photo** (son
+      identifiant EST son code), et **des données d'exercice résident sur
+      l'appareil**, réponses non encore envoyées comprises.
+      Le formulaire *Data safety* et les étiquettes Apple sont préparés dans
+      `docs/legal/data-safety.md`, chaque réponse avec sa source
+- [x] 6.3 **FAIT — et deux trouvailles n'apparaissaient qu'en générant le
+      projet natif** (`docs/legal/kids-category.md`).
+      **`SYSTEM_ALERT_WINDOW` partait en production.** Le manifeste principal
+      demandait « dessiner par-dessus les autres applications » — la
+      permission des surcouches publicitaires et des rançongiciels — sur une
+      application pour enfants, et rien dans le code ne s'en sert : elle vient
+      du gabarit Expo. Deux permissions de stockage externe étaient dans le
+      même cas. `android.blockedPermissions` les retire du manifeste principal
+      tout en laissant la variante *debug* garder la sienne pour le menu de
+      développement. **La directive de retrait est vérifiée ; la fusion finale
+      se fait par Gradle, qui demande le SDK Android** — à confirmer sur le
+      premier APK, `aapt dump permissions`.
+      Le reste est en règle, et deux points le sont de façon inattendue :
+      **aucun analytics nulle part** (zéro occurrence dans tout le dépôt) et
+      **aucun lien sortant dans l'application mobile**, donc aucune barrière
+      parentale à construire — il n'y a rien à barrer.
+      **Cinq liens légaux du pied de page restent morts** (`mentions`, `cgu`,
+      `cookies`, `mineurs`, `accessibilite`) : ils demandent des informations
+      d'entreprise et une relecture juridique, et ne s'inventent pas
 - [x] 6.4 **FAIT — et c'était le défaut le plus ancien de ce chantier.**
       `profiles.aiDataConsentGranted` et `aiDataConsentGrantedAt` étaient au
       schéma depuis le début, avec le commentaire « Loi 2008-12, Sénégal »,
@@ -1083,8 +1115,27 @@ commandes, les seuils, et ce qu'il faut conclure de chaque résultat.
       **Une trace morte retirée** : `app/(auth)/register/page.tsx` portait un
       état `aiConsent` jamais affiché, jamais lu, jamais envoyé — le vestige
       d'une première tentative abandonnée
-- [ ] 6.5 Canal APK interne pour les écoles pilotes (D8)
-- [ ] 6.6 Fiches de boutique en français, captures d'écran
+- [~] 6.5 **CONFIGURÉ DEPUIS LA PHASE 0, BLOQUÉ SUR EAS.** Le profil `preview`
+      d'`eas.json` porte déjà `distribution: internal` et
+      `android.buildType: apk` : c'est exactement le canal voulu — un APK
+      installable à la main, sans passer par une boutique, pour les écoles
+      pilotes. La commande est `eas build --platform android --profile
+      preview`, et elle rend un lien d'installation.
+      **Ce qui manque n'est pas du code** : un compte et un projet EAS. Le même
+      blocage que 6.7, et pour la même raison qu'on ne le contourne pas — un
+      identifiant de projet inventé ne produit rien d'installable
+- [~] 6.6 **LE TEXTE EST PRÊT, LES CAPTURES SONT BLOQUÉES**
+      (`docs/legal/fiches-boutique.md`). Les deux fiches sont écrites et
+      tiennent dans les limites de caractères — vérifiées par comptage, pas à
+      l'estime. Elles mettent le HORS-LIGNE en avant, puisque c'est ce qui
+      distingue ce produit, et elles ne disent **ni prix, ni abonnement, ni
+      achat** : le modèle est B2B (D7), et une fiche qui parle d'abonnement
+      attire une revue sur des achats intégrés qui n'existent pas.
+      **Aucun écran n'a jamais été rendu** : les captures demandent un appareil
+      ou un simulateur, comme 5.3 et 5.5. Les cinq écrans à prendre sont listés
+      dans l'ordre où ils racontent le produit, avec la consigne de les prendre
+      sur un compte GARNI — une capture de démarrage à froid montre trois zéros
+      et ne vend rien
 
 
 ---

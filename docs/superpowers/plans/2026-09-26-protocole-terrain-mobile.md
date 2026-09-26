@@ -57,6 +57,32 @@ une URL Convex vivante et un code d'élève de test.
 Il sert à **regarder une mise en page et lire des libellés**, ce qui était
 jusqu'ici impossible. Il ne remplace aucune section de ce document.
 
+#### Voir TOUS les écrans : `JOTNA_PREVIEW=1`
+
+Sans dorsale, `SessionGate` ne laisse voir que le pavé de code. Sous
+`JOTNA_PREVIEW=1`, `metro.config.js` substitue `convex/react` et
+`@convex-dev/auth/react` par deux modules de `apps/mobile/preview/` qui
+rendent des données FIGÉES. Les écrans, eux, sont les vrais.
+
+```bash
+EXPO_PUBLIC_CONVEX_URL="https://placeholder.convex.cloud" JOTNA_PREVIEW=1 \
+  pnpm --filter @jotna/mobile preview:web
+```
+
+Accueil, grille des paliers, coffre à badges, profil et « je prépare pour plus
+tard » s'affichent alors. Le drapeau est à POSER, jamais à retirer : un
+`expo export --platform android` ordinaire ne voit rien de tout ceci, et
+`preview/` n'entre dans aucun paquet livré.
+
+**Les données sont typées `FunctionReturnType<typeof api.X>`**, donc le
+compilateur refuse un champ manquant ou mal nommé. Ce n'est pas du luxe : le
+premier jeu d'épreuve portait `nextPalierIndex: 0` pour une thématique neuve
+et des emojis dans `badge.icon`. Les deux sont impossibles — le serveur
+numérote les paliers de 1 à 10, et `badgeIcon` attend un nom d'icône Lucide —
+et l'aperçu montrait « Palier 0 à faire » et sept trophées identiques. **Une
+donnée d'aperçu fausse accuse le code à tort**, et c'est la seule façon dont
+cet outil peut nuire. Vérifier au serveur avant de crier au défaut.
+
 *(La ligne `config.resolver.assetExts.push("wasm")` de `metro.config.js` n'existe
 que pour cet export : `expo-sqlite` importe un `.wasm` dans sa variante web.
 Le paquet Android est identique avec et sans — vérifié, même taille, mêmes

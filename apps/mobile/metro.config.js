@@ -58,4 +58,36 @@ config.resolver.nodeModulesPaths = [
 // ---------------------------------------------------------------------------
 config.resolver.assetExts.push("wasm");
 
+// ---------------------------------------------------------------------------
+// L'APERÇU — substituer la couche de données, et RIEN D'AUTRE.
+//
+// Sans dorsale, `SessionGate` ne laisse voir que le pavé de code : tout le
+// reste de l'application est derrière l'authentification. Pour regarder les
+// écrans, on remplace `convex/react` et `@convex-dev/auth/react` par deux
+// modules de `preview/` qui rendent des données figées.
+//
+// L'AIGUILLAGE NE S'ARME QUE SOUS `JOTNA_PREVIEW=1`. Ce n'est pas un drapeau
+// qu'on pourrait oublier de retirer en production : c'est un drapeau qu'il
+// faut POSER pour l'aperçu. Un `expo export --platform android` ordinaire ne
+// voit rien de tout ceci, et `preview/` n'entre dans aucun paquet livré.
+//
+// Ce que l'aperçu vaut, et ce qu'il ne vaut pas : voir
+// `docs/superpowers/plans/2026-09-26-protocole-terrain-mobile.md`, §0.
+// ---------------------------------------------------------------------------
+if (process.env.JOTNA_PREVIEW === "1") {
+  const stubs = {
+    "convex/react": path.resolve(projectRoot, "preview/convex-react.tsx"),
+    "@convex-dev/auth/react": path.resolve(
+      projectRoot,
+      "preview/convex-auth-react.tsx",
+    ),
+  };
+  const upstream = config.resolver.resolveRequest;
+  config.resolver.resolveRequest = (context, moduleName, platform) => {
+    const stub = stubs[moduleName];
+    if (stub) return { type: "sourceFile", filePath: stub };
+    return (upstream ?? context.resolveRequest)(context, moduleName, platform);
+  };
+}
+
 module.exports = config;

@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import { defineConfig } from "vitest/config";
 
 /**
@@ -31,5 +33,27 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["src/**/*.test.ts"],
+  },
+  // ---------------------------------------------------------------------
+  // LES ALIAS DOIVENT SUIVRE CEUX DE `tsconfig.json`, ET ILS N'Y ÉTAIENT PAS.
+  //
+  // Le compilateur et Metro les connaissaient tous deux ; Vitest, non. Tant
+  // qu'aucun fichier TESTÉ n'empruntait `@lib/*`, personne ne pouvait le
+  // voir — puis `theme/subject-icon.ts` est devenu une ré-exportation de
+  // `@lib/subject-icons`, et ses sept tests ont cessé de s'importer. Un
+  // fichier en échec de COLLECTE échoue bien — la CI l'aurait vu — mais le
+  // TOTAL des tests passe de 63 à 56 sans que rien ne le dise, et c'est ce
+  // chiffre-là qu'on lit d'un coup d'œil pour se rassurer.
+  //
+  // Les trois alias sont posés, pas seulement celui qui manquait : un écart
+  // entre `tsconfig.json` et ce fichier est précisément ce qui vient de
+  // mordre.
+  // ---------------------------------------------------------------------
+  resolve: {
+    alias: {
+      "@lib": path.resolve(__dirname, "../../lib"),
+      "@convex": path.resolve(__dirname, "../../convex"),
+      "@": path.resolve(__dirname, "./src"),
+    },
   },
 });

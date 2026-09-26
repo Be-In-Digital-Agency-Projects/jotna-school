@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { Brand } from "@/components/landing/brand";
+import { CONTACT_EMAIL } from "@/lib/brand";
 
 /**
  * LA CHARPENTE COMMUNE DES PAGES LÉGALES — tâches 6.2 et 6.3.
@@ -123,4 +124,12 @@ export function Caveat({ children }: { children: React.ReactNode }) {
   );
 }
 
-export const CONTACT = "contact@jotna.school";
+/**
+ * L'adresse que les quatre pages affichent.
+ *
+ * ELLE ÉTAIT ÉCRITE EN DUR ICI, ET ELLE ÉTAIT FAUSSE : `jotna.school`,
+ * un domaine dont rien n'atteste la possession, pendant que le pied de
+ * page du site donnait `jotnaschool.com`. Une politique qui promet un
+ * droit de suppression et donne une adresse morte ne vaut rien.
+ */
+export const CONTACT = CONTACT_EMAIL;

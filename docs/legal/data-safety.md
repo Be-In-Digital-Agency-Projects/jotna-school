@@ -48,7 +48,7 @@ porte que l'énoncé et le corrigé de l'exercice, jamais la réponse de l'enfan
 | Question | Réponse | Pourquoi |
 |---|---|---|
 | Données chiffrées en transit ? | **Oui** | HTTPS/WSS vers Convex, pas de trafic en clair en production |
-| L'utilisateur peut-il demander la suppression ? | **Oui, par écrit** | `contact@jotna.school`. **Il n'existe aucun chemin DANS l'application**, ce qui est déclarable ainsi mais reste un manque — voir §4 |
+| L'utilisateur peut-il demander la suppression ? | **Oui, par écrit** | `contact@jotnaschool.com`. **Il n'existe aucun chemin DANS l'application**, ce qui est déclarable ainsi mais reste un manque — voir §4 |
 | Traitement éphémère uniquement ? | **Non** | la progression est conservée, c'est l'objet du service |
 | Engagement envers la politique *Families* | **Oui** | voir `docs/legal/kids-category.md` |
 

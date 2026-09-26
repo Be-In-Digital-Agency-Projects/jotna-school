@@ -1,3 +1,5 @@
+import { SITE_DOMAIN } from "./brand";
+
 /**
  * L'en-tête de marque des courriels — UN SEUL EXEMPLAIRE.
  *
@@ -29,8 +31,13 @@
  * Aucun courriel de l'application ne partait — ni les bulletins, ni les
  * demandes de liaison, ni les codes de réinitialisation, ni les reçus. Le pied
  * de page du site, lui, donnait déjà `contact@jotnaschool.com`.
+ *
+ * LE DOMAINE NE VIT PLUS ICI : il descend de `lib/brand.ts`, avec l'adresse
+ * de contact publique, pour que l'adresse d'ENVOI et l'adresse de RÉPONSE
+ * ne puissent plus diverger. La même panne venait de se reproduire sur les
+ * pages légales, avec un troisième domaine.
  */
-export const EMAIL_FROM = "Jotna School <noreply@jotnaschool.com>";
+export const EMAIL_FROM = `Jotna School <noreply@${SITE_DOMAIN}>`;
 
 type Tone = "onTeal" | "onWhite";
 

@@ -1047,6 +1047,24 @@ commandes, les seuils, et ce qu'il faut conclure de chaque résultat.
       **Ce qui manque** : `expo-updates` et son `updates.url`, qui demandent un
       projet EAS et son identifiant. On ne les invente pas — une URL de mise à
       jour fausse est pire que pas de mise à jour du tout
+      **LE SCELLÉ, AJOUTÉ DEPUIS.** `ATOM_SCHEME_VERSION` ne se lève pas toute
+      seule, et rien ne l'y obligeait : un commentaire disant « pensez à
+      incrémenter » n'est pas un garde, c'est un vœu. Les tests croisés
+      existants étaient AVEUGLES à ce changement-là — ils construisent les
+      empreintes ET les vérifient avec le même code, donc les deux côtés
+      bougent ensemble et tout reste vert.
+      `convex/__tests__/offlineScheme.test.ts` fige les atomes ET leurs
+      empreintes, en dur, pour un sel fixe. Ces valeurs ne sont recalculées par
+      rien : c'est ce qui les rend capables de contredire le code. La
+      démonstration a été faite dans les deux sens — changer le séparateur d'un
+      atome fait tomber 15 tests du scellé pendant que les 27 tests croisés
+      restent verts, et lever la version seule fait tomber le premier. Les deux
+      demi-gestes sont donc interdits : changer la forme sans lever la version
+      (l'après-midi perdu), lever la version sans changer la forme (chaque lot
+      du terrain jeté pour rien).
+      Un atome accentué — « légumes » — est dans le jeu d'épreuve DÉLIBÉRÉMENT :
+      il fige l'encodage de l'entrée hachée, et le français d'une application
+      sénégalaise en est plein
 - [x] 6.2 **FAIT** — la politique est une PAGE PUBLIQUE, `/legal/confidentialite`,
       parce qu'Apple et Google exigent une URL atteignable sans compte et
       qu'un document rangé dans `docs/` ne se soumet pas.
@@ -1090,6 +1108,38 @@ commandes, les seuils, et ce qu'il faut conclure de chaque résultat.
       **Deux restent mortes** : `mentions` et `cgu`. Elles demandent la forme
       juridique, l'adresse, le NINEA et une relecture juridique. Elles ne
       s'inventent pas
+      **LE GARDE, AJOUTÉ DEPUIS — et il a trouvé un TROISIÈME DOMAINE.** Ce qui
+      manquait n'était pas le texte des pages, c'était le fait que rien n'avait
+      signalé les six liens morts, et que rien n'aurait signalé le septième.
+      `lib/__tests__/publicationSurface.test.ts` lit les routes réelles depuis
+      `app/`, groupes résolus, et exige que chaque lien interne du pied de page
+      mène quelque part — `mentions` et `cgu` figurant dans une liste `PENDING`
+      qui est une DETTE, pas une exemption : un test échoue le jour où l'une
+      d'elles existe, pour forcer son retrait. Les ancres sont vérifiées aussi
+      (`/#faq` exige qu'un élément porte `id="faq"`) : une ancre absente ne
+      casse rien de visible, le clic ne défile simplement pas.
+      **Et en écrivant ce garde, la dérive de domaine est apparue.**
+      `lib/email-brand.ts` raconte déjà la première : cinq actions d'envoi
+      écrivaient `jotnaschool.app`, non possédé, Resend refusait tout, AUCUN
+      courriel ne partait. Les pages légales de 6.2 et 6.3, les deux fiches de
+      boutique et un écran du mobile donnaient `jotna.school` — non possédé lui
+      aussi, et sans rapport avec `com.jotna.school`, qui est un identifiant de
+      paquet en DNS inversé, pas une adresse. Le pied de page, lui, donnait
+      depuis toujours `jotnaschool.com`, le seul domaine dont ce dépôt atteste
+      la possession (Resend l'a vérifié).
+      **La conséquence était pire qu'un courriel perdu** : l'URL de politique
+      de confidentialité soumise aux deux boutiques ne résolvait pas — c'est un
+      refus à la revue — et un parent exerçant son droit de suppression, que la
+      politique lui promet au titre de la Loi 2008-12, écrivait dans le vide.
+      `lib/brand.ts` porte désormais l'unique domaine ; le pied de page, les
+      quatre pages légales, `EMAIL_FROM` et l'écran adulte du mobile en
+      descendent, par `@/lib` d'un côté et l'alias `@lib/*` de l'autre. Un test
+      refuse tout autre domaine de marque sur les surfaces qui présentent une
+      adresse à un humain, commentaires exclus — ceux qui racontent la panne
+      citent forcément les mauvais domaines.
+      **Ce qu'aucun test ne peut dire** : si `jotnaschool.com` est réellement à
+      nous. Rien ne visite le DNS ici. Le garde tient l'UNITÉ, pas la
+      possession — et c'est l'unité qui a manqué trois fois
 - [x] 6.4 **FAIT — et c'était le défaut le plus ancien de ce chantier.**
       `profiles.aiDataConsentGranted` et `aiDataConsentGrantedAt` étaient au
       schéma depuis le début, avec le commentaire « Loi 2008-12, Sénégal »,

@@ -64,7 +64,7 @@ L'aide par intelligence artificielle — l'explication d'une erreur — n'est
 activée qu'avec le consentement recueilli, et vous pouvez la refuser pour
 votre enfant à tout moment depuis votre espace parent.
 
-Politique de confidentialité : https://jotna.school/legal/confidentialite
+Politique de confidentialité : https://jotnaschool.com/legal/confidentialite
 
 L'ACCÈS PASSE PAR L'ÉCOLE
 
@@ -75,8 +75,8 @@ les codes.
 
 **Catégorie** : Éducation
 **Public cible** : 6–8 ans et 9–12 ans → programme **Designed for Families**
-**Courriel de contact** : contact@jotna.school
-**Politique de confidentialité** : https://jotna.school/legal/confidentialite
+**Courriel de contact** : contact@jotnaschool.com
+**Politique de confidentialité** : https://jotnaschool.com/legal/confidentialite
 
 ---
 

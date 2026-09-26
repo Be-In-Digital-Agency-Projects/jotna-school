@@ -2,6 +2,7 @@ import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { accessMessageForAdult } from "@lib/accessCopy";
+import { SITE_DOMAIN } from "@lib/brand";
 import { useChangeStudent } from "@/session/change-student";
 import { colors, fontSize, radius, spacing } from "@/theme/tokens";
 import { BigButton } from "@/ui/big-button";
@@ -48,7 +49,7 @@ export function AdultStop() {
           un navigateur :
         </Text>
         <Text style={styles.address} selectable>
-          jotna.school
+          {SITE_DOMAIN}
         </Text>
       </View>
 

@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
+  buildDragDropAnswer,
+  buildMatchAnswer,
   encodeDragDropAnswer,
   encodeMatchAnswer,
   encodeOrderAnswer,
@@ -213,4 +215,67 @@ describe("chaîne illisible", () => {
       );
     },
   );
+});
+
+describe("buildMatchAnswer", () => {
+  const left = ["chat", "aigle"];
+
+  it("rend null tant qu'une paire manque — Valider reste éteint", () => {
+    expect(buildMatchAnswer(left, { chat: "mammifère" })).toBeNull();
+  });
+
+  it("assemble dans l'ordre de la colonne affichée, quel que soit l'ordre des choix", () => {
+    const a = buildMatchAnswer(left, { aigle: "oiseau", chat: "mammifère" });
+    const b = buildMatchAnswer(left, { chat: "mammifère", aigle: "oiseau" });
+    expect(a).toBe(b);
+    expect(a).toBe(
+      encodeMatchAnswer([
+        { left: "chat", right: "mammifère" },
+        { left: "aigle", right: "oiseau" },
+      ]),
+    );
+  });
+
+  it("ce qu'elle assemble est accepté par le vérificateur", () => {
+    const payload = {
+      pairs: [
+        { left: "chat", right: "mammifère" },
+        { left: "aigle", right: "oiseau" },
+      ],
+    };
+    const answer = buildMatchAnswer(left, { chat: "mammifère", aigle: "oiseau" });
+    expect(answer).not.toBeNull();
+    expect(verifyAnswer("match", payload, answer!)).toBe(true);
+  });
+});
+
+describe("buildDragDropAnswer", () => {
+  const texts = ["pomme", "carotte"];
+
+  it("rend null tant qu'une étiquette est au vivier", () => {
+    expect(buildDragDropAnswer(texts, { pomme: "fruits" })).toBeNull();
+  });
+
+  it("ce qu'elle assemble est accepté par le vérificateur", () => {
+    const payload = {
+      items: [
+        { text: "pomme", correctZone: "fruits" },
+        { text: "carotte", correctZone: "légumes" },
+      ],
+    };
+    const answer = buildDragDropAnswer(texts, {
+      pomme: "fruits",
+      carotte: "légumes",
+    });
+    expect(answer).not.toBeNull();
+    expect(verifyAnswer("drag-drop", payload, answer!)).toBe(true);
+  });
+
+  it("la complétude se mesure sur les étiquettes ATTENDUES, pas sur la taille de l'objet", () => {
+    // Une clé en trop ne remplace pas une étiquette manquante : `verifyDragDrop`
+    // lirait `undefined` pour celle qui manque et refuserait.
+    expect(
+      buildDragDropAnswer(texts, { pomme: "fruits", inconnu: "légumes" }),
+    ).toBeNull();
+  });
 });

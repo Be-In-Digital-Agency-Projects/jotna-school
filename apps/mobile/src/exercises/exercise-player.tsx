@@ -2,12 +2,18 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
 
 import type {
+  DragDropClientPayload,
+  MatchClientPayload,
+  OrderClientPayload,
   QcmClientPayload,
   ShortAnswerClientPayload,
 } from "@convex/paliers/answers";
 import { kidMessages } from "@lib/kidCopy";
 import { colors, fontSize, radius, spacing } from "@/theme/tokens";
 import { BigButton } from "@/ui/big-button";
+import { DragDropInput } from "./drag-drop";
+import { MatchInput } from "./match";
+import { OrderInput } from "./order";
 import { QcmInput } from "./qcm";
 import { ShortAnswerInput } from "./short-answer";
 import type { SanitizedExercise } from "./types";
@@ -197,10 +203,24 @@ function ExerciseInput({
           {...common}
         />
       );
-    // Les trois types au doigt — remise en ordre, relier, glisser-déposer —
-    // sont les tâches 2.5 à 2.7. Aucun parcours ne mène encore ici : le lecteur
-    // n'est branché à aucune session. Ce panneau est explicite plutôt que muet,
-    // pour qu'un branchement prématuré se voie tout de suite.
+    case "order":
+      return (
+        <OrderInput payload={exercise.payload as OrderClientPayload} {...common} />
+      );
+    case "match":
+      return (
+        <MatchInput payload={exercise.payload as MatchClientPayload} {...common} />
+      );
+    case "drag-drop":
+      return (
+        <DragDropInput
+          payload={exercise.payload as DragDropClientPayload}
+          {...common}
+        />
+      );
+    // Les cinq types du schéma sont couverts. Ce cas reste pour un type qu'un
+    // déploiement futur ajouterait sans que l'application soit à jour : mieux
+    // vaut un panneau qui se lit qu'un écran vide sans explication.
     default:
       return (
         <View style={styles.pending}>

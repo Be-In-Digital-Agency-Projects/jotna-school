@@ -273,6 +273,40 @@ mobile.
 d'ALIAS, pas de code : `@lib/kidCopy` deviendra `@jotna/core`. Rien de ce qui
 est écrit ici ne la complique.
 
+### D24 — Les trois types au doigt se jouent au TAP, pas au glissé.
+
+Le plan ne l'avait tranché que pour « relier ». C'est étendu aux trois, et pour
+les mêmes raisons — auxquelles s'en ajoutent deux que la phase 0 a révélées.
+
+1. **La précision.** Tracer une liaison ou traîner une étiquette sur un écran
+   de cinq pouces échoue souvent à huit ans. Deux taps ne ratent jamais.
+2. **L'accessibilité, qui n'est pas optionnelle ici.** Le glisser-déposer est
+   notoirement illisible pour un lecteur d'écran. Les catégories Enfants et
+   Families (D9) regardent ce point, et un enfant à motricité fine limitée est
+   exactement celui que cette application doit servir. Deux taps s'annoncent :
+   chaque élément porte son `accessibilityHint`.
+3. **Une chaîne de construction plus courte.** Le glissé demanderait
+   `react-native-reanimated`, `react-native-gesture-handler` et
+   `react-native-worklets` — trois modules natifs couplés entre eux et au SDK,
+   sur un chantier qui vise Android d'entrée de gamme et une montée de version
+   annuelle. Ils viendront en 2.9 pour les célébrations, où une panne est
+   COSMÉTIQUE ; les mettre sur le chemin critique d'une réponse d'exercice
+   rendrait une panne BLOQUANTE.
+4. **Ce que je ne peux pas vérifier d'ici.** Aucun appareil dans ce conteneur :
+   un geste s'écrit à l'aveugle et ne se prouve ni au typecheck ni au paquet
+   Metro. Un tap, si.
+
+**LA CHAÎNE SOUMISE EST IDENTIQUE.** « Glisser-déposer » est le nom du TYPE au
+schéma, pas de son geste : l'enfant classe des étiquettes dans des catégories,
+et `encodeDragDropAnswer` produit le même objet `étiquette -> zone` dans les
+deux cas. Ajouter le glissé plus tard est donc purement additif — un geste de
+plus sur les mêmes composants, sans toucher au contrat ni au serveur.
+
+**C'est une décision de produit, et elle se retourne.** Si le glissé est voulu
+pour lui-même — parce qu'il est plus amusant, ce qui est un argument recevable
+chez un enfant — il s'ajoute en surcouche. Ce qu'il ne faut pas faire, c'est le
+REMPLACER : le tap doit rester, comme chemin accessible.
+
 ### D22 — `StyleSheet` et des jetons, pas NativeWind.
 
 La phase 0 devait trancher sur un écran témoin (tâche 0.6). Trois raisons ont
@@ -565,11 +599,12 @@ se décide dans un chantier technique — voir §5.
 - [x] 2.2 `ExercisePlayer` mobile — 5 essais, chronomètre, indices
 - [x] 2.3 QCM
 - [x] 2.4 Réponse courte (clavier qui ne masque pas l'énoncé)
-- [ ] 2.5 Remise en ordre (liste triable reanimated)
-- [ ] 2.6 Relier — **au tap, pas au glissé** : tap sur l'élément, tap sur sa
-      paire. Tracer une liaison au doigt sur cinq pouces échoue une fois sur
-      trois à cet âge. La chaîne soumise reste identique
-- [ ] 2.7 Glisser-déposer (gesture-handler, zones mesurées à `onLayout`)
+- [x] 2.5 Remise en ordre — **deux taps échangent deux éléments** (D24)
+- [x] 2.6 Relier — **au tap** : tap à gauche, tap à droite, la paire se marque
+      d'une couleur des deux côtés (pas d'un trait : un trait se mesure à
+      l'écran et se décale dès que la police grandit)
+- [x] 2.7 Ranger dans les zones — **tap sur l'étiquette, tap sur la case**
+      (D24). La chaîne soumise est rigoureusement celle du glissé
 - [ ] 2.8 Indices + explication pas à pas (en ligne)
 - [ ] 2.9 Retours : sons (`expo-audio`), haptique, confettis, Pio
 - [ ] 2.10 Fin de palier : étoiles, « j'en veux encore », plafond de régénération

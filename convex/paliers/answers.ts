@@ -214,3 +214,53 @@ export function verifyAnswer(
       return false;
   }
 }
+
+// ---------------------------------------------------------------------------
+// ASSEMBLAGE — de ce que l'enfant a choisi à la chaîne soumise.
+//
+// Ces deux fonctions portent la RÈGLE DE COMPLÉTUDE, et c'est pour cela
+// qu'elles vivent ici plutôt que dans un composant. Elles décident si le bouton
+// Valider s'allume ; un composant qui se tromperait laisserait envoyer une
+// réponse partielle, laquelle coûterait un essai sur les cinq pour une réponse
+// que l'enfant n'avait pas fini d'écrire. C'est la sorte de défaut qu'un
+// enfant subit sans pouvoir le nommer.
+//
+// Elles rendent `null` quand la réponse n'est pas complète — la même valeur que
+// les composants remontent pour dire « pas encore ».
+// ---------------------------------------------------------------------------
+
+/**
+ * Les paires reliées, ordonnées comme la colonne de gauche AFFICHÉE.
+ *
+ * L'ordre n'a aucune importance pour `verifyMatch`, qui teste une appartenance
+ * à un ensemble. On le fixe quand même, pour qu'une même sélection produise
+ * toujours la même chaîne : deux chaînes différentes pour un même choix
+ * rendraient le journal hors-ligne (phase 3) impossible à comparer.
+ */
+export function buildMatchAnswer(
+  leftOrder: readonly string[],
+  chosen: Readonly<Record<string, string>>,
+): string | null {
+  const complete = leftOrder.every((left) => chosen[left] !== undefined);
+  if (!complete) return null;
+  return encodeMatchAnswer(
+    leftOrder.map((left) => ({ left, right: chosen[left] })),
+  );
+}
+
+/**
+ * Le rangement, complet seulement quand CHAQUE étiquette est dans une case.
+ *
+ * `verifyDragDrop` ignore les clés en trop (laxisme épinglé, D21), mais il
+ * REFUSE une étiquette manquante — `map[item.text]` vaudrait `undefined`. La
+ * complétude se mesure donc sur les étiquettes attendues, pas sur la taille de
+ * l'objet.
+ */
+export function buildDragDropAnswer(
+  itemTexts: readonly string[],
+  placed: Readonly<Record<string, string>>,
+): string | null {
+  const complete = itemTexts.every((text) => placed[text] !== undefined);
+  if (!complete) return null;
+  return encodeDragDropAnswer(placed);
+}

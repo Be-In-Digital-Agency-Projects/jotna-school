@@ -1,5 +1,5 @@
 import { useAction, useMutation, useQuery } from "convex/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { api } from "@convex/_generated/api";
@@ -9,6 +9,10 @@ import { isAccessDenied } from "@lib/accessCopy";
 import { kidMessages } from "@lib/kidCopy";
 import { ExercisePlayer, type VerifyOutcome } from "@/exercises/exercise-player";
 import { releaseSounds } from "@/feedback/sounds";
+import { useNetworkOnline } from "@/offline/network";
+import { makeOfflineEngine } from "@/offline/offline-engine";
+import { flushJournal } from "@/offline/sync";
+import { findUsableBundle, saveBundle, type StoredBundle } from "@/offline/store";
 import type { SanitizedExercise } from "@/exercises/types";
 import { PalierResult, type PalierOutcome } from "@/screens/palier-result";
 import { colors, fontSize, radius, spacing } from "@/theme/tokens";
@@ -67,6 +71,12 @@ export function PalierSession({
   const soundPref = useQuery(api.students.getMySoundEnabled, {});
   const soundEnabled = soundPref?.soundEnabled === true;
 
+  const online = useNetworkOnline();
+  const syncJournal = useMutation(api.palierAttempts.syncOfflineJournal);
+
+  /** Le lot local, quand la séance se joue SANS réseau. */
+  const [stored, setStored] = useState<StoredBundle | null>(null);
+
   const [attemptId, setAttemptId] = useState<Id<"palierAttempts"> | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
   const [index, setIndex] = useState(0);
@@ -82,7 +92,28 @@ export function PalierSession({
   // chaque séance les accumule. On les libère en quittant.
   useEffect(() => releaseSounds, []);
 
+  // AMORÇAGE HORS LIGNE — on ne peut pas créer de tentative sans réseau, donc
+  // on rejoue celle d'un lot DÉJÀ téléchargé (D14 : la tentative se crée au
+  // téléchargement, précisément pour que ce moment-ci soit possible).
   useEffect(() => {
+    if (online || booting.current || attemptId !== null || stored !== null) return;
+    booting.current = true;
+    void (async () => {
+      const bundle = await findUsableBundle(topicId, palierIndex, Date.now());
+      if (bundle === null) {
+        // Rien de téléchargé, ou l'échéance d'accès est passée (D18).
+        setBootError(
+          "Il faut du réseau pour commencer ce palier. Prépare-le quand tu en auras.",
+        );
+        booting.current = false;
+        return;
+      }
+      setStored(bundle);
+    })();
+  }, [online, attemptId, stored, topicId, palierIndex]);
+
+  useEffect(() => {
+    if (!online) return;
     if (topic === undefined || topic === null) return;
     if (booting.current || attemptId !== null) return;
     booting.current = true;
@@ -124,19 +155,70 @@ export function PalierSession({
         booting.current = false;
       }
     })();
-  }, [topic, topicId, palierIndex, attemptId, getBucket, startAttempt]);
+  }, [online, topic, topicId, palierIndex, attemptId, getBucket, startAttempt]);
 
-  const exercises = useQuery(
+  const onlineExercises = useQuery(
     api.paliers.index.getExercisesForPalier,
-    attemptId !== null ? { palierAttemptId: attemptId } : "skip",
+    attemptId !== null && online ? { palierAttemptId: attemptId } : "skip",
   ) as SanitizedExercise[] | null | undefined;
+
+  // LE LOT SE TÉLÉCHARGE EN MÊME TEMPS QU'ON JOUE EN LIGNE. L'enfant n'a rien
+  // à demander : quand il y a du réseau, on garde de quoi continuer sans lui.
+  // C'est ce qui fait qu'une coupure au milieu d'un palier ne l'arrête pas.
+  const bundle = useQuery(
+    api.paliers.index.getOfflineBundle,
+    attemptId !== null && online ? { palierAttemptId: attemptId } : "skip",
+  );
+
+  useEffect(() => {
+    if (bundle == null || attemptId === null) return;
+    void saveBundle({
+      palierAttemptId: attemptId,
+      topicId,
+      palierIndex,
+      downloadedAt: Date.now(),
+      accessValidUntil: bundle.accessValidUntil,
+      exercises: bundle.exercises,
+    });
+  }, [bundle, attemptId, topicId, palierIndex]);
+
+  // DÈS QUE LE RÉSEAU REVIENT, ON REND COMPTE. Sans attendre la fin du palier :
+  // une tablette d'école repasse en ligne quelques secondes dans un couloir, et
+  // c'est peut-être la seule fenêtre de la journée.
+  useEffect(() => {
+    const id = attemptId ?? stored?.palierAttemptId ?? null;
+    if (!online || id === null) return;
+    void flushJournal(id, (a) => syncJournal(a as never) as never);
+  }, [online, attemptId, stored, syncJournal]);
+
+  /** Le moteur local, quand on joue sans réseau. */
+  const engine = useMemo(
+    () => (stored === null ? null : makeOfflineEngine(stored)),
+    [stored],
+  );
+
+  // UNE SEULE LISTE POUR LES DEUX MODES : le lecteur ne sait pas s'il y a du
+  // réseau, et il n'a pas à le savoir.
+  const exercises: SanitizedExercise[] | null | undefined =
+    engine !== null
+      ? (engine.exercises as unknown as SanitizedExercise[])
+      : onlineExercises;
+
+  const sessionAttemptId = attemptId ?? stored?.palierAttemptId ?? null;
 
   const onVerify = useCallback(
     async (encoded: string, timeSpentMs: number): Promise<VerifyOutcome> => {
       const current = exercises?.[index];
-      if (!current || attemptId === null) {
-        throw new Error("Exercice indisponible");
+      if (!current) throw new Error("Exercice indisponible");
+
+      // HORS LIGNE, LE VERDICT EST LOCAL ET LA RÉPONSE VA AU JOURNAL. Il n'est
+      // que consultatif : le serveur relira la réponse à la synchronisation et
+      // recalculera tout (D12).
+      if (engine !== null) {
+        return engine.verify(current._id, encoded, timeSpentMs);
       }
+
+      if (attemptId === null) throw new Error("Exercice indisponible");
       const result = await verify({
         exerciseId: current._id as Id<"exercises">,
         palierAttemptId: attemptId,
@@ -149,13 +231,16 @@ export function PalierSession({
         attemptsRemaining: result.attemptsRemaining,
       };
     },
-    [exercises, index, attemptId, verify],
+    [exercises, index, attemptId, verify, engine],
   );
 
   const onRequestHint = useCallback(
     async (hintIndex: number): Promise<string> => {
       const current = exercises?.[index];
-      if (!current || attemptId === null) throw new Error("Indice indisponible");
+      if (!current) throw new Error("Indice indisponible");
+      // Le texte est déjà dans le lot (D20.3) ; seul le COMPTE part au journal.
+      if (engine !== null) return engine.hint(current._id, hintIndex);
+      if (attemptId === null) throw new Error("Indice indisponible");
       const result = await hint({
         exerciseId: current._id as Id<"exercises">,
         palierAttemptId: attemptId,
@@ -163,7 +248,7 @@ export function PalierSession({
       });
       return result.hint;
     },
-    [exercises, index, attemptId, hint],
+    [exercises, index, attemptId, hint, engine],
   );
 
   const onExplain = useCallback(async (): Promise<string> => {
@@ -179,7 +264,17 @@ export function PalierSession({
       setIndex((i) => i + 1);
       return;
     }
-    if (attemptId === null || submitting) return;
+    // FIN DE PALIER HORS LIGNE : on ne peut pas clore, et surtout on ne DOIT
+    // pas faire croire le contraire. Les réponses sont au journal, en sûreté ;
+    // les étoiles se calculeront au retour du réseau, côté serveur, qui seul
+    // en décide (D12). L'enfant lit une phrase qui dit exactement cela.
+    if (engine !== null || attemptId === null) {
+      setRegenMessage(
+        "Tes réponses sont bien gardées 💾 Tes étoiles arriveront quand il y aura du réseau.",
+      );
+      return;
+    }
+    if (submitting) return;
     setSubmitting(true);
     void (async () => {
       try {
@@ -191,7 +286,7 @@ export function PalierSession({
         setSubmitting(false);
       }
     })();
-  }, [exercises, index, attemptId, submit, submitting]);
+  }, [exercises, index, attemptId, submit, submitting, engine]);
 
   const onRegen = useCallback(() => {
     if (attemptId === null || regenBusy) return;
@@ -235,11 +330,20 @@ export function PalierSession({
     );
   }
 
-  if (topic === null) {
+  // Hors ligne, `topic` n'est pas interrogeable : on ne bloque que si l'on
+  // jouait en ligne et que la thématique est introuvable.
+  if (engine === null && topic === null) {
     return <Blocked message={kidMessages.genFailed} onLeave={onLeave} />;
   }
 
-  if (exercises === undefined || exercises === null || attemptId === null) {
+  // Un message hors résultat — la fin de palier sans réseau, par exemple.
+  // Sans ce rendu-ci, il serait posé dans l'état et jamais affiché : il n'est
+  // porté que par l'écran de fin, qu'on n'atteint pas hors ligne.
+  if (outcome === null && regenMessage !== null) {
+    return <Blocked message={regenMessage} onLeave={onLeave} />;
+  }
+
+  if (exercises === undefined || exercises === null || sessionAttemptId === null) {
     return <Preparing />;
   }
 

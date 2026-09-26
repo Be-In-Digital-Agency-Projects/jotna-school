@@ -526,6 +526,17 @@ avec le lot.
 
 ---
 
+**UNE CONTRAINTE D'OUTILLAGE DÉCOUVERTE EN PHASE 3**, à connaître avant de
+créer un module Convex. `convex/_generated/api.d.ts` est GÉNÉRÉ par
+`npx convex dev`, et un nouveau MODULE n'y apparaît qu'après régénération —
+impossible sans déploiement, donc impossible depuis un conteneur de
+développement. Un nouvel EXPORT dans un module existant, lui, est typé
+immédiatement (`palierAttempts: typeof palierAttempts`). La synchronisation a
+donc rejoint `palierAttempts.ts`, où elle a d'ailleurs sa place : elle écrit
+des lignes `attempts` d'une tentative de palier.
+
+---
+
 ## 4. Phases
 
 ### Phase 0 — Socle — **FAITE**
@@ -715,17 +726,27 @@ typecheck et le paquet. Le vrai accueil (série, niveau, progression) reste 4.1.
       Le SEL est DÉRIVÉ de `(tentative, exercice)` plutôt que tiré : une
       mutation Convex peut être rejouée, et un sel tiré devrait être persisté
       pour que le rejeu ne change pas des empreintes déjà livrées
-- [ ] 3.3 Base locale (`expo-sqlite`) : lots téléchargés + journal d'`attempts`
-- [ ] 3.4 Le lecteur d'exercices sait rendre un verdict local (D12) — même
-      composant, deux sources de vérité selon l'état du réseau
-- [ ] 3.5 Indices hors ligne : textes embarqués, comptage journalisé (D20.2)
+- [x] 3.3 **FAIT** — `expo-sqlite`, deux tables : `bundles` (de quoi JOUER) et
+      `journal` (de quoi RENDRE COMPTE, dans la forme exacte qu'`attempts`
+      attend). Le journal est **append-only** et les lignes envoyées sont
+      MARQUÉES, pas effacées : une suppression après envoi laisserait une
+      fenêtre où la ligne n'existe plus localement alors que le serveur ne l'a
+      peut-être pas commise
+- [x] 3.4 **FAIT** — et le lecteur n'a pas changé d'une ligne. C'était le pari
+      de la phase 2 : il reçoit `onVerify` et `onRequestHint` en RAPPELS, donc
+      c'est la séance qui branche le moteur local ou les mutations. Le lecteur
+      ne sait pas s'il y a du réseau, et il n'a pas à le savoir
+- [x] 3.5 **FAIT** — le texte de l'indice vient du lot, seul le COMPTE part au
+      journal, sous la forme du serveur (sentinelle `attemptNumber: 0`,
+      `__HINT_<i>`). Un indice redemandé après réouverture ne se compte pas
+      deux fois
 - [x] 3.6 **FAIT** — `attempts.clientAttemptId` optionnel + index
       `by_clientAttemptId`. Sans clé d'idempotence, une synchronisation coupée
       puis reprise DOUBLERAIT les tentatives, et `computeExerciseScore` note
       selon le RANG du premier succès : une bonne réponse du premier coup
       rejouée deviendrait 7 au lieu de 10. L'enfant perdrait des points pour
       une coupure réseau
-- [~] 3.7 **PARTIEL** — `api.palierSync.syncOfflineJournal` enregistre :
+- [~] 3.7 **PARTIEL** — `api.palierAttempts.syncOfflineJournal` enregistre :
       idempotent, verdict RECALCULÉ côté serveur (D12), horloge bornée (D17),
       divergences consignées (D20.4). **Il ne CLÔT pas le palier** — voir §5,
       point 5 : `submitPalier` commence par `requireAccess`, et l'appeler tel
@@ -741,8 +762,10 @@ typecheck et le paquet. Le vrai accueil (série, niveau, progression) reste 4.1.
       un défaut de canonicalisation, et le second est infiniment plus probable.
       Une table dédiée viendra si le signal se révèle utile ; un journal suffit
       pour le mesurer d'abord
-- [ ] 3.11 Politique de téléchargement : palier courant + 2 suivants par
-      matière, en Wi-Fi de préférence, TTL aligné sur `paliers.expiresAt`
+- [~] 3.11 **PARTIEL** — le lot du palier EN COURS se télécharge tout seul
+      pendant qu'on y joue en ligne : l'enfant n'a rien à demander, et une
+      coupure en pleine séance ne l'arrête pas. Les **paliers suivants**, la
+      préférence Wi-Fi et le plafond de stockage restent à faire
 - [ ] 3.12 Écrans : « je prépare pour plus tard », « pas de réseau, tu peux
       quand même jouer », « ton coffre t'attend » (D19)
 - [ ] 3.13 Tests : coupure en plein palier, synchronisation coupée puis reprise,
